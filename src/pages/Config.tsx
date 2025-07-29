@@ -57,6 +57,7 @@ const Config = () => {
   const [otelLogsEnabled, setOtelLogsEnabled] = useState(true);
   const [otelMetricsEnabled, setOtelMetricsEnabled] = useState(true);
   const [otelTracesEnabled, setOtelTracesEnabled] = useState(false);
+  const [otelDebugLevel, setOtelDebugLevel] = useState('info');
   const [otelStatus, setOtelStatus] = useState('disconnected');
   const [otelLastSync, setOtelLastSync] = useState<string | null>(null);
   const [otelStats, setOtelStats] = useState({
@@ -491,6 +492,7 @@ const Config = () => {
         setOtelPipelineId(config.pipelineId || '');
         setOtelServiceName(config.serviceName || 'restaurant-app');
         setOtelTags(config.tags || 'restaurant-app,otel');
+        setOtelDebugLevel(config.debugLevel || 'info');
         if (config.pipelines) {
           setOtelLogsEnabled(config.pipelines.logs !== false);
           setOtelMetricsEnabled(config.pipelines.metrics !== false);
@@ -699,6 +701,7 @@ const Config = () => {
       pipelineId: otelPipelineId,
       serviceName: otelServiceName,
       tags: otelTags,
+      debugLevel: otelDebugLevel,
       pipelines: {
         logs: otelLogsEnabled,
         metrics: otelMetricsEnabled,
@@ -725,7 +728,8 @@ const Config = () => {
               tags: otelTags,
               logsEnabled: otelLogsEnabled,
               metricsEnabled: otelMetricsEnabled,
-              tracesEnabled: otelTracesEnabled
+              tracesEnabled: otelTracesEnabled,
+              debugLevel: otelDebugLevel
             })
           });
           
@@ -822,7 +826,8 @@ const Config = () => {
           tags: otelTags,
           logsEnabled: otelLogsEnabled,
           metricsEnabled: otelMetricsEnabled,
-          tracesEnabled: otelTracesEnabled
+          tracesEnabled: otelTracesEnabled,
+          debugLevel: otelDebugLevel
         })
       });
       
@@ -903,7 +908,8 @@ const Config = () => {
           tags: otelTags,
           logsEnabled: otelLogsEnabled,
           metricsEnabled: otelMetricsEnabled,
-          tracesEnabled: otelTracesEnabled
+          tracesEnabled: otelTracesEnabled,
+          debugLevel: otelDebugLevel
         })
       });
       
@@ -1590,6 +1596,40 @@ const Config = () => {
                     disabled={!otelEnabled}
                   />
                 </div>
+              </div>
+            </div>
+
+            {/* Debug Level Control */}
+            <div className="space-y-4">
+              <Label className="text-base font-medium">Collector Debug Settings</Label>
+              
+              <div className="flex items-center justify-between p-3 border rounded-lg bg-orange-50 border-orange-200">
+                <div className="space-y-1">
+                  <Label className="font-medium text-orange-600">🐛 Debug Log Level</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Control verbosity of collector logs in /tmp/codeuser/otel-collector.log
+                  </p>
+                </div>
+                <Select
+                  value={otelDebugLevel}
+                  onValueChange={setOtelDebugLevel}
+                  disabled={!otelEnabled}
+                >
+                  <SelectTrigger className="w-32">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="debug">Debug (Very Verbose)</SelectItem>
+                    <SelectItem value="info">Info (Recommended)</SelectItem>
+                    <SelectItem value="warn">Warn (Minimal)</SelectItem>
+                    <SelectItem value="error">Error (Critical Only)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div className="text-xs text-muted-foreground bg-blue-50 p-3 rounded border border-blue-200">
+                <strong>💡 Tip:</strong> Use "Info" level to see log transmission activity without excessive debug noise. 
+                Switch to "Debug" when troubleshooting connection issues, then back to "Info" for normal operation.
               </div>
             </div>
 

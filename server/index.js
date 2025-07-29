@@ -441,7 +441,7 @@ app.get('/api/mezmo/logs', (req, res) => {
 });
 
 // OpenTelemetry Collector Management
-const generateOTELConfig = ({ logsEnabled, metricsEnabled, tracesEnabled, ingestionKey, host, serviceName, tags, pipelineId }) => {
+const generateOTELConfig = ({ logsEnabled, metricsEnabled, tracesEnabled, ingestionKey, host, serviceName, tags, pipelineId, debugLevel }) => {
   const config = {
     receivers: {},
     processors: {
@@ -462,7 +462,7 @@ const generateOTELConfig = ({ logsEnabled, metricsEnabled, tracesEnabled, ingest
       pipelines: {},
       telemetry: {
         logs: {
-          level: 'debug'
+          level: debugLevel || 'info'  // Default to 'info', allow override
         }
       }
     }
@@ -672,7 +672,8 @@ app.post('/api/otel/configure', (req, res) => {
       pipelineId,
       logsEnabled, 
       metricsEnabled, 
-      tracesEnabled 
+      tracesEnabled,
+      debugLevel
     } = req.body;
     
     if (!ingestionKey) {
@@ -701,7 +702,8 @@ app.post('/api/otel/configure', (req, res) => {
       host: host || 'logs.mezmo.com',
       serviceName: serviceName || 'restaurant-app',
       tags: tags || 'restaurant-app,otel',
-      pipelineId: pipelineId || ''
+      pipelineId: pipelineId || '',
+      debugLevel: debugLevel || 'info'
     });
     
     // Write configuration file
