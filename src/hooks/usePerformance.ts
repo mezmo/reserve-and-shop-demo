@@ -99,11 +99,28 @@ export const usePerformance = () => {
     logger.logError(error, context);
   }, [logger]);
 
+  const logCartAction = useCallback((
+    action: 'ADD' | 'REMOVE',
+    product: { id: string; name: string; price: number; category: string },
+    quantityBefore: number,
+    quantityAfter: number,
+    cartTotal: number,
+    duration?: number
+  ) => {
+    logger.logCartAction(action, product, quantityBefore, quantityAfter, cartTotal, duration);
+  }, [logger]);
+
+  const logCartSession = useCallback((itemCount: number, totalValue: number, sessionDuration: number) => {
+    logger.logCartSession(itemCount, totalValue, sessionDuration);
+  }, [logger]);
+
   return {
     trackComponentMount,
     trackUserInteraction,
     trackDataFetch,
     logError,
+    logCartAction,
+    logCartSession,
     getSessionId: () => logger.getSessionId(),
     getConfig: () => logger.getConfig(),
     updateConfig: (config: any) => logger.updateConfig(config),

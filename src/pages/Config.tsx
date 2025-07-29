@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -6,8 +6,9 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Progress } from '@/components/ui/progress';
 import { DataStore } from '@/stores/dataStore';
-import { Download, Upload, RefreshCw, Settings, AlertTriangle, Activity, FileText, Monitor } from 'lucide-react';
+import { Download, Upload, RefreshCw, Settings, AlertTriangle, Activity, FileText, Monitor, Zap, Play, Square } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { usePerformance } from '@/hooks/usePerformance';
 import { useTestError, useTestRandomError, useTestTimeout, useTestPerformance, useHealthCheck } from '@/services/apiService';
@@ -16,6 +17,22 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 const Config = () => {
   const [importData, setImportData] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Stress test state
+  const [stressTestRunning, setStressTestRunning] = useState(false);
+  const [stressTestProgress, setStressTestProgress] = useState(0);
+  const [stressTestDuration, setStressTestDuration] = useState(30);
+  const [stressTestRPS, setStressTestRPS] = useState(5);
+  const [stressTestConcurrent, setStressTestConcurrent] = useState(3);
+  const [stressTestErrorRate, setStressTestErrorRate] = useState(20);
+  const [stressTestStats, setStressTestStats] = useState({
+    totalRequests: 0,
+    successCount: 0,
+    errorCount: 0,
+    avgResponseTime: 0,
+    timeRemaining: 0
+  });
+  
   const { toast } = useToast();
   const { getConfig, updateConfig, getSessionId, getStoredLogs, clearStoredLogs, flushLogs } = usePerformance();
   const performanceConfig = getConfig();
@@ -249,6 +266,152 @@ const Config = () => {
       });
     }
   };
+
+  // Stress test engine
+  const stressTestIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const stressTestStartTime = useRef<number>(0);
+  const stressTestRequestCounts = useRef({ total: 0, success: 0, error: 0, responseTimes: [] as number[] });
+
+  const getRandomEndpoint = (errorRate: number) => {
+    const shouldError = Math.random() * 100 < errorRate;
+    
+    if (shouldError) {
+      const errorCodes = [400, 401, 404, 422, 500, 502, 503, 504];
+      const randomCode = errorCodes[Math.floor(Math.random() * errorCodes.length)];
+      return { type: 'error', code: randomCode };
+    } else {
+      const successEndpoints = ['health', 'products', 'performance', 'random'];
+      const randomEndpoint = successEndpoints[Math.floor(Math.random() * successEndpoints.length)];
+      return { type: 'success', endpoint: randomEndpoint };
+    }
+  };
+
+  const makeStressTestRequest = async (endpoint: any) => {
+    const startTime = performance.now();
+    
+    try {
+      if (endpoint.type === 'error') {
+        await testError.mutateAsync({ statusCode: endpoint.code, delay: 0 });
+      } else {
+        switch (endpoint.endpoint) {
+          case 'health':
+            await fetch('/api/health');
+            break;
+          case 'products':
+            await fetch('/api/products');
+            break;
+          case 'performance':
+            await testPerformance.mutateAsync();
+            break;
+          case 'random':
+            await testRandomError.mutateAsync();
+            break;
+          default:
+            await fetch('/api/health');
+        }
+      }
+      
+      const responseTime = performance.now() - startTime;
+      stressTestRequestCounts.current.success++;
+      stressTestRequestCounts.current.responseTimes.push(responseTime);
+      
+    } catch (error) {
+      const responseTime = performance.now() - startTime;
+      stressTestRequestCounts.current.error++;
+      stressTestRequestCounts.current.responseTimes.push(responseTime);
+    }
+    
+    stressTestRequestCounts.current.total++;
+  };
+
+  const handleStartStressTest = () => {
+    if (stressTestRunning) return;
+    
+    // Reset counters
+    stressTestRequestCounts.current = { total: 0, success: 0, error: 0, responseTimes: [] };
+    setStressTestStats({
+      totalRequests: 0,
+      successCount: 0,
+      errorCount: 0,
+      avgResponseTime: 0,
+      timeRemaining: stressTestDuration
+    });
+    
+    setStressTestRunning(true);
+    setStressTestProgress(0);
+    stressTestStartTime.current = Date.now();
+    
+    const intervalMs = 1000 / stressTestRPS; // Convert RPS to interval
+    
+    stressTestIntervalRef.current = setInterval(async () => {
+      const elapsed = (Date.now() - stressTestStartTime.current) / 1000;
+      const progress = Math.min((elapsed / stressTestDuration) * 100, 100);
+      const timeRemaining = Math.max(stressTestDuration - elapsed, 0);
+      
+      setStressTestProgress(progress);
+      
+      // Update real-time stats
+      const avgResponseTime = stressTestRequestCounts.current.responseTimes.length > 0
+        ? stressTestRequestCounts.current.responseTimes.reduce((a, b) => a + b, 0) / stressTestRequestCounts.current.responseTimes.length
+        : 0;
+      
+      setStressTestStats({
+        totalRequests: stressTestRequestCounts.current.total,
+        successCount: stressTestRequestCounts.current.success,
+        errorCount: stressTestRequestCounts.current.error,
+        avgResponseTime: Math.round(avgResponseTime),
+        timeRemaining: Math.round(timeRemaining)
+      });
+      
+      if (elapsed >= stressTestDuration) {
+        handleStopStressTest();
+        return;
+      }
+      
+      // Make concurrent requests
+      const promises = [];
+      for (let i = 0; i < stressTestConcurrent; i++) {
+        const endpoint = getRandomEndpoint(stressTestErrorRate);
+        promises.push(makeStressTestRequest(endpoint));
+      }
+      
+      // Fire and forget - don't await to maintain rate
+      Promise.allSettled(promises);
+      
+    }, intervalMs);
+    
+    toast({
+      title: "Stress Test Started",
+      description: `Running for ${stressTestDuration}s at ${stressTestRPS} RPS with ${stressTestConcurrent} concurrent requests.`
+    });
+  };
+
+  const handleStopStressTest = () => {
+    if (stressTestIntervalRef.current) {
+      clearInterval(stressTestIntervalRef.current);
+      stressTestIntervalRef.current = null;
+    }
+    
+    setStressTestRunning(false);
+    setStressTestProgress(100);
+    
+    const { total, success, error } = stressTestRequestCounts.current;
+    const successRate = total > 0 ? ((success / total) * 100).toFixed(1) : '0';
+    
+    toast({
+      title: "Stress Test Complete",
+      description: `${total} requests sent. ${successRate}% success rate. Check performance logs for details.`
+    });
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (stressTestIntervalRef.current) {
+        clearInterval(stressTestIntervalRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -582,6 +745,163 @@ const Config = () => {
                 <span className="ml-2">🟣 Random</span>
                 <span className="ml-2">🟡 Timeout</span>
                 <span className="ml-2">🔵 Performance</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Stress Testing */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2">
+              <Zap className="h-5 w-5" />
+              <span>API Stress Testing</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-6">
+              <p className="text-muted-foreground">
+                Generate high-volume API activity to stress test your performance monitoring and logging systems.
+              </p>
+
+              {/* Configuration Grid */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="stress-duration">Duration (seconds)</Label>
+                  <Input
+                    id="stress-duration"
+                    type="number"
+                    min="10"
+                    max="300"
+                    value={stressTestDuration}
+                    onChange={(e) => setStressTestDuration(parseInt(e.target.value) || 30)}
+                    disabled={stressTestRunning}
+                    className="w-full"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="stress-rps">Requests/Second</Label>
+                  <Input
+                    id="stress-rps"
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={stressTestRPS}
+                    onChange={(e) => setStressTestRPS(parseInt(e.target.value) || 5)}
+                    disabled={stressTestRunning}
+                    className="w-full"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="stress-concurrent">Concurrent</Label>
+                  <Input
+                    id="stress-concurrent"
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={stressTestConcurrent}
+                    onChange={(e) => setStressTestConcurrent(parseInt(e.target.value) || 3)}
+                    disabled={stressTestRunning}
+                    className="w-full"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="stress-error-rate">Error Rate (%)</Label>
+                  <Input
+                    id="stress-error-rate"
+                    type="number"
+                    min="0"
+                    max="50"
+                    value={stressTestErrorRate}
+                    onChange={(e) => setStressTestErrorRate(parseInt(e.target.value) || 20)}
+                    disabled={stressTestRunning}
+                    className="w-full"
+                  />
+                </div>
+              </div>
+
+              {/* Control Buttons */}
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleStartStressTest}
+                  disabled={stressTestRunning || !performanceConfig.enabled}
+                  className="bg-orange-600 hover:bg-orange-700 text-white"
+                >
+                  <Play className="mr-2 h-4 w-4" />
+                  Start Stress Test
+                </Button>
+                
+                <Button
+                  onClick={handleStopStressTest}
+                  disabled={!stressTestRunning}
+                  variant="outline"
+                  className="border-red-200 text-red-600 hover:bg-red-50"
+                >
+                  <Square className="mr-2 h-4 w-4" />
+                  Stop Test
+                </Button>
+              </div>
+
+              {!performanceConfig.enabled && (
+                <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-lg">
+                  <p className="text-sm text-yellow-800">
+                    ⚠️ Performance logging is disabled. Enable it above to capture stress test data.
+                  </p>
+                </div>
+              )}
+
+              {/* Progress and Stats */}
+              {(stressTestRunning || stressTestProgress > 0) && (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span>Progress</span>
+                      <span>{Math.round(stressTestProgress)}%</span>
+                    </div>
+                    <Progress value={stressTestProgress} className="w-full" />
+                  </div>
+                  
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 bg-muted/50 p-4 rounded-lg">
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-blue-600">{stressTestStats.totalRequests}</div>
+                      <div className="text-xs text-muted-foreground">Total Requests</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-green-600">{stressTestStats.successCount}</div>
+                      <div className="text-xs text-muted-foreground">Success</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-red-600">{stressTestStats.errorCount}</div>
+                      <div className="text-xs text-muted-foreground">Errors</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-purple-600">{stressTestStats.avgResponseTime}ms</div>
+                      <div className="text-xs text-muted-foreground">Avg Response</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-orange-600">{stressTestStats.timeRemaining}s</div>
+                      <div className="text-xs text-muted-foreground">Time Left</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Safety Information */}
+              <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
+                <div className="flex items-center space-x-2 mb-2">
+                  <AlertTriangle className="h-4 w-4 text-blue-600" />
+                  <span className="font-medium text-blue-800">Safety Limits</span>
+                </div>
+                <div className="space-y-1 text-sm text-blue-700">
+                  <div>• Maximum duration: 5 minutes (300 seconds)</div>
+                  <div>• Maximum rate: 20 requests per second</div>
+                  <div>• Maximum concurrent: 50 requests</div>
+                  <div>• Only one stress test can run at a time</div>
+                  <div>• All requests will be logged to performance system</div>
+                </div>
               </div>
             </div>
           </CardContent>

@@ -568,6 +568,64 @@ class PerformanceLogger {
   public async flushLogs(): Promise<void> {
     await this.flushLogBuffer();
   }
+
+  // Enhanced cart action logging
+  logCartAction(
+    action: 'ADD' | 'REMOVE', 
+    product: { id: string; name: string; price: number; category: string },
+    quantityBefore: number,
+    quantityAfter: number,
+    cartTotal: number,
+    duration?: number
+  ): void {
+    if (!this.config.enabled) return;
+
+    const quantityChange = `${quantityBefore}->${quantityAfter}`;
+    const actionType = action === 'ADD' ? 'CART_ADD' : 'CART_REMOVE';
+    
+    this.logEntry({
+      timestamp: new Date().toISOString(),
+      event: actionType,
+      path: window.location.pathname,
+      duration,
+      details: {
+        productId: product.id,
+        productName: product.name,
+        productPrice: product.price,
+        productCategory: product.category,
+        quantityBefore,
+        quantityAfter,
+        quantityChange,
+        cartTotal: cartTotal.toFixed(2),
+        action,
+        path: window.location.pathname
+      }
+    });
+
+    // Also log as user interaction for backwards compatibility
+    this.logUserInteraction(
+      'cart-action',
+      `${action.toLowerCase()}-${product.name}-${product.category}`,
+      duration
+    );
+  }
+
+  // Cart session analytics
+  logCartSession(itemCount: number, totalValue: number, sessionDuration: number): void {
+    if (!this.config.enabled) return;
+
+    this.logEntry({
+      timestamp: new Date().toISOString(),
+      event: 'CART_SESSION',
+      duration: sessionDuration,
+      details: {
+        itemCount,
+        totalValue: totalValue.toFixed(2),
+        averageItemValue: itemCount > 0 ? (totalValue / itemCount).toFixed(2) : '0.00',
+        path: window.location.pathname
+      }
+    });
+  }
 }
 
 export default PerformanceLogger;

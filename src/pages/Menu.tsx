@@ -98,7 +98,12 @@ const Menu = () => {
                           variant="outline"
                           onClick={() => {
                             const endTracking = trackUserInteraction('click', `remove-from-cart-${product.name}`);
-                            removeFromCart(product.id);
+                            removeFromCart({
+                              id: product.id,
+                              name: product.name,
+                              price: product.price,
+                              category: product.category
+                            });
                             endTracking();
                           }}
                           className="border-primary text-primary hover:bg-primary hover:text-primary-foreground"
@@ -114,7 +119,12 @@ const Menu = () => {
                       size="icon"
                       onClick={() => {
                         const endTracking = trackUserInteraction('click', `add-to-cart-${product.name}`);
-                        addToCart(product.id);
+                        addToCart({
+                          id: product.id,
+                          name: product.name,
+                          price: product.price,
+                          category: product.category
+                        });
                         endTracking();
                       }}
                       className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-md"
