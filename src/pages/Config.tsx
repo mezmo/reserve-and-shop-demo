@@ -141,6 +141,17 @@ const Config = () => {
     window.location.reload();
   };
 
+  const handleRefreshLocalStorage = () => {
+    const dataStore = DataStore.getInstance();
+    dataStore.refreshFromDefaults();
+    toast({
+      title: "Local Storage Refreshed",
+      description: "All cached data has been refreshed with latest defaults."
+    });
+    // Refresh the page to show updated data
+    window.location.reload();
+  };
+
   const getCurrentDataSummary = () => {
     const dataStore = DataStore.getInstance();
     const data = dataStore.getAllData();
@@ -677,7 +688,7 @@ const Config = () => {
               <span>Current Data Summary</span>
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
             <div className="grid md:grid-cols-3 gap-4">
               <div className="text-center p-4 bg-muted/50 rounded-lg">
                 <div className="text-2xl font-bold text-primary">{summary.products}</div>
@@ -692,6 +703,18 @@ const Config = () => {
                 <div className="text-sm text-muted-foreground">Orders</div>
               </div>
             </div>
+            <div className="flex justify-center">
+              <Button 
+                onClick={handleRefreshLocalStorage}
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Refresh Local Storage
+              </Button>
+            </div>
+            <p className="text-sm text-muted-foreground text-center">
+              Clears cached data and reloads with latest defaults (including updated menu images)
+            </p>
           </CardContent>
         </Card>
 

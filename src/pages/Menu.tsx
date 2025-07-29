@@ -26,6 +26,7 @@ const Menu = () => {
     endTracking();
   }, [trackDataFetch]);
 
+
   const categories = ['All', ...Array.from(new Set(products.map(p => p.category)))];
   const filteredProducts = selectedCategory === 'All' 
     ? products 
