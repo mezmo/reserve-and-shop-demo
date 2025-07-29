@@ -129,7 +129,7 @@ const Reservations = () => {
       <div className="max-w-4xl mx-auto">
         {!showForm ? (
           <div className="text-center mb-8">
-            <Button size="lg" onClick={() => setShowForm(true)}>
+            <Button size="lg" onClick={() => setShowForm(true)} className="bg-blue-600 hover:bg-blue-700 text-white">
               Make New Reservation
             </Button>
           </div>
@@ -249,7 +249,7 @@ const Reservations = () => {
                 </div>
 
                 <div className="flex gap-4">
-                  <Button type="submit">Confirm Reservation</Button>
+                  <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white">Confirm Reservation</Button>
                   <Button type="button" variant="outline" onClick={() => setShowForm(false)}>
                     Cancel
                   </Button>

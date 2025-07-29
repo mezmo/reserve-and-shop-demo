@@ -1,13 +1,24 @@
 # Multi-stage build for better optimization
-FROM node:20-slim as base
+FROM node:20-slim AS base
 
-# Install Python and other system dependencies
+# Install Python and other system dependencies including wget for LogDNA agent
 RUN apt-get update && \
-    apt-get install -y python3 python3-pip curl && \
+    apt-get install -y python3 python3-pip curl wget ca-certificates procps && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
+
+# Install LogDNA Agent v2 via package manager
+RUN echo "deb https://assets.logdna.com stable main" > /etc/apt/sources.list.d/logdna.list && \
+    wget -qO - https://assets.logdna.com/logdna.gpg | apt-key add - && \
+    apt-get update && \
+    apt-get install -y logdna-agent && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create LogDNA directories and configuration
+RUN mkdir -p /etc/logdna /var/lib/logdna && \
+    chmod 755 /etc/logdna /var/lib/logdna
 
 # Create non-root user
 RUN useradd -m codeuser
@@ -32,6 +43,9 @@ RUN sed -i 's/\r$//' /usr/local/bin/startup.sh && chmod +x /usr/local/bin/startu
 
 # Create user-specific temp directory for logs
 RUN mkdir -p /tmp/codeuser && chown codeuser:codeuser /tmp/codeuser && chmod 755 /tmp/codeuser
+
+# Set up LogDNA permissions for codeuser
+RUN chown -R codeuser:codeuser /var/lib/logdna /etc/logdna
 
 # Change ownership to codeuser after all setup is complete
 RUN chown -R codeuser:codeuser /app

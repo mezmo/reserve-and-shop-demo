@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import fs from 'fs';
+import { execSync, spawn } from 'child_process';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -194,6 +196,247 @@ app.put('/api/settings', (req, res) => {
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// LogDNA Agent Management
+app.get('/api/mezmo/status', (req, res) => {
+  try {
+    // Check if agent is running
+    const pidFile = '/tmp/codeuser/logdna-agent.pid';
+    const configFile = '/etc/logdna/logdna.env';
+    
+    let status = 'disconnected';
+    let pid = null;
+    let hasConfig = false;
+    
+    if (fs.existsSync(configFile)) {
+      hasConfig = true;
+    }
+    
+    if (fs.existsSync(pidFile)) {
+      try {
+        pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+        // Check if PID is still running
+        process.kill(pid, 0); // This throws if process doesn't exist
+        status = 'connected';
+      } catch (error) {
+        // Process not running, clean up stale PID file
+        fs.unlinkSync(pidFile);
+        status = 'disconnected';
+        pid = null;
+      }
+    }
+    
+    res.json({
+      status,
+      pid,
+      hasConfig,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error checking LogDNA status:', error);
+    res.status(500).json({ error: 'Failed to check LogDNA status' });
+  }
+});
+
+app.post('/api/mezmo/configure', (req, res) => {
+  try {
+    const { ingestionKey, host, tags, enabled } = req.body;
+    
+    if (!ingestionKey) {
+      return res.status(400).json({ error: 'Ingestion key is required' });
+    }
+    
+    const configDir = '/etc/logdna';
+    const envFile = `${configDir}/logdna.env`;
+    const yamlFile = `${configDir}/config.yaml`;
+    
+    // Ensure config directory exists
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+    
+    // Create environment file with both LOGDNA_ and MZ_ prefixed variables
+    const endpointPath = '/logs/ingest';
+    const envContent = `
+# LOGDNA_ prefixed variables (legacy)
+LOGDNA_INGESTION_KEY=${ingestionKey}
+LOGDNA_HOST=${host || 'logs.mezmo.com'}
+LOGDNA_DB_PATH=/var/lib/logdna
+LOGDNA_LOG_DIRS=/tmp/codeuser
+LOGDNA_LOOKBACK=start
+LOGDNA_LOG_LEVEL=info
+
+# MZ_ prefixed variables (required by LogDNA Agent v2)
+MZ_INGESTION_KEY=${ingestionKey}
+MZ_ENDPOINT=${endpointPath}
+MZ_DB_PATH=/var/lib/logdna
+MZ_LOG_DIRS=/tmp/codeuser
+MZ_LOOKBACK=start
+MZ_LOG_LEVEL=info
+MZ_HOSTNAME=restaurant-app-container
+MZ_BODY_SIZE=2097152
+`.trim();
+    
+    // Create YAML configuration
+    const yamlContent = `
+http:
+  endpoint: ${endpointPath}
+  host: ${host || 'logs.mezmo.com'}
+  timeout: 30000
+  use_ssl: true
+  use_compression: true
+  gzip_level: 2
+  body_size: 2097152
+  ingestion_key: ${ingestionKey}
+  params:
+    hostname: restaurant-app-container
+    tags: ${tags || 'restaurant-app,demo'}
+
+log:
+  dirs:
+    - /tmp/codeuser/
+  db_path: /var/lib/logdna
+  metrics_port: 9898
+  include:
+    glob:
+      - "/tmp/codeuser/*.log"
+      - "/tmp/codeuser/restaurant-performance.log"
+      - "/tmp/codeuser/app.log"
+    regex: []
+  exclude:
+    glob:
+      - "/tmp/codeuser/logdna-agent.log"
+      - "/tmp/codeuser/logdna-agent.pid"
+    regex: []
+  line_exclusion_regex: []
+  line_inclusion_regex: []
+  lookback: start
+
+journald: {}
+startup: {}
+`.trim();
+    
+    fs.writeFileSync(envFile, envContent);
+    fs.writeFileSync(yamlFile, yamlContent);
+    
+    console.log('📋 LogDNA configuration updated');
+    
+    res.json({
+      success: true,
+      message: 'LogDNA configuration saved',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error configuring LogDNA:', error);
+    res.status(500).json({ error: 'Failed to configure LogDNA agent' });
+  }
+});
+
+app.post('/api/mezmo/start', (req, res) => {
+  try {
+    // Check if already running
+    const pidFile = '/tmp/codeuser/logdna-agent.pid';
+    if (fs.existsSync(pidFile)) {
+      const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+      try {
+        process.kill(pid, 0);
+        return res.json({ message: 'LogDNA agent is already running', pid });
+      } catch (error) {
+        // Process not running, clean up
+        fs.unlinkSync(pidFile);
+      }
+    }
+    
+    // Start the agent
+    const logFile = '/tmp/codeuser/logdna-agent.log';
+    const envFile = '/etc/logdna/logdna.env';
+    
+    if (!fs.existsSync(envFile)) {
+      return res.status(400).json({ error: 'LogDNA not configured. Please configure first.' });
+    }
+    
+    // Source environment variables and start agent
+    const startCommand = `
+set -a
+source ${envFile}
+set +a
+nohup /usr/bin/logdna-agent > ${logFile} 2>&1 & echo $! > ${pidFile}
+`;
+    
+    execSync(startCommand, { shell: '/bin/bash' });
+    
+    // Give it a moment to start
+    setTimeout(() => {
+      if (fs.existsSync(pidFile)) {
+        const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+        console.log('✅ LogDNA agent started with PID:', pid);
+        res.json({ 
+          success: true,
+          message: 'LogDNA agent started', 
+          pid,
+          timestamp: new Date().toISOString()
+        });
+      } else {
+        res.status(500).json({ error: 'Failed to start LogDNA agent' });
+      }
+    }, 1000);
+    
+  } catch (error) {
+    console.error('Error starting LogDNA agent:', error);
+    res.status(500).json({ error: 'Failed to start LogDNA agent' });
+  }
+});
+
+app.post('/api/mezmo/stop', (req, res) => {
+  try {
+    const pidFile = '/tmp/codeuser/logdna-agent.pid';
+    
+    if (!fs.existsSync(pidFile)) {
+      return res.json({ message: 'LogDNA agent is not running' });
+    }
+    
+    const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+    
+    try {
+      process.kill(pid, 'SIGTERM');
+      fs.unlinkSync(pidFile);
+      console.log('🛑 LogDNA agent stopped');
+      res.json({ 
+        success: true,
+        message: 'LogDNA agent stopped',
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      // Process might already be dead
+      fs.unlinkSync(pidFile);
+      res.json({ message: 'LogDNA agent was not running' });
+    }
+  } catch (error) {
+    console.error('Error stopping LogDNA agent:', error);
+    res.status(500).json({ error: 'Failed to stop LogDNA agent' });
+  }
+});
+
+app.get('/api/mezmo/logs', (req, res) => {
+  try {
+    const logFile = '/tmp/codeuser/logdna-agent.log';
+    
+    if (!fs.existsSync(logFile)) {
+      return res.json({ logs: 'No logs available' });
+    }
+    
+    const logs = fs.readFileSync(logFile, 'utf8');
+    const lines = logs.split('\n').slice(-50); // Last 50 lines
+    
+    res.json({ 
+      logs: lines.join('\n'),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error reading LogDNA logs:', error);
+    res.status(500).json({ error: 'Failed to read LogDNA logs' });
+  }
 });
 
 // Testing endpoints for different HTTP error codes

@@ -1,4 +1,5 @@
 import { AppData, Product, Reservation, Order } from '@/types';
+import PerformanceLogger from '@/lib/performanceLogger';
 
 const defaultData: AppData = {
   products: [
@@ -51,8 +52,10 @@ const defaultData: AppData = {
 export class DataStore {
   private static instance: DataStore;
   private data: AppData;
+  private performanceLogger: PerformanceLogger;
 
   private constructor() {
+    this.performanceLogger = PerformanceLogger.getInstance();
     this.data = this.loadData();
   }
 
@@ -77,8 +80,16 @@ export class DataStore {
   }
 
   private saveData(): void {
+    const startTime = Date.now();
     try {
       localStorage.setItem('restaurant-app-data', JSON.stringify(this.data));
+      this.performanceLogger.logDataOperation(
+        'UPDATE',
+        'settings',
+        'app-data',
+        this.data,
+        Date.now() - startTime
+      );
     } catch (error) {
       console.error('Error saving data to localStorage:', error);
     }
@@ -108,7 +119,15 @@ export class DataStore {
   }
 
   addReservation(reservation: Reservation): void {
+    const startTime = Date.now();
     this.data.reservations.push(reservation);
+    this.performanceLogger.logDataOperation(
+      'CREATE',
+      'reservation',
+      reservation.id,
+      reservation,
+      Date.now() - startTime
+    );
     this.saveData();
   }
 
@@ -126,7 +145,15 @@ export class DataStore {
   }
 
   addOrder(order: Order): void {
+    const startTime = Date.now();
     this.data.orders.push(order);
+    this.performanceLogger.logDataOperation(
+      'CREATE',
+      'order',
+      order.id,
+      order,
+      Date.now() - startTime
+    );
     this.saveData();
   }
 

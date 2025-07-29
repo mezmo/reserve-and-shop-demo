@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { DataStore } from '@/stores/dataStore';
 import { Order, OrderItem, Product } from '@/types';
+import PerformanceLogger from '@/lib/performanceLogger';
 import { 
   formatCardNumber, 
   formatExpiryDate, 
@@ -44,7 +45,7 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
-  const [orderType, setOrderType] = useState<'dine-in' | 'takeout' | 'delivery'>('dine-in');
+  const [orderType, setOrderType] = useState<'takeout' | 'delivery'>('takeout');
   const [notes, setNotes] = useState('');
   
   // Payment info
@@ -92,7 +93,7 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
     setCustomerName('');
     setCustomerEmail('');
     setCustomerPhone('');
-    setOrderType('dine-in');
+    setOrderType('takeout');
     setNotes('');
     setCardNumber('');
     setExpiryDate('');
@@ -118,8 +119,57 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
     }
     
     setIsLoading(true);
+    const performanceLogger = PerformanceLogger.getInstance();
+    const startTime = Date.now();
 
     try {
+      // Create order ID for tracking
+      const orderId = `order-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Log payment initiation with sensitive data (for demo redaction)
+      performanceLogger.logPaymentAttempt(
+        {
+          cardNumber,
+          expiryDate,
+          cvv,
+          cardHolderName
+        },
+        {
+          name: customerName,
+          email: customerEmail,
+          phone: customerPhone
+        },
+        {
+          orderId,
+          amount: calculateTotal(),
+          currency: 'USD',
+          orderType
+        },
+        'initiated'
+      );
+
+      // Log payment processing start
+      performanceLogger.logPaymentAttempt(
+        {
+          cardNumber,
+          expiryDate,
+          cvv,
+          cardHolderName
+        },
+        {
+          name: customerName,
+          email: customerEmail,
+          phone: customerPhone
+        },
+        {
+          orderId,
+          amount: calculateTotal(),
+          currency: 'USD',
+          orderType
+        },
+        'processing'
+      );
+
       // Simulate payment processing
       await new Promise(resolve => setTimeout(resolve, 2000));
       
@@ -137,7 +187,7 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
 
       // Create order
       const order: Order = {
-        id: `order-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        id: orderId,
         customerName,
         customerEmail,
         customerPhone,
@@ -152,6 +202,30 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
       // Save order
       dataStore.addOrder(order);
 
+      // Log successful payment
+      const endTime = Date.now();
+      performanceLogger.logPaymentAttempt(
+        {
+          cardNumber,
+          expiryDate,
+          cvv,
+          cardHolderName
+        },
+        {
+          name: customerName,
+          email: customerEmail,
+          phone: customerPhone
+        },
+        {
+          orderId,
+          amount: calculateTotal(),
+          currency: 'USD',
+          orderType
+        },
+        'success',
+        endTime - startTime
+      );
+
       toast({
         title: "Payment successful!",
         description: `Your order #${order.id} has been placed and payment processed.`,
@@ -162,6 +236,30 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
       onOpenChange(false);
       
     } catch (error) {
+      // Log failed payment
+      const endTime = Date.now();
+      performanceLogger.logPaymentAttempt(
+        {
+          cardNumber,
+          expiryDate,
+          cvv,
+          cardHolderName
+        },
+        {
+          name: customerName,
+          email: customerEmail,
+          phone: customerPhone
+        },
+        {
+          orderId: orderId || 'unknown',
+          amount: calculateTotal(),
+          currency: 'USD',
+          orderType
+        },
+        'failed',
+        endTime - startTime
+      );
+
       toast({
         title: "Payment failed",
         description: "There was an error processing your payment. Please try again.",
@@ -273,7 +371,6 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
                     <SelectValue placeholder="Select order type" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="dine-in">Dine In</SelectItem>
                     <SelectItem value="takeout">Takeout</SelectItem>
                     <SelectItem value="delivery">Delivery</SelectItem>
                   </SelectContent>
@@ -388,7 +485,7 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
             <Button 
               type="submit" 
               disabled={isLoading || (currentStep === 1 ? !validateStep1() : !validateStep2())}
-              className="flex-1"
+              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
             >
               {isLoading ? (
                 currentStep === 1 ? "Proceeding..." : "Processing Payment..."

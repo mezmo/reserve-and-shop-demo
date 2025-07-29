@@ -62,14 +62,14 @@ const AppContent = () => {
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
-      <CartProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter>
+      <Toaster />
+      <Sonner />
+      <BrowserRouter>
+        <CartProvider>
           <AppContent />
-        </BrowserRouter>
-        <ReactQueryDevtools initialIsOpen={false} />
-      </CartProvider>
+        </CartProvider>
+      </BrowserRouter>
+      <ReactQueryDevtools initialIsOpen={false} />
     </TooltipProvider>
   </QueryClientProvider>
 );

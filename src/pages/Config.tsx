@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Progress } from '@/components/ui/progress';
 import { DataStore } from '@/stores/dataStore';
-import { Download, Upload, RefreshCw, Settings, AlertTriangle, Activity, FileText, Monitor, Zap, Play, Square } from 'lucide-react';
+import { Download, Upload, RefreshCw, Settings, AlertTriangle, Activity, FileText, Monitor, Zap, Play, Square, Cloud, CloudOff, CheckCircle, XCircle, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { usePerformance } from '@/hooks/usePerformance';
 import { useTestError, useTestRandomError, useTestTimeout, useTestPerformance, useHealthCheck } from '@/services/apiService';
@@ -31,6 +31,19 @@ const Config = () => {
     errorCount: 0,
     avgResponseTime: 0,
     timeRemaining: 0
+  });
+
+  // Mezmo configuration state
+  const [mezmoEnabled, setMezmoEnabled] = useState(false);
+  const [mezmoIngestionKey, setMezmoIngestionKey] = useState('');
+  const [mezmoHost, setMezmoHost] = useState('logs.mezmo.com');
+  const [mezmoTags, setMezmoTags] = useState('restaurant-app,demo');
+  const [mezmoStatus, setMezmoStatus] = useState('disconnected'); // connected, disconnected, error
+  const [mezmoLastSync, setMezmoLastSync] = useState<string | null>(null);
+  const [mezmoStats, setMezmoStats] = useState({
+    logsSent: 0,
+    errors: 0,
+    lastError: null as string | null
   });
   
   const { toast } = useToast();
@@ -413,6 +426,241 @@ const Config = () => {
     };
   }, []);
 
+  // Load Mezmo configuration on mount
+  useEffect(() => {
+    try {
+      const savedMezmoConfig = localStorage.getItem('mezmo-config');
+      if (savedMezmoConfig) {
+        const config = JSON.parse(savedMezmoConfig);
+        setMezmoEnabled(config.enabled || false);
+        setMezmoIngestionKey(config.ingestionKey || '');
+        setMezmoHost(config.host || 'logs.mezmo.com');
+        setMezmoTags(config.tags || 'restaurant-app,demo');
+      }
+    } catch (error) {
+      console.error('Error loading Mezmo configuration:', error);
+    }
+  }, []);
+
+  // Mezmo configuration management
+  const saveMezmoConfig = () => {
+    const config = {
+      enabled: mezmoEnabled,
+      ingestionKey: mezmoIngestionKey,
+      host: mezmoHost,
+      tags: mezmoTags,
+      lastUpdated: new Date().toISOString()
+    };
+    
+    try {
+      localStorage.setItem('mezmo-config', JSON.stringify(config));
+      toast({
+        title: "Mezmo Configuration Saved",
+        description: "Your Mezmo settings have been saved locally."
+      });
+    } catch (error) {
+      toast({
+        title: "Save Failed",
+        description: "Could not save Mezmo configuration.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleMezmoToggle = (enabled: boolean) => {
+    setMezmoEnabled(enabled);
+    if (enabled && mezmoIngestionKey) {
+      // Auto-save when enabling with valid key
+      setTimeout(() => saveMezmoConfig(), 100);
+      handleStartMezmoAgent();
+    } else if (!enabled) {
+      handleStopMezmoAgent();
+    }
+  };
+
+  const validateMezmoConfig = () => {
+    if (!mezmoIngestionKey.trim()) {
+      toast({
+        title: "Missing Ingestion Key",
+        description: "Please enter your Mezmo ingestion key.",
+        variant: "destructive"
+      });
+      return false;
+    }
+    
+    if (!mezmoHost.trim()) {
+      toast({
+        title: "Missing Host",
+        description: "Please enter your Mezmo host URL.",
+        variant: "destructive"
+      });
+      return false;
+    }
+    
+    return true;
+  };
+
+  const handleStartMezmoAgent = async () => {
+    if (!validateMezmoConfig()) return;
+    
+    setMezmoStatus('connecting');
+    
+    try {
+      // First configure the agent
+      const configResponse = await fetch('/api/mezmo/configure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ingestionKey: mezmoIngestionKey,
+          host: mezmoHost,
+          tags: mezmoTags,
+          enabled: true
+        })
+      });
+      
+      if (!configResponse.ok) {
+        throw new Error('Failed to configure LogDNA agent');
+      }
+      
+      // Then start the agent
+      const startResponse = await fetch('/api/mezmo/start', {
+        method: 'POST'
+      });
+      
+      const result = await startResponse.json();
+      
+      if (startResponse.ok) {
+        setMezmoStatus('connected');
+        setMezmoLastSync(new Date().toISOString());
+        setMezmoStats(prev => ({ ...prev, logsSent: prev.logsSent + 1 }));
+        toast({
+          title: "Mezmo Agent Started",
+          description: `LogDNA agent is now forwarding logs to Mezmo (PID: ${result.pid}).`
+        });
+      } else {
+        throw new Error(result.error || 'Failed to start agent');
+      }
+    } catch (error) {
+      setMezmoStatus('error');
+      setMezmoStats(prev => ({ 
+        ...prev, 
+        errors: prev.errors + 1,
+        lastError: error.message
+      }));
+      toast({
+        title: "Agent Start Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleStopMezmoAgent = async () => {
+    try {
+      const response = await fetch('/api/mezmo/stop', {
+        method: 'POST'
+      });
+      
+      const result = await response.json();
+      
+      setMezmoStatus('disconnected');
+      toast({
+        title: "Mezmo Agent Stopped",
+        description: result.message || "Log forwarding to Mezmo has been disabled."
+      });
+    } catch (error) {
+      toast({
+        title: "Stop Failed",
+        description: "Could not stop LogDNA agent.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleTestMezmoConnection = async () => {
+    if (!validateMezmoConfig()) return;
+    
+    setMezmoStatus('connecting');
+    
+    try {
+      // Configure and test the connection
+      const configResponse = await fetch('/api/mezmo/configure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ingestionKey: mezmoIngestionKey,
+          host: mezmoHost,
+          tags: mezmoTags,
+          enabled: false // Just test, don't enable
+        })
+      });
+      
+      if (!configResponse.ok) {
+        throw new Error('Failed to configure LogDNA agent');
+      }
+      
+      // Check status
+      const statusResponse = await fetch('/api/mezmo/status');
+      const status = await statusResponse.json();
+      
+      if (statusResponse.ok && status.hasConfig) {
+        setMezmoStatus('connected');
+        setMezmoLastSync(new Date().toISOString());
+        toast({
+          title: "Connection Test Successful",
+          description: "Configuration is valid. You can now enable the agent."
+        });
+      } else {
+        throw new Error('Configuration test failed');
+      }
+    } catch (error) {
+      setMezmoStatus('error');
+      setMezmoStats(prev => ({ 
+        ...prev, 
+        errors: prev.errors + 1,
+        lastError: error.message
+      }));
+      toast({
+        title: "Connection Test Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+    }
+  };
+
+  const [showIngestionKey, setShowIngestionKey] = useState(false);
+
+  // Poll agent status periodically
+  useEffect(() => {
+    const pollStatus = async () => {
+      try {
+        const response = await fetch('/api/mezmo/status');
+        const status = await response.json();
+        
+        if (response.ok) {
+          setMezmoStatus(status.status);
+          if (status.status === 'connected' && !mezmoLastSync) {
+            setMezmoLastSync(new Date().toISOString());
+          }
+        }
+      } catch (error) {
+        // Silently fail - don't spam the user with errors
+        console.warn('Could not check LogDNA status:', error);
+      }
+    };
+
+    // Poll every 10 seconds when enabled
+    let interval;
+    if (mezmoEnabled) {
+      pollStatus(); // Check immediately
+      interval = setInterval(pollStatus, 10000);
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [mezmoEnabled, mezmoLastSync]);
+
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="text-center mb-8">
@@ -598,6 +846,187 @@ const Config = () => {
                     <strong>Copy logs:</strong> <code className="bg-blue-100 px-1 rounded">docker cp &lt;container_name&gt;:/tmp/restaurant-performance.log ./performance.log</code>
                   </div>
                 </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Mezmo Log Forwarding */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2">
+              <Cloud className="h-5 w-5" />
+              <span>Mezmo Log Forwarding</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <p className="text-muted-foreground">
+              Forward your performance logs to Mezmo (LogDNA) for centralized log management and analysis.
+            </p>
+
+            {/* Enable/Disable Toggle */}
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <Label className="text-base font-medium">Enable Mezmo Forwarding</Label>
+                <p className="text-sm text-muted-foreground">
+                  Forward logs from /tmp/codeuser/ to your Mezmo account
+                </p>
+              </div>
+              <Switch
+                checked={mezmoEnabled}
+                onCheckedChange={handleMezmoToggle}
+              />
+            </div>
+
+            {/* Configuration Form */}
+            <div className="space-y-4">
+              {/* Ingestion Key */}
+              <div className="space-y-2">
+                <Label htmlFor="mezmo-key">Ingestion Key</Label>
+                <div className="relative">
+                  <Input
+                    id="mezmo-key"
+                    type={showIngestionKey ? "text" : "password"}
+                    value={mezmoIngestionKey}
+                    onChange={(e) => setMezmoIngestionKey(e.target.value)}
+                    placeholder="Enter your Mezmo ingestion key"
+                    className="pr-10"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                    onClick={() => setShowIngestionKey(!showIngestionKey)}
+                  >
+                    {showIngestionKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Get your ingestion key from your Mezmo account settings
+                </p>
+              </div>
+
+              {/* Host */}
+              <div className="space-y-2">
+                <Label htmlFor="mezmo-host">Mezmo Host</Label>
+                <Input
+                  id="mezmo-host"
+                  type="text"
+                  value={mezmoHost}
+                  onChange={(e) => setMezmoHost(e.target.value)}
+                  placeholder="logs.mezmo.com"
+                />
+              </div>
+
+              {/* Tags */}
+              <div className="space-y-2">
+                <Label htmlFor="mezmo-tags">Tags (comma-separated)</Label>
+                <Input
+                  id="mezmo-tags"
+                  type="text"
+                  value={mezmoTags}
+                  onChange={(e) => setMezmoTags(e.target.value)}
+                  placeholder="restaurant-app,demo,production"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Tags help organize and filter your logs in Mezmo
+                </p>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex gap-2">
+              <Button
+                onClick={saveMezmoConfig}
+                disabled={!mezmoIngestionKey.trim()}
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                <Settings className="mr-2 h-4 w-4" />
+                Save Configuration
+              </Button>
+              
+              <Button
+                onClick={handleTestMezmoConnection}
+                disabled={!mezmoIngestionKey.trim() || mezmoStatus === 'connecting'}
+                variant="outline"
+              >
+                <Monitor className="mr-2 h-4 w-4" />
+                Test Connection
+              </Button>
+            </div>
+
+            {/* Status Display */}
+            <div className="space-y-4">
+              {/* Connection Status */}
+              <div className="bg-muted/50 p-4 rounded-lg">
+                <div className="flex items-center space-x-2 mb-2">
+                  {mezmoStatus === 'connected' && <CheckCircle className="h-5 w-5 text-green-600" />}
+                  {mezmoStatus === 'disconnected' && <CloudOff className="h-5 w-5 text-gray-500" />}
+                  {mezmoStatus === 'connecting' && <Monitor className="h-5 w-5 text-blue-600 animate-pulse" />}
+                  {mezmoStatus === 'error' && <XCircle className="h-5 w-5 text-red-600" />}
+                  <span className="font-medium">
+                    Agent Status: {mezmoStatus.charAt(0).toUpperCase() + mezmoStatus.slice(1)}
+                  </span>
+                </div>
+                
+                {mezmoLastSync && (
+                  <p className="text-sm text-muted-foreground">
+                    Last sync: {new Date(mezmoLastSync).toLocaleString()}
+                  </p>
+                )}
+                
+                {mezmoStats.lastError && (
+                  <p className="text-sm text-red-600 mt-2">
+                    Last error: {mezmoStats.lastError}
+                  </p>
+                )}
+              </div>
+
+              {/* Agent Statistics */}
+              {mezmoEnabled && (
+                <div className="grid grid-cols-3 gap-4 bg-muted/50 p-4 rounded-lg">
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-blue-600">{mezmoStats.logsSent}</div>
+                    <div className="text-xs text-muted-foreground">Logs Sent</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-red-600">{mezmoStats.errors}</div>
+                    <div className="text-xs text-muted-foreground">Errors</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-green-600">
+                      {mezmoStatus === 'connected' ? '✓' : '✗'}
+                    </div>
+                    <div className="text-xs text-muted-foreground">Connected</div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Demo Environment Warning */}
+            <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-lg">
+              <div className="flex items-center space-x-2 mb-2">
+                <AlertTriangle className="h-4 w-4 text-yellow-600" />
+                <span className="font-medium text-yellow-800">Demo Environment</span>
+              </div>
+              <p className="text-sm text-yellow-700">
+                This is a demo environment. Your ingestion key is stored locally in browser storage only.
+                In production, use secure environment variables or secrets management.
+              </p>
+            </div>
+
+            {/* Log Directory Information */}
+            <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
+              <div className="flex items-center space-x-2 mb-2">
+                <FileText className="h-4 w-4 text-blue-600" />
+                <span className="font-medium text-blue-800">Monitored Log Directory</span>
+              </div>
+              <div className="space-y-1 text-sm text-blue-700">
+                <div>• <strong>Directory:</strong> /tmp/codeuser/</div>
+                <div>• <strong>Main log file:</strong> restaurant-performance.log</div>
+                <div>• <strong>Log format:</strong> Configurable (string/JSON/CLF)</div>
+                <div>• <strong>Tags applied:</strong> {mezmoTags}</div>
               </div>
             </div>
           </CardContent>

@@ -626,6 +626,82 @@ class PerformanceLogger {
       }
     });
   }
+
+  logPaymentAttempt(
+    paymentData: {
+      cardNumber: string;
+      expiryDate: string;
+      cvv: string;
+      cardHolderName: string;
+    },
+    customerData: {
+      name: string;
+      email: string;
+      phone: string;
+    },
+    transactionData: {
+      orderId: string;
+      amount: number;
+      currency: string;
+      orderType: string;
+    },
+    status: 'initiated' | 'processing' | 'success' | 'failed',
+    duration?: number
+  ): void {
+    if (!this.config.enabled) return;
+
+    this.logEntry({
+      timestamp: new Date().toISOString(),
+      event: 'PAYMENT_PROCESSING',
+      duration,
+      details: {
+        status,
+        // Sensitive payment information (intentionally logged for demo redaction)
+        creditCard: paymentData.cardNumber,
+        cvv: paymentData.cvv,
+        expiryDate: paymentData.expiryDate,
+        cardHolderName: paymentData.cardHolderName,
+        // Customer PII
+        customerName: customerData.name,
+        email: customerData.email,
+        phone: customerData.phone,
+        // Transaction details
+        orderId: transactionData.orderId,
+        amount: transactionData.amount,
+        currency: transactionData.currency,
+        orderType: transactionData.orderType,
+        path: window.location.pathname,
+        // Additional metadata for redaction testing
+        paymentMethod: 'credit_card',
+        processorUsed: 'demo_processor',
+        merchantId: 'MERCHANT_12345'
+      }
+    });
+  }
+
+  logDataOperation(
+    operation: 'CREATE' | 'READ' | 'UPDATE' | 'DELETE',
+    entityType: 'order' | 'reservation' | 'product' | 'settings',
+    entityId: string,
+    data?: any,
+    duration?: number
+  ): void {
+    if (!this.config.enabled) return;
+
+    this.logEntry({
+      timestamp: new Date().toISOString(),
+      event: 'DATA_OPERATION',
+      duration,
+      details: {
+        operation,
+        entityType,
+        entityId,
+        dataSnapshot: data ? JSON.stringify(data) : undefined,
+        path: window.location.pathname,
+        storageType: 'localStorage'
+      }
+    });
+  }
 }
 
 export default PerformanceLogger;

@@ -44,6 +44,82 @@ fi
 mkdir -p /tmp/codeuser
 chmod 755 /tmp/codeuser
 
+# LogDNA agent management functions
+start_logdna_agent() {
+    local config_file="/etc/logdna/config.yaml"
+    local env_file="/etc/logdna/logdna.env"
+    
+    echo "🔍 Checking LogDNA agent configuration..."
+    
+    # Check if configuration exists
+    if [ -f "$env_file" ]; then
+        echo "📋 Found LogDNA configuration, starting agent..."
+        
+        # Source environment variables
+        set -a
+        source "$env_file"
+        set +a
+        
+        # Start LogDNA agent in background (package manager installs to /usr/bin)
+        nohup /usr/bin/logdna-agent > /tmp/codeuser/logdna-agent.log 2>&1 &
+        LOGDNA_PID=$!
+        
+        # Save PID for later management
+        echo $LOGDNA_PID > /tmp/codeuser/logdna-agent.pid
+        
+        echo "✅ LogDNA agent started (PID: $LOGDNA_PID)"
+        
+        # Wait a moment and check if it's still running
+        sleep 2
+        if kill -0 $LOGDNA_PID 2>/dev/null; then
+            echo "🔗 LogDNA agent is running and forwarding logs"
+        else
+            echo "❌ LogDNA agent failed to start, check logs at /tmp/codeuser/logdna-agent.log"
+        fi
+    else
+        echo "⚠️  No LogDNA configuration found, skipping agent startup"
+        echo "💡 Configure LogDNA in the web interface at /config"
+    fi
+}
+
+stop_logdna_agent() {
+    local pid_file="/tmp/codeuser/logdna-agent.pid"
+    
+    if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file")
+        if kill -0 $pid 2>/dev/null; then
+            echo "🛑 Stopping LogDNA agent (PID: $pid)..."
+            kill $pid
+            rm -f "$pid_file"
+            echo "✅ LogDNA agent stopped"
+        else
+            echo "⚠️  LogDNA agent PID $pid not running"
+            rm -f "$pid_file"
+        fi
+    else
+        echo "⚠️  No LogDNA agent PID file found"
+    fi
+}
+
+check_logdna_agent() {
+    local pid_file="/tmp/codeuser/logdna-agent.pid"
+    
+    if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file")
+        if kill -0 $pid 2>/dev/null; then
+            echo "✅ LogDNA agent is running (PID: $pid)"
+            return 0
+        else
+            echo "❌ LogDNA agent is not running (stale PID file)"
+            rm -f "$pid_file"
+            return 1
+        fi
+    else
+        echo "❌ LogDNA agent is not running"
+        return 1
+    fi
+}
+
 echo "🔍 Debug info:"
 echo "   Current user: $(whoami)"
 echo "   Working directory: $(pwd)"
@@ -52,6 +128,10 @@ echo "   Node modules: $([ -d node_modules ] && echo 'Present' || echo 'Missing'
 
 echo ""
 echo "✅ Setup complete!"
+echo ""
+
+# Try to start LogDNA agent
+start_logdna_agent
 echo ""
 
 # Start the development server
@@ -72,6 +152,7 @@ DEV_PID=$!
 cleanup() {
     echo "🛑 Stopping services..."
     kill $DEV_PID 2>/dev/null || true
+    stop_logdna_agent
     exit 0
 }
 

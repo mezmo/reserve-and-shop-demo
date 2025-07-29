@@ -35,7 +35,7 @@ export interface Order {
   items: OrderItem[];
   totalAmount: number;
   status: 'pending' | 'preparing' | 'ready' | 'completed' | 'cancelled';
-  type: 'dine-in' | 'takeout' | 'delivery';
+  type: 'takeout' | 'delivery';
   createdAt: string;
   notes?: string;
 }
