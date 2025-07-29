@@ -20,6 +20,16 @@ RUN echo "deb https://assets.logdna.com stable main" > /etc/apt/sources.list.d/l
 RUN mkdir -p /etc/logdna /var/lib/logdna && \
     chmod 755 /etc/logdna /var/lib/logdna
 
+# Install OpenTelemetry Collector Contrib
+RUN wget -qO /tmp/otelcol.tar.gz "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.91.0/otelcol-contrib_0.91.0_linux_amd64.tar.gz" && \
+    tar -xzf /tmp/otelcol.tar.gz -C /usr/local/bin/ otelcol-contrib && \
+    chmod +x /usr/local/bin/otelcol-contrib && \
+    rm /tmp/otelcol.tar.gz
+
+# Create OpenTelemetry Collector directories and configuration
+RUN mkdir -p /etc/otelcol && \
+    chmod 755 /etc/otelcol
+
 # Create non-root user
 RUN useradd -m codeuser
 
@@ -46,6 +56,9 @@ RUN mkdir -p /tmp/codeuser && chown codeuser:codeuser /tmp/codeuser && chmod 755
 
 # Set up LogDNA permissions for codeuser
 RUN chown -R codeuser:codeuser /var/lib/logdna /etc/logdna
+
+# Set up OpenTelemetry Collector permissions for codeuser
+RUN chown -R codeuser:codeuser /etc/otelcol
 
 # Change ownership to codeuser after all setup is complete
 RUN chown -R codeuser:codeuser /app

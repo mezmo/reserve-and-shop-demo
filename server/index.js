@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import { execSync, spawn } from 'child_process';
+import yaml from 'js-yaml';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -436,6 +437,456 @@ app.get('/api/mezmo/logs', (req, res) => {
   } catch (error) {
     console.error('Error reading LogDNA logs:', error);
     res.status(500).json({ error: 'Failed to read LogDNA logs' });
+  }
+});
+
+// OpenTelemetry Collector Management
+const generateOTELConfig = ({ logsEnabled, metricsEnabled, tracesEnabled, ingestionKey, host, serviceName, tags, pipelineId }) => {
+  const config = {
+    receivers: {},
+    processors: {
+      batch: {
+        timeout: '1s',
+        send_batch_size: 1024
+      },
+      resource: {
+        attributes: [
+          { key: 'service.name', value: serviceName || 'restaurant-app', action: 'upsert' },
+          { key: 'service.version', value: '1.0.0', action: 'upsert' },
+          { key: 'deployment.environment', value: 'demo', action: 'upsert' }
+        ]
+      }
+    },
+    exporters: {},
+    service: {
+      pipelines: {},
+      telemetry: {
+        logs: {
+          level: 'debug'
+        }
+      }
+    }
+  };
+
+  // Determine if this is a Mezmo Pipeline (has pipeline ID) or legacy LogDNA
+  const isMezmoPipeline = pipelineId && pipelineId.length > 0;
+  const baseEndpoint = isMezmoPipeline 
+    ? `https://pipeline.mezmo.com/v1/${pipelineId}`
+    : `https://${host || 'logs.mezmo.com'}`;
+
+  console.log('🔧 OTEL Config Generation:');
+  console.log('   Pipeline Mode:', isMezmoPipeline ? 'Mezmo Pipeline' : 'Legacy LogDNA');
+  console.log('   Base Endpoint:', baseEndpoint);
+  console.log('   Pipeline ID:', pipelineId || 'N/A');
+
+  // Conditionally add logs pipeline
+  if (logsEnabled) {
+    config.receivers.filelog = {
+      include: ['/tmp/codeuser/*.log'],
+      start_at: 'beginning'
+      // Remove JSON parser since our logs are plain text, not JSON
+    };
+
+    // Add logging exporter for debugging (limited output)
+    config.exporters['logging'] = {
+      loglevel: 'info'  // Reduce to info to avoid spam
+    };
+    
+    // Add file exporter to capture a small sample
+    config.exporters['file'] = {
+      path: '/tmp/codeuser/otel-debug-sample.json',
+      format: 'json'
+    };
+
+    if (isMezmoPipeline) {
+      // Mezmo Pipeline expects OTLP protobuf format - use otlphttp exporter
+      config.exporters['otlphttp/logs'] = {
+        logs_endpoint: baseEndpoint,
+        headers: {
+          authorization: ingestionKey
+        }
+      };
+    } else {
+      // Legacy LogDNA configuration - use official Mezmo exporter  
+      config.exporters['mezmo'] = {
+        ingest_url: "https://logs.mezmo.com/otel/ingest/rest",
+        ingest_key: ingestionKey
+      };
+    }
+
+    config.service.pipelines.logs = {
+      receivers: ['filelog'],
+      processors: ['resource', 'batch'],
+      exporters: isMezmoPipeline ? ['file'] : ['logging', 'mezmo']  // Only file exporter for now
+    };
+  }
+
+  // Conditionally add metrics pipeline
+  if (metricsEnabled) {
+    config.receivers.hostmetrics = {
+      collection_interval: '30s',
+      scrapers: {
+        cpu: {},
+        memory: {},
+        disk: {},
+        filesystem: {},
+        network: {}
+      }
+    };
+
+    if (isMezmoPipeline) {
+      // Mezmo Pipeline configuration
+      config.exporters['otlphttp/metrics'] = {
+        endpoint: baseEndpoint,
+        headers: {
+          authorization: ingestionKey,
+          'content-type': 'application/json'
+        }
+      };
+    } else {
+      // Legacy LogDNA configuration
+      config.exporters['otlphttp/metrics'] = {
+        endpoint: `${baseEndpoint}/v1/metrics`,
+        headers: {
+          authorization: `Bearer ${ingestionKey}`,
+          'x-mezmo-service': serviceName || 'restaurant-app'
+        }
+      };
+    }
+
+    config.service.pipelines.metrics = {
+      receivers: ['hostmetrics'],
+      processors: ['resource', 'batch'],
+      exporters: ['otlphttp/metrics']
+    };
+  }
+
+  // Conditionally add traces pipeline
+  if (tracesEnabled) {
+    config.receivers.otlp = {
+      protocols: {
+        grpc: {
+          endpoint: '0.0.0.0:4317'
+        },
+        http: {
+          endpoint: '0.0.0.0:4318'
+        }
+      }
+    };
+
+    if (isMezmoPipeline) {
+      // Mezmo Pipeline configuration
+      config.exporters['otlphttp/traces'] = {
+        endpoint: baseEndpoint,
+        headers: {
+          authorization: ingestionKey,
+          'content-type': 'application/json'
+        }
+      };
+    } else {
+      // Legacy LogDNA configuration
+      config.exporters['otlphttp/traces'] = {
+        endpoint: `${baseEndpoint}/v1/traces`,
+        headers: {
+          authorization: `Bearer ${ingestionKey}`,
+          'x-mezmo-service': serviceName || 'restaurant-app'
+        }
+      };
+    }
+
+    config.service.pipelines.traces = {
+      receivers: ['otlp'],
+      processors: ['resource', 'batch'],
+      exporters: ['otlphttp/traces']
+    };
+  }
+
+  return config;
+};
+
+app.get('/api/otel/status', (req, res) => {
+  try {
+    // Check if collector is running
+    const pidFile = '/tmp/codeuser/otel-collector.pid';
+    const configFile = '/etc/otelcol/config.yaml';
+    
+    let status = 'disconnected';
+    let pid = null;
+    let hasConfig = false;
+    let enabledPipelines = { logs: false, metrics: false, traces: false };
+    
+    if (fs.existsSync(configFile)) {
+      hasConfig = true;
+      
+      // Try to read config to determine enabled pipelines
+      try {
+        const configContent = fs.readFileSync(configFile, 'utf8');
+        const config = yaml.load(configContent);
+        if (config && config.service && config.service.pipelines) {
+          enabledPipelines = {
+            logs: !!config.service.pipelines.logs,
+            metrics: !!config.service.pipelines.metrics,
+            traces: !!config.service.pipelines.traces
+          };
+        }
+      } catch (error) {
+        console.warn('Could not parse OTEL config:', error);
+      }
+    }
+    
+    if (fs.existsSync(pidFile)) {
+      try {
+        pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+        // Check if PID is still running
+        process.kill(pid, 0); // This throws if process doesn't exist
+        status = 'connected';
+      } catch (error) {
+        // Process not running, clean up stale PID file
+        fs.unlinkSync(pidFile);
+        status = 'disconnected';
+        pid = null;
+      }
+    }
+    
+    res.json({
+      status,
+      pid,
+      hasConfig,
+      enabledPipelines,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error checking OTEL status:', error);
+    res.status(500).json({ error: 'Failed to check OTEL Collector status' });
+  }
+});
+
+app.post('/api/otel/configure', (req, res) => {
+  try {
+    const { 
+      ingestionKey, 
+      host, 
+      serviceName, 
+      tags,
+      pipelineId,
+      logsEnabled, 
+      metricsEnabled, 
+      tracesEnabled 
+    } = req.body;
+    
+    if (!ingestionKey) {
+      return res.status(400).json({ error: 'Ingestion key is required' });
+    }
+    
+    // Ensure at least one pipeline is enabled
+    if (!logsEnabled && !metricsEnabled && !tracesEnabled) {
+      return res.status(400).json({ error: 'At least one pipeline (logs, metrics, or traces) must be enabled' });
+    }
+    
+    const configDir = '/etc/otelcol';
+    const configFile = `${configDir}/config.yaml`;
+    
+    // Ensure config directory exists
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+    
+    // Generate dynamic configuration based on enabled pipelines
+    const config = generateOTELConfig({
+      logsEnabled,
+      metricsEnabled, 
+      tracesEnabled,
+      ingestionKey,
+      host: host || 'logs.mezmo.com',
+      serviceName: serviceName || 'restaurant-app',
+      tags: tags || 'restaurant-app,otel',
+      pipelineId: pipelineId || ''
+    });
+    
+    // Write configuration file
+    const yamlContent = yaml.dump(config, { indent: 2 });
+    fs.writeFileSync(configFile, yamlContent);
+    
+    console.log('📊 OpenTelemetry Collector configuration updated');
+    console.log('   Enabled pipelines:', { logsEnabled, metricsEnabled, tracesEnabled });
+    
+    res.json({
+      success: true,
+      message: 'OTEL Collector configuration saved',
+      enabledPipelines: { logsEnabled, metricsEnabled, tracesEnabled },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error configuring OTEL Collector:', error);
+    res.status(500).json({ error: 'Failed to configure OTEL Collector' });
+  }
+});
+
+app.post('/api/otel/start', (req, res) => {
+  try {
+    // Check if already running
+    const pidFile = '/tmp/codeuser/otel-collector.pid';
+    if (fs.existsSync(pidFile)) {
+      const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+      try {
+        process.kill(pid, 0);
+        return res.json({ message: 'OTEL Collector is already running', pid });
+      } catch (error) {
+        // Process not running, clean up
+        fs.unlinkSync(pidFile);
+      }
+    }
+    
+    // Start the collector
+    const logFile = '/tmp/codeuser/otel-collector.log';
+    const configFile = '/etc/otelcol/config.yaml';
+    
+    if (!fs.existsSync(configFile)) {
+      return res.status(400).json({ error: 'OTEL Collector not configured. Please configure first.' });
+    }
+    
+    // Start collector
+    const startCommand = `nohup /usr/local/bin/otelcol-contrib --config="${configFile}" > ${logFile} 2>&1 & echo $! > ${pidFile}`;
+    
+    execSync(startCommand, { shell: '/bin/bash' });
+    
+    // Give it a moment to start
+    setTimeout(() => {
+      if (fs.existsSync(pidFile)) {
+        const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+        console.log('✅ OTEL Collector started with PID:', pid);
+        res.json({ 
+          success: true,
+          message: 'OTEL Collector started', 
+          pid,
+          timestamp: new Date().toISOString()
+        });
+      } else {
+        res.status(500).json({ error: 'Failed to start OTEL Collector' });
+      }
+    }, 1000);
+    
+  } catch (error) {
+    console.error('Error starting OTEL Collector:', error);
+    res.status(500).json({ error: 'Failed to start OTEL Collector' });
+  }
+});
+
+app.post('/api/otel/stop', (req, res) => {
+  try {
+    const pidFile = '/tmp/codeuser/otel-collector.pid';
+    
+    if (!fs.existsSync(pidFile)) {
+      return res.json({ message: 'OTEL Collector is not running' });
+    }
+    
+    const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+    
+    try {
+      process.kill(pid, 'SIGTERM');
+      fs.unlinkSync(pidFile);
+      console.log('🛑 OTEL Collector stopped');
+      res.json({ 
+        success: true,
+        message: 'OTEL Collector stopped',
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      // Process might already be dead
+      fs.unlinkSync(pidFile);
+      res.json({ message: 'OTEL Collector was not running' });
+    }
+  } catch (error) {
+    console.error('Error stopping OTEL Collector:', error);
+    res.status(500).json({ error: 'Failed to stop OTEL Collector' });
+  }
+});
+
+app.get('/api/otel/logs', (req, res) => {
+  try {
+    const logFile = '/tmp/codeuser/otel-collector.log';
+    
+    if (!fs.existsSync(logFile)) {
+      return res.json({ logs: 'No logs available' });
+    }
+    
+    const logs = fs.readFileSync(logFile, 'utf8');
+    const lines = logs.split('\n').slice(-50); // Last 50 lines
+    
+    res.json({ 
+      logs: lines.join('\n'),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error reading OTEL Collector logs:', error);
+    res.status(500).json({ error: 'Failed to read OTEL Collector logs' });
+  }
+});
+
+app.get('/api/otel/debug', (req, res) => {
+  try {
+    const debugInfo = {
+      timestamp: new Date().toISOString(),
+      collector: {
+        configExists: fs.existsSync('/etc/otelcol/config.yaml'),
+        pidExists: fs.existsSync('/tmp/codeuser/otel-collector.pid'),
+        logExists: fs.existsSync('/tmp/codeuser/otel-collector.log'),
+        binary: fs.existsSync('/usr/local/bin/otelcol-contrib')
+      },
+      logDirectory: {
+        exists: fs.existsSync('/tmp/codeuser'),
+        permissions: null,
+        files: []
+      },
+      config: null,
+      recentLogs: null
+    };
+
+    // Check log directory permissions and files
+    if (debugInfo.logDirectory.exists) {
+      try {
+        const stats = fs.statSync('/tmp/codeuser');
+        debugInfo.logDirectory.permissions = stats.mode.toString(8);
+        debugInfo.logDirectory.files = fs.readdirSync('/tmp/codeuser')
+          .filter(file => file.endsWith('.log'))
+          .map(file => {
+            const filePath = `/tmp/codeuser/${file}`;
+            const fileStats = fs.statSync(filePath);
+            return {
+              name: file,
+              size: fileStats.size,
+              modified: fileStats.mtime,
+              readable: fs.constants.R_OK
+            };
+          });
+      } catch (error) {
+        debugInfo.logDirectory.error = error.message;
+      }
+    }
+
+    // Read config if exists
+    if (debugInfo.collector.configExists) {
+      try {
+        debugInfo.config = fs.readFileSync('/etc/otelcol/config.yaml', 'utf8');
+      } catch (error) {
+        debugInfo.config = `Error reading config: ${error.message}`;
+      }
+    }
+
+    // Get recent collector logs
+    if (debugInfo.collector.logExists) {
+      try {
+        const logs = fs.readFileSync('/tmp/codeuser/otel-collector.log', 'utf8');
+        debugInfo.recentLogs = logs.split('\n').slice(-20).join('\n');
+      } catch (error) {
+        debugInfo.recentLogs = `Error reading logs: ${error.message}`;
+      }
+    }
+
+    res.json(debugInfo);
+  } catch (error) {
+    console.error('Error getting OTEL debug info:', error);
+    res.status(500).json({ error: 'Failed to get debug information' });
   }
 });
 

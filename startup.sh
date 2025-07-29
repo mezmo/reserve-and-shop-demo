@@ -101,6 +101,76 @@ stop_logdna_agent() {
     fi
 }
 
+# OpenTelemetry Collector management functions
+start_otel_collector() {
+    local config_file="/etc/otelcol/config.yaml"
+    
+    echo "🔍 Checking OpenTelemetry Collector configuration..."
+    
+    # Check if configuration exists
+    if [ -f "$config_file" ]; then
+        echo "📊 Found OTEL Collector configuration, starting collector..."
+        
+        # Start OTEL Collector in background
+        nohup /usr/local/bin/otelcol-contrib --config="$config_file" > /tmp/codeuser/otel-collector.log 2>&1 &
+        OTEL_PID=$!
+        
+        # Save PID for later management
+        echo $OTEL_PID > /tmp/codeuser/otel-collector.pid
+        
+        echo "✅ OpenTelemetry Collector started (PID: $OTEL_PID)"
+        
+        # Wait a moment and check if it's still running
+        sleep 2
+        if kill -0 $OTEL_PID 2>/dev/null; then
+            echo "📡 OTEL Collector is running and forwarding telemetry"
+        else
+            echo "❌ OTEL Collector failed to start, check logs at /tmp/codeuser/otel-collector.log"
+        fi
+    else
+        echo "⚠️  No OTEL Collector configuration found, skipping collector startup"
+        echo "💡 Configure OTEL Collector in the web interface at /config"
+    fi
+}
+
+stop_otel_collector() {
+    local pid_file="/tmp/codeuser/otel-collector.pid"
+    
+    if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file")
+        if kill -0 $pid 2>/dev/null; then
+            echo "🛑 Stopping OpenTelemetry Collector (PID: $pid)..."
+            kill $pid
+            rm -f "$pid_file"
+            echo "✅ OTEL Collector stopped"
+        else
+            echo "⚠️  OTEL Collector PID $pid not running"
+            rm -f "$pid_file"
+        fi
+    else
+        echo "⚠️  No OTEL Collector PID file found"
+    fi
+}
+
+check_otel_collector() {
+    local pid_file="/tmp/codeuser/otel-collector.pid"
+    
+    if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file")
+        if kill -0 $pid 2>/dev/null; then
+            echo "✅ OpenTelemetry Collector is running (PID: $pid)"
+            return 0
+        else
+            echo "❌ OTEL Collector is not running (stale PID file)"
+            rm -f "$pid_file"
+            return 1
+        fi
+    else
+        echo "❌ OTEL Collector is not running"
+        return 1
+    fi
+}
+
 check_logdna_agent() {
     local pid_file="/tmp/codeuser/logdna-agent.pid"
     
@@ -134,6 +204,10 @@ echo ""
 start_logdna_agent
 echo ""
 
+# Try to start OpenTelemetry Collector
+start_otel_collector
+echo ""
+
 # Start the development server
 echo "🌟 Starting development server..."
 echo "📍 Frontend: http://localhost:8080"
@@ -153,6 +227,7 @@ cleanup() {
     echo "🛑 Stopping services..."
     kill $DEV_PID 2>/dev/null || true
     stop_logdna_agent
+    stop_otel_collector
     exit 0
 }
 

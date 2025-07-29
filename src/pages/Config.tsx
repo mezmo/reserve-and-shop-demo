@@ -13,6 +13,7 @@ import { useToast } from '@/hooks/use-toast';
 import { usePerformance } from '@/hooks/usePerformance';
 import { useTestError, useTestRandomError, useTestTimeout, useTestPerformance, useHealthCheck } from '@/services/apiService';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 const Config = () => {
   const [importData, setImportData] = useState('');
@@ -45,6 +46,31 @@ const Config = () => {
     errors: 0,
     lastError: null as string | null
   });
+
+  // OpenTelemetry Collector configuration state
+  const [otelEnabled, setOtelEnabled] = useState(false);
+  const [otelIngestionKey, setOtelIngestionKey] = useState('');
+  const [otelHost, setOtelHost] = useState('logs.mezmo.com');
+  const [otelPipelineId, setOtelPipelineId] = useState('');
+  const [otelServiceName, setOtelServiceName] = useState('restaurant-app');
+  const [otelTags, setOtelTags] = useState('restaurant-app,otel');
+  const [otelLogsEnabled, setOtelLogsEnabled] = useState(true);
+  const [otelMetricsEnabled, setOtelMetricsEnabled] = useState(true);
+  const [otelTracesEnabled, setOtelTracesEnabled] = useState(false);
+  const [otelStatus, setOtelStatus] = useState('disconnected');
+  const [otelLastSync, setOtelLastSync] = useState<string | null>(null);
+  const [otelStats, setOtelStats] = useState({
+    logsSent: 0,
+    metricsCollected: 0,
+    tracesReceived: 0,
+    errors: 0,
+    lastError: null as string | null
+  });
+  const [showOtelIngestionKey, setShowOtelIngestionKey] = useState(false);
+  const [otelLogs, setOtelLogs] = useState('');
+  const [showOtelLogs, setShowOtelLogs] = useState(false);
+  const [debugInfo, setDebugInfo] = useState(null);
+  const [showDebugInfo, setShowDebugInfo] = useState(false);
   
   const { toast } = useToast();
   const { getConfig, updateConfig, getSessionId, getStoredLogs, clearStoredLogs, flushLogs } = usePerformance();
@@ -453,6 +479,29 @@ const Config = () => {
     }
   }, []);
 
+  // Load OTEL configuration on mount
+  useEffect(() => {
+    try {
+      const savedOtelConfig = localStorage.getItem('otel-config');
+      if (savedOtelConfig) {
+        const config = JSON.parse(savedOtelConfig);
+        setOtelEnabled(config.enabled || false);
+        setOtelIngestionKey(config.ingestionKey || '');
+        setOtelHost(config.host || 'logs.mezmo.com');
+        setOtelPipelineId(config.pipelineId || '');
+        setOtelServiceName(config.serviceName || 'restaurant-app');
+        setOtelTags(config.tags || 'restaurant-app,otel');
+        if (config.pipelines) {
+          setOtelLogsEnabled(config.pipelines.logs !== false);
+          setOtelMetricsEnabled(config.pipelines.metrics !== false);
+          setOtelTracesEnabled(config.pipelines.traces || false);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading OTEL configuration:', error);
+    }
+  }, []);
+
   // Mezmo configuration management
   const saveMezmoConfig = () => {
     const config = {
@@ -641,6 +690,304 @@ const Config = () => {
 
   const [showIngestionKey, setShowIngestionKey] = useState(false);
 
+  // OTEL configuration management
+  const saveOtelConfig = async () => {
+    const config = {
+      enabled: otelEnabled,
+      ingestionKey: otelIngestionKey,
+      host: otelHost,
+      pipelineId: otelPipelineId,
+      serviceName: otelServiceName,
+      tags: otelTags,
+      pipelines: {
+        logs: otelLogsEnabled,
+        metrics: otelMetricsEnabled,
+        traces: otelTracesEnabled
+      },
+      lastUpdated: new Date().toISOString()
+    };
+    
+    try {
+      // Save to localStorage
+      localStorage.setItem('otel-config', JSON.stringify(config));
+      
+      // Also save to server if we have required fields
+      if (otelIngestionKey.trim() && (otelLogsEnabled || otelMetricsEnabled || otelTracesEnabled)) {
+        try {
+          const configResponse = await fetch('/api/otel/configure', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ingestionKey: otelIngestionKey,
+              host: otelHost,
+              pipelineId: otelPipelineId,
+              serviceName: otelServiceName,
+              tags: otelTags,
+              logsEnabled: otelLogsEnabled,
+              metricsEnabled: otelMetricsEnabled,
+              tracesEnabled: otelTracesEnabled
+            })
+          });
+          
+          if (!configResponse.ok) {
+            const errorData = await configResponse.json();
+            throw new Error(errorData.error || 'Failed to configure collector');
+          }
+          
+          toast({
+            title: "OTEL Configuration Saved",
+            description: "Configuration saved to server and generated /etc/otelcol/config.yaml file."
+          });
+        } catch (serverError: any) {
+          console.error('Failed to save OTEL config to server:', serverError);
+          toast({
+            title: "Server Configuration Failed",
+            description: `Configuration saved locally but server update failed: ${serverError.message}`,
+            variant: "destructive"
+          });
+        }
+      } else {
+        toast({
+          title: "OTEL Configuration Saved Locally",
+          description: "Configuration saved to browser. Add ingestion key and enable pipelines to save to server."
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Save Failed",
+        description: "Could not save OTEL Collector configuration.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleOtelToggle = (enabled: boolean) => {
+    setOtelEnabled(enabled);
+    if (enabled && otelIngestionKey) {
+      // Auto-save when enabling with valid key
+      setTimeout(() => saveOtelConfig(), 100);
+      handleStartOtelCollector();
+    } else if (!enabled) {
+      handleStopOtelCollector();
+    }
+  };
+
+  const validateOtelConfig = () => {
+    if (!otelIngestionKey.trim()) {
+      toast({
+        title: "Missing Ingestion Key",
+        description: "Please enter your Mezmo ingestion key.",
+        variant: "destructive"
+      });
+      return false;
+    }
+    
+    // Host is optional for Mezmo Pipeline (when Pipeline ID is provided)
+    if (!otelHost.trim() && !otelPipelineId.trim()) {
+      toast({
+        title: "Missing Host or Pipeline ID",
+        description: "Please enter either a Mezmo host URL (legacy) or Pipeline ID (pipeline mode).",
+        variant: "destructive"
+      });
+      return false;
+    }
+
+    if (!otelLogsEnabled && !otelMetricsEnabled && !otelTracesEnabled) {
+      toast({
+        title: "No Pipelines Enabled",
+        description: "Please enable at least one telemetry pipeline (logs, metrics, or traces).",
+        variant: "destructive"
+      });
+      return false;
+    }
+    
+    return true;
+  };
+
+  const handleStartOtelCollector = async () => {
+    if (!validateOtelConfig()) return;
+    
+    setOtelStatus('connecting');
+    
+    try {
+      // First configure the collector
+      const configResponse = await fetch('/api/otel/configure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ingestionKey: otelIngestionKey,
+          host: otelHost,
+          pipelineId: otelPipelineId,
+          serviceName: otelServiceName,
+          tags: otelTags,
+          logsEnabled: otelLogsEnabled,
+          metricsEnabled: otelMetricsEnabled,
+          tracesEnabled: otelTracesEnabled
+        })
+      });
+      
+      if (!configResponse.ok) {
+        throw new Error('Failed to configure OTEL Collector');
+      }
+      
+      // Then start the collector
+      const startResponse = await fetch('/api/otel/start', {
+        method: 'POST'
+      });
+      
+      const result = await startResponse.json();
+      
+      if (startResponse.ok) {
+        setOtelStatus('connected');
+        setOtelLastSync(new Date().toISOString());
+        setOtelStats(prev => ({ ...prev, logsSent: prev.logsSent + 1 }));
+        toast({
+          title: "OTEL Collector Started",
+          description: `OpenTelemetry Collector is now forwarding telemetry to Mezmo (PID: ${result.pid}).`
+        });
+      } else {
+        throw new Error(result.error || 'Failed to start collector');
+      }
+    } catch (error) {
+      setOtelStatus('error');
+      setOtelStats(prev => ({ 
+        ...prev, 
+        errors: prev.errors + 1,
+        lastError: error.message
+      }));
+      toast({
+        title: "Collector Start Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleStopOtelCollector = async () => {
+    try {
+      const response = await fetch('/api/otel/stop', {
+        method: 'POST'
+      });
+      
+      const result = await response.json();
+      
+      setOtelStatus('disconnected');
+      toast({
+        title: "OTEL Collector Stopped",
+        description: result.message || "Telemetry forwarding to Mezmo has been disabled."
+      });
+    } catch (error) {
+      toast({
+        title: "Stop Failed",
+        description: "Could not stop OTEL Collector.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleTestOtelConnection = async () => {
+    if (!validateOtelConfig()) return;
+    
+    setOtelStatus('connecting');
+    
+    try {
+      // Configure and test the connection
+      const configResponse = await fetch('/api/otel/configure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ingestionKey: otelIngestionKey,
+          host: otelHost,
+          pipelineId: otelPipelineId,
+          serviceName: otelServiceName,
+          tags: otelTags,
+          logsEnabled: otelLogsEnabled,
+          metricsEnabled: otelMetricsEnabled,
+          tracesEnabled: otelTracesEnabled
+        })
+      });
+      
+      if (!configResponse.ok) {
+        throw new Error('Failed to configure OTEL Collector');
+      }
+      
+      // Check status
+      const statusResponse = await fetch('/api/otel/status');
+      const status = await statusResponse.json();
+      
+      if (statusResponse.ok && status.hasConfig) {
+        setOtelStatus('connected');
+        setOtelLastSync(new Date().toISOString());
+        toast({
+          title: "Connection Test Successful",
+          description: "Configuration is valid. You can now enable the collector."
+        });
+      } else {
+        throw new Error('Configuration test failed');
+      }
+    } catch (error) {
+      setOtelStatus('error');
+      setOtelStats(prev => ({ 
+        ...prev, 
+        errors: prev.errors + 1,
+        lastError: error.message
+      }));
+      toast({
+        title: "Connection Test Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleViewOtelLogs = async () => {
+    try {
+      const response = await fetch('/api/otel/logs');
+      const result = await response.json();
+      
+      if (response.ok) {
+        setOtelLogs(result.logs || 'No logs available');
+        setShowOtelLogs(true);
+      } else {
+        toast({
+          title: "Failed to Load Logs",
+          description: "Could not retrieve OTEL Collector logs.",
+          variant: "destructive"
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Error Loading Logs",
+        description: error.message,
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleDebugOtel = async () => {
+    try {
+      const response = await fetch('/api/otel/debug');
+      const result = await response.json();
+      
+      if (response.ok) {
+        setDebugInfo(result);
+        setShowDebugInfo(true);
+      } else {
+        toast({
+          title: "Failed to Load Debug Info",
+          description: "Could not retrieve OTEL Collector debug information.",
+          variant: "destructive"
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Error Loading Debug Info",
+        description: error.message,
+        variant: "destructive"
+      });
+    }
+  };
+
   // Poll agent status periodically
   useEffect(() => {
     const pollStatus = async () => {
@@ -671,6 +1018,43 @@ const Config = () => {
       if (interval) clearInterval(interval);
     };
   }, [mezmoEnabled, mezmoLastSync]);
+
+  // Poll OTEL Collector status periodically
+  useEffect(() => {
+    const pollOtelStatus = async () => {
+      try {
+        const response = await fetch('/api/otel/status');
+        const status = await response.json();
+        
+        if (response.ok) {
+          setOtelStatus(status.status);
+          if (status.status === 'connected' && !otelLastSync) {
+            setOtelLastSync(new Date().toISOString());
+          }
+          // Update pipeline settings from server config
+          if (status.enabledPipelines) {
+            setOtelLogsEnabled(status.enabledPipelines.logs);
+            setOtelMetricsEnabled(status.enabledPipelines.metrics);
+            setOtelTracesEnabled(status.enabledPipelines.traces);
+          }
+        }
+      } catch (error) {
+        // Silently fail - don't spam the user with errors
+        console.warn('Could not check OTEL Collector status:', error);
+      }
+    };
+
+    // Poll every 10 seconds when enabled
+    let otelInterval;
+    if (otelEnabled) {
+      pollOtelStatus(); // Check immediately
+      otelInterval = setInterval(pollOtelStatus, 10000);
+    }
+
+    return () => {
+      if (otelInterval) clearInterval(otelInterval);
+    };
+  }, [otelEnabled, otelLastSync]);
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -1050,6 +1434,320 @@ const Config = () => {
                 <div>• <strong>Main log file:</strong> restaurant-performance.log</div>
                 <div>• <strong>Log format:</strong> Configurable (string/JSON/CLF)</div>
                 <div>• <strong>Tags applied:</strong> {mezmoTags}</div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* OpenTelemetry Collector */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2">
+              <Activity className="h-5 w-5" />
+              <span>OpenTelemetry Collector</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <p className="text-muted-foreground">
+              Forward logs, metrics, and traces to Mezmo using the OpenTelemetry Collector with independent pipeline control.
+            </p>
+
+            {/* Master Enable/Disable Toggle */}
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <Label className="text-base font-medium">Enable OTEL Collector</Label>
+                <p className="text-sm text-muted-foreground">
+                  Forward telemetry data from /tmp/codeuser/ to your Mezmo account
+                </p>
+              </div>
+              <Switch
+                checked={otelEnabled}
+                onCheckedChange={handleOtelToggle}
+              />
+            </div>
+
+            {/* Configuration Form */}
+            <div className="space-y-4">
+              {/* Ingestion Key */}
+              <div className="space-y-2">
+                <Label htmlFor="otel-key">Ingestion Key</Label>
+                <div className="relative">
+                  <Input
+                    id="otel-key"
+                    type={showOtelIngestionKey ? "text" : "password"}
+                    value={otelIngestionKey}
+                    onChange={(e) => setOtelIngestionKey(e.target.value)}
+                    placeholder="Enter your Mezmo ingestion key"
+                    className="pr-10"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                    onClick={() => setShowOtelIngestionKey(!showOtelIngestionKey)}
+                  >
+                    {showOtelIngestionKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Pipeline ID */}
+              <div className="space-y-2">
+                <Label htmlFor="otel-pipeline">Pipeline ID (Optional)</Label>
+                <Input
+                  id="otel-pipeline"
+                  type="text"
+                  value={otelPipelineId}
+                  onChange={(e) => setOtelPipelineId(e.target.value)}
+                  placeholder="12cfb094-6c7a-11f0-871b-a6a8e5244714"
+                />
+                <p className="text-xs text-muted-foreground">
+                  For Mezmo Pipelines, enter the Pipeline ID. Leave empty for legacy LogDNA endpoints.
+                </p>
+              </div>
+
+              {/* Host */}
+              <div className="space-y-2">
+                <Label htmlFor="otel-host">Mezmo Host (Legacy) - Optional</Label>
+                <Input
+                  id="otel-host"
+                  type="text"
+                  value={otelHost}
+                  onChange={(e) => setOtelHost(e.target.value)}
+                  placeholder={otelPipelineId.length > 0 ? "Not needed - using Pipeline ID" : "logs.mezmo.com (optional)"}
+                  disabled={otelPipelineId.length > 0}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {otelPipelineId.length > 0 
+                    ? "Host is automatically set to pipeline.mezmo.com when using Pipeline ID" 
+                    : "Only used for legacy LogDNA endpoints. Leave empty to use pipeline.mezmo.com"}
+                </p>
+              </div>
+
+              {/* Service Name */}
+              <div className="space-y-2">
+                <Label htmlFor="otel-service">Service Name</Label>
+                <Input
+                  id="otel-service"
+                  type="text"
+                  value={otelServiceName}
+                  onChange={(e) => setOtelServiceName(e.target.value)}
+                  placeholder="restaurant-app"
+                />
+              </div>
+
+              {/* Tags */}
+              <div className="space-y-2">
+                <Label htmlFor="otel-tags">Tags (comma-separated)</Label>
+                <Input
+                  id="otel-tags"
+                  type="text"
+                  value={otelTags}
+                  onChange={(e) => setOtelTags(e.target.value)}
+                  placeholder="restaurant-app,otel,demo"
+                />
+              </div>
+            </div>
+
+            {/* Pipeline Controls - Independent Toggles */}
+            <div className="space-y-4">
+              <Label className="text-base font-medium">Telemetry Pipelines</Label>
+              
+              <div className="grid gap-4">
+                <div className="flex items-center justify-between p-3 border rounded-lg">
+                  <div className="space-y-1">
+                    <Label className="font-medium text-blue-600">📄 Logs Pipeline</Label>
+                    <p className="text-sm text-muted-foreground">Forward log files to Mezmo</p>
+                  </div>
+                  <Switch 
+                    checked={otelLogsEnabled} 
+                    onCheckedChange={setOtelLogsEnabled}
+                    disabled={!otelEnabled}
+                  />
+                </div>
+                
+                <div className="flex items-center justify-between p-3 border rounded-lg">
+                  <div className="space-y-1">
+                    <Label className="font-medium text-green-600">📊 Metrics Pipeline</Label>
+                    <p className="text-sm text-muted-foreground">Collect system metrics and forward to Mezmo</p>
+                  </div>
+                  <Switch 
+                    checked={otelMetricsEnabled} 
+                    onCheckedChange={setOtelMetricsEnabled}
+                    disabled={!otelEnabled}
+                  />
+                </div>
+                
+                <div className="flex items-center justify-between p-3 border rounded-lg">
+                  <div className="space-y-1">
+                    <Label className="font-medium text-purple-600">🔗 Traces Pipeline</Label>
+                    <p className="text-sm text-muted-foreground">Receive traces via OTLP and forward to Mezmo</p>
+                  </div>
+                  <Switch 
+                    checked={otelTracesEnabled} 
+                    onCheckedChange={setOtelTracesEnabled}
+                    disabled={!otelEnabled}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex gap-2">
+              <Button
+                onClick={saveOtelConfig}
+                disabled={!otelIngestionKey.trim()}
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                <Settings className="mr-2 h-4 w-4" />
+                Save Configuration
+              </Button>
+              
+              <Button
+                onClick={handleTestOtelConnection}
+                disabled={!otelIngestionKey.trim() || otelStatus === 'connecting'}
+                variant="outline"
+              >
+                <Monitor className="mr-2 h-4 w-4" />
+                Test Connection
+              </Button>
+
+              <Button
+                onClick={handleViewOtelLogs}
+                variant="outline"
+                className="border-orange-200 text-orange-600 hover:bg-orange-50"
+              >
+                <FileText className="mr-2 h-4 w-4" />
+                View Logs
+              </Button>
+
+              <Button
+                onClick={handleDebugOtel}
+                variant="outline"
+                className="border-red-200 text-red-600 hover:bg-red-50"
+              >
+                <AlertTriangle className="mr-2 h-4 w-4" />
+                Debug Info
+              </Button>
+            </div>
+
+            {/* Status Display */}
+            <div className="space-y-4">
+              {/* Connection Status */}
+              <div className="bg-muted/50 p-4 rounded-lg">
+                <div className="flex items-center space-x-2 mb-2">
+                  {otelStatus === 'connected' && <CheckCircle className="h-5 w-5 text-green-600" />}
+                  {otelStatus === 'disconnected' && <CloudOff className="h-5 w-5 text-gray-500" />}
+                  {otelStatus === 'connecting' && <Monitor className="h-5 w-5 text-blue-600 animate-pulse" />}
+                  {otelStatus === 'error' && <XCircle className="h-5 w-5 text-red-600" />}
+                  <span className="font-medium">
+                    Collector Status: {otelStatus.charAt(0).toUpperCase() + otelStatus.slice(1)}
+                  </span>
+                </div>
+                
+                {otelLastSync && (
+                  <p className="text-sm text-muted-foreground">
+                    Last sync: {new Date(otelLastSync).toLocaleString()}
+                  </p>
+                )}
+                
+                {otelStats.lastError && (
+                  <p className="text-sm text-red-600 mt-2">
+                    Last error: {otelStats.lastError}
+                  </p>
+                )}
+              </div>
+
+              {/* Pipeline Statistics */}
+              {otelEnabled && (
+                <div className="grid grid-cols-3 gap-4 bg-muted/50 p-4 rounded-lg">
+                  <div className="text-center">
+                    <div className={`text-2xl font-bold ${otelLogsEnabled ? 'text-blue-600' : 'text-gray-400'}`}>
+                      {otelStats.logsSent || 0}
+                    </div>
+                    <div className="text-xs text-muted-foreground">Logs Sent</div>
+                  </div>
+                  <div className="text-center">
+                    <div className={`text-2xl font-bold ${otelMetricsEnabled ? 'text-green-600' : 'text-gray-400'}`}>
+                      {otelStats.metricsCollected || 0}
+                    </div>
+                    <div className="text-xs text-muted-foreground">Metrics Collected</div>
+                  </div>
+                  <div className="text-center">
+                    <div className={`text-2xl font-bold ${otelTracesEnabled ? 'text-purple-600' : 'text-gray-400'}`}>
+                      {otelStats.tracesReceived || 0}
+                    </div>
+                    <div className="text-xs text-muted-foreground">Traces Received</div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Information Sections */}
+            <div className="space-y-4">
+              {/* OTLP Endpoints Information */}
+              <div className="bg-green-50 border border-green-200 p-4 rounded-lg">
+                <div className="flex items-center space-x-2 mb-2">
+                  <Activity className="h-4 w-4 text-green-600" />
+                  <span className="font-medium text-green-800">OTLP Receiver Endpoints</span>
+                </div>
+                <div className="space-y-1 text-sm text-green-700">
+                  <div>• <strong>gRPC:</strong> localhost:4317</div>
+                  <div>• <strong>HTTP:</strong> localhost:4318</div>
+                  <div>• <strong>Protocols:</strong> OpenTelemetry Protocol (OTLP)</div>
+                  <div>• <strong>Active when:</strong> Traces pipeline is enabled</div>
+                </div>
+              </div>
+
+              {/* Demo Environment Warning */}
+              <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-lg">
+                <div className="flex items-center space-x-2 mb-2">
+                  <AlertTriangle className="h-4 w-4 text-yellow-600" />
+                  <span className="font-medium text-yellow-800">Demo Environment</span>
+                </div>
+                <p className="text-sm text-yellow-700">
+                  This is a demo environment. Your ingestion key is stored locally in browser storage only.
+                  In production, use secure environment variables or secrets management.
+                </p>
+              </div>
+
+              {/* Telemetry Information */}
+              <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
+                <div className="flex items-center space-x-2 mb-2">
+                  <FileText className="h-4 w-4 text-blue-600" />
+                  <span className="font-medium text-blue-800">Configuration Summary</span>
+                </div>
+                <div className="space-y-1 text-sm text-blue-700">
+                  <div>• <strong>Mode:</strong> {otelPipelineId ? 'Mezmo Pipeline' : 'Legacy LogDNA'}</div>
+                  {otelPipelineId ? (
+                    <div>• <strong>Endpoint:</strong> https://pipeline.mezmo.com/v1/{otelPipelineId}</div>
+                  ) : (
+                    <div>• <strong>Endpoint:</strong> https://{otelHost}/v1/[logs|metrics|traces]</div>
+                  )}
+                  <div>• <strong>Logs:</strong> /tmp/codeuser/*.log files</div>
+                  <div>• <strong>Metrics:</strong> Host system metrics (CPU, memory, disk, network)</div>
+                  <div>• <strong>Traces:</strong> OTLP receiver (gRPC & HTTP)</div>
+                  <div>• <strong>Service:</strong> {otelServiceName}</div>
+                  <div>• <strong>Tags:</strong> {otelTags}</div>
+                </div>
+              </div>
+
+              {/* Troubleshooting Guide */}
+              <div className="bg-orange-50 border border-orange-200 p-4 rounded-lg">
+                <div className="flex items-center space-x-2 mb-2">
+                  <AlertTriangle className="h-4 w-4 text-orange-600" />
+                  <span className="font-medium text-orange-800">Troubleshooting Guide</span>
+                </div>
+                <div className="space-y-2 text-sm text-orange-700">
+                  <div><strong>1. Check Collector Status:</strong> Ensure status shows "Connected" above</div>
+                  <div><strong>2. View Logs:</strong> Click "View Logs" button to see collector output</div>
+                  <div><strong>3. Verify Pipelines:</strong> Ensure at least one pipeline is enabled</div>
+                  <div><strong>4. Check Log Files:</strong> Verify files exist in /tmp/codeuser/*.log</div>
+                  <div><strong>5. Test Ingestion Key:</strong> Use "Test Connection" button</div>
+                  <div><strong>6. Check Network:</strong> Ensure connectivity to {otelHost}</div>
+                  <div><strong>7. Restart Collector:</strong> Toggle off/on to restart process</div>
+                </div>
               </div>
             </div>
           </CardContent>
@@ -1496,6 +2194,125 @@ const Config = () => {
           </CardContent>
         </Card>
       </div>
+
+      {/* OTEL Logs Dialog */}
+      <Dialog open={showOtelLogs} onOpenChange={setShowOtelLogs}>
+        <DialogContent className="max-w-4xl max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle>OpenTelemetry Collector Logs</DialogTitle>
+            <DialogDescription>
+              Last 50 lines from /tmp/codeuser/otel-collector.log
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="bg-black text-green-400 p-4 rounded-lg font-mono text-sm max-h-96 overflow-y-auto">
+              <pre>{otelLogs}</pre>
+            </div>
+            <div className="flex gap-2">
+              <Button 
+                onClick={handleViewOtelLogs}
+                variant="outline"
+                size="sm"
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Refresh
+              </Button>
+              <Button 
+                onClick={() => setShowOtelLogs(false)}
+                variant="outline"
+                size="sm"
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* OTEL Debug Info Dialog */}
+      <Dialog open={showDebugInfo} onOpenChange={setShowDebugInfo}>
+        <DialogContent className="max-w-6xl max-h-[90vh]">
+          <DialogHeader>
+            <DialogTitle>OpenTelemetry Collector Debug Information</DialogTitle>
+            <DialogDescription>
+              Comprehensive diagnostic information for troubleshooting
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+            {debugInfo && (
+              <>
+                {/* Collector Status */}
+                <div className="bg-muted/50 p-4 rounded-lg">
+                  <h3 className="font-semibold mb-2">Collector Components</h3>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>Binary exists: {debugInfo.collector.binary ? '✅' : '❌'}</div>
+                    <div>Config exists: {debugInfo.collector.configExists ? '✅' : '❌'}</div>
+                    <div>Process running: {debugInfo.collector.pidExists ? '✅' : '❌'}</div>
+                    <div>Log file exists: {debugInfo.collector.logExists ? '✅' : '❌'}</div>
+                  </div>
+                </div>
+
+                {/* Log Directory Status */}
+                <div className="bg-muted/50 p-4 rounded-lg">
+                  <h3 className="font-semibold mb-2">Log Directory Status</h3>
+                  <div className="text-sm space-y-1">
+                    <div>Directory exists: {debugInfo.logDirectory.exists ? '✅' : '❌'}</div>
+                    {debugInfo.logDirectory.permissions && (
+                      <div>Permissions: {debugInfo.logDirectory.permissions}</div>
+                    )}
+                    <div>Log files found: {debugInfo.logDirectory.files.length}</div>
+                    {debugInfo.logDirectory.files.map(file => (
+                      <div key={file.name} className="ml-4">
+                        📄 {file.name} ({file.size} bytes, modified: {new Date(file.modified).toLocaleString()})
+                      </div>
+                    ))}
+                    {debugInfo.logDirectory.error && (
+                      <div className="text-red-600">Error: {debugInfo.logDirectory.error}</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Configuration */}
+                {debugInfo.config && (
+                  <div className="bg-muted/50 p-4 rounded-lg">
+                    <h3 className="font-semibold mb-2">Current Configuration</h3>
+                    <div className="bg-black text-green-400 p-3 rounded font-mono text-xs max-h-48 overflow-y-auto">
+                      <pre>{debugInfo.config}</pre>
+                    </div>
+                  </div>
+                )}
+
+                {/* Recent Logs */}
+                {debugInfo.recentLogs && (
+                  <div className="bg-muted/50 p-4 rounded-lg">
+                    <h3 className="font-semibold mb-2">Recent Collector Logs</h3>
+                    <div className="bg-black text-green-400 p-3 rounded font-mono text-xs max-h-48 overflow-y-auto">
+                      <pre>{debugInfo.recentLogs}</pre>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button 
+              onClick={handleDebugOtel}
+              variant="outline"
+              size="sm"
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Refresh
+            </Button>
+            <Button 
+              onClick={() => setShowDebugInfo(false)}
+              variant="outline"
+              size="sm"
+            >
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
