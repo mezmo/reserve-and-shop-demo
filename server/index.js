@@ -503,7 +503,8 @@ const generateOTELConfig = ({ logsEnabled, metricsEnabled, tracesEnabled, ingest
       config.exporters['otlphttp/logs'] = {
         logs_endpoint: baseEndpoint,
         headers: {
-          authorization: ingestionKey
+          authorization: ingestionKey,
+          'content-type': 'application/x-protobuf'  // CRITICAL: Required for protobuf format
         }
       };
     } else {
@@ -517,7 +518,7 @@ const generateOTELConfig = ({ logsEnabled, metricsEnabled, tracesEnabled, ingest
     config.service.pipelines.logs = {
       receivers: ['filelog'],
       processors: ['resource', 'batch'],
-      exporters: isMezmoPipeline ? ['file'] : ['logging', 'mezmo']  // Only file exporter for now
+      exporters: isMezmoPipeline ? ['file', 'otlphttp/logs'] : ['logging', 'mezmo']  // CRITICAL: Added missing otlphttp/logs exporter
     };
   }
 
