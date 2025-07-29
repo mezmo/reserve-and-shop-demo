@@ -65,22 +65,20 @@ const Navigation = () => {
             })}
             
             {/* Cart Button */}
-            {isLoggedIn && (
-              <Button
-                variant="ghost"
-                onClick={() => setCheckoutOpen(true)}
-                className="flex items-center space-x-2 relative"
-                disabled={getTotalItems() === 0}
-              >
-                <ShoppingCart className="h-4 w-4" />
-                <span>Cart</span>
-                {getTotalItems() > 0 && (
-                  <span className="absolute -top-1 -right-1 bg-primary text-primary-foreground text-xs rounded-full h-5 w-5 flex items-center justify-center">
-                    {getTotalItems()}
-                  </span>
-                )}
-              </Button>
-            )}
+            <Button
+              variant="ghost"
+              onClick={() => setCheckoutOpen(true)}
+              className="flex items-center space-x-2 relative"
+              disabled={getTotalItems() === 0}
+            >
+              <ShoppingCart className="h-4 w-4" />
+              <span>Cart</span>
+              {getTotalItems() > 0 && (
+                <span className="absolute -top-1 -right-1 bg-primary text-primary-foreground text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                  {getTotalItems()}
+                </span>
+              )}
+            </Button>
             
             {/* Login/Logout Button */}
             {isLoggedIn ? (
@@ -144,20 +142,18 @@ const Navigation = () => {
               })}
               
               {/* Mobile Cart Button */}
-              {isLoggedIn && (
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setCheckoutOpen(true);
-                    setIsOpen(false);
-                  }}
-                  className="w-full justify-start space-x-2 relative"
-                  disabled={getTotalItems() === 0}
-                >
-                  <ShoppingCart className="h-4 w-4" />
-                  <span>Cart{getTotalItems() > 0 ? ` (${getTotalItems()})` : ''}</span>
-                </Button>
-              )}
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setCheckoutOpen(true);
+                  setIsOpen(false);
+                }}
+                className="w-full justify-start space-x-2 relative"
+                disabled={getTotalItems() === 0}
+              >
+                <ShoppingCart className="h-4 w-4" />
+                <span>Cart{getTotalItems() > 0 ? ` (${getTotalItems()})` : ''}</span>
+              </Button>
               
               {/* Mobile Login/Logout Button */}
               {isLoggedIn ? (
