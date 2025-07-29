@@ -12,6 +12,7 @@ import { Download, Upload, RefreshCw, Settings, AlertTriangle, Activity, FileTex
 import { useToast } from '@/hooks/use-toast';
 import { usePerformance } from '@/hooks/usePerformance';
 import { useTestError, useTestRandomError, useTestTimeout, useTestPerformance, useHealthCheck } from '@/services/apiService';
+import HttpClient from '@/lib/httpClient';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
@@ -253,10 +254,44 @@ const Config = () => {
     }
   };
 
-  // HTTP error testing functions
+  // HTTP error testing functions using real endpoints
   const handleTestError = async (statusCode: number, delay: number = 0) => {
+    const httpClient = HttpClient.getInstance();
+    
     try {
-      await testError.mutateAsync({ statusCode, delay });
+      // Map status codes to real endpoint calls that naturally produce those errors
+      let response;
+      
+      switch (statusCode) {
+        case 400:
+          // Bad Request - POST with missing required fields
+          response = await httpClient.post('/orders', {});
+          break;
+        case 401:
+          // Unauthorized - Try to access a protected resource (simulate with invalid product update)
+          response = await httpClient.put('/products/1', { price: 'invalid-price' });
+          break;
+        case 404:
+          // Not Found - Try to get non-existent resource
+          response = await httpClient.get('/products/999999');
+          break;
+        case 422:
+          // Unprocessable Entity - POST with invalid data
+          response = await httpClient.post('/reservations', { name: '', email: 'invalid-email' });
+          break;
+        case 500:
+        case 502:
+        case 503:
+        case 504:
+          // For server errors, try an endpoint that might cause server issues
+          // (Note: These won't actually produce server errors in our demo, but will be logged as attempts)
+          response = await httpClient.get('/products/999999');
+          break;
+        default:
+          // Default to 404 test
+          response = await httpClient.get('/products/999999');
+      }
+      
       toast({
         title: "Test Successful",
         description: `Successfully handled ${statusCode} response. Check the performance logs.`
@@ -271,8 +306,21 @@ const Config = () => {
   };
 
   const handleTestRandomError = async () => {
+    const httpClient = HttpClient.getInstance();
+    
+    // Array of real endpoint calls that can produce various errors
+    const errorCalls = [
+      () => httpClient.get('/products/999999'),              // 404
+      () => httpClient.get('/orders/invalid-id'),            // 404
+      () => httpClient.get('/reservations/fake-res'),        // 404
+      () => httpClient.post('/orders', {}),                  // 400 - missing fields
+      () => httpClient.post('/reservations', { incomplete: 'data' }), // 400 - missing fields
+    ];
+    
     try {
-      await testRandomError.mutateAsync();
+      const randomCall = errorCalls[Math.floor(Math.random() * errorCalls.length)];
+      await randomCall();
+      
       toast({
         title: "Random Test Successful",
         description: "Random test completed successfully. Check the performance logs."
@@ -287,8 +335,12 @@ const Config = () => {
   };
 
   const handleTestTimeout = async () => {
+    const httpClient = HttpClient.getInstance();
+    
     try {
-      await testTimeout.mutateAsync(3000); // 3 second timeout
+      // Set a very short timeout on a real endpoint to force a timeout
+      await httpClient.get('/products', { timeout: 1 }); // 1ms timeout will likely timeout
+      
       toast({
         title: "Timeout Test Successful",
         description: "Timeout test completed successfully."
@@ -303,11 +355,24 @@ const Config = () => {
   };
 
   const handleTestPerformance = async () => {
+    const httpClient = HttpClient.getInstance();
+    const startTime = performance.now();
+    
     try {
-      const result = await testPerformance.mutateAsync();
+      // Make multiple real API calls to test performance
+      await Promise.all([
+        httpClient.get('/products'),
+        httpClient.get('/orders'),
+        httpClient.get('/reservations'),
+        httpClient.get('/settings')
+      ]);
+      
+      const endTime = performance.now();
+      const totalTime = Math.round(endTime - startTime);
+      
       toast({
         title: "Performance Test Complete",
-        description: `Response time: ${result.delay_ms}ms. Check logs for details.`
+        description: `4 concurrent API calls completed in ${totalTime}ms. Check logs for details.`
       });
     } catch (error: any) {
       toast({
@@ -327,11 +392,26 @@ const Config = () => {
     const shouldError = Math.random() * 100 < errorRate;
     
     if (shouldError) {
-      const errorCodes = [400, 401, 404, 422, 500, 502, 503, 504];
-      const randomCode = errorCodes[Math.floor(Math.random() * errorCodes.length)];
-      return { type: 'error', code: randomCode };
+      // Real endpoints that can naturally return errors
+      const errorEndpoints = [
+        { endpoint: 'products', id: '999999' },      // Non-existent product -> 404
+        { endpoint: 'orders', id: 'invalid-id' },    // Invalid order ID -> 404
+        { endpoint: 'reservations', id: 'fake-res' }, // Non-existent reservation -> 404
+        { endpoint: 'products', method: 'PUT', body: { invalid: 'data' } }, // Invalid update -> 400
+        { endpoint: 'orders', method: 'POST', body: {} }, // Missing required fields -> 400
+        { endpoint: 'reservations', method: 'POST', body: { incomplete: 'data' } } // Missing fields -> 400
+      ];
+      const randomError = errorEndpoints[Math.floor(Math.random() * errorEndpoints.length)];
+      return { type: 'error', ...randomError };
     } else {
-      const successEndpoints = ['health', 'products', 'performance', 'random'];
+      // Only real endpoints that return successful responses
+      const successEndpoints = [
+        'health',           // GET /api/health
+        'products',         // GET /api/products
+        'orders',           // GET /api/orders
+        'reservations',     // GET /api/reservations
+        'settings'          // GET /api/settings
+      ];
       const randomEndpoint = successEndpoints[Math.floor(Math.random() * successEndpoints.length)];
       return { type: 'success', endpoint: randomEndpoint };
     }
@@ -339,26 +419,43 @@ const Config = () => {
 
   const makeStressTestRequest = async (endpoint: any) => {
     const startTime = performance.now();
+    const httpClient = HttpClient.getInstance();
     
     try {
       if (endpoint.type === 'error') {
-        await testError.mutateAsync({ statusCode: endpoint.code, delay: 0 });
+        // Handle real endpoint errors using actual API calls
+        const { endpoint: ep, id, method, body } = endpoint;
+        
+        if (id) {
+          // GET requests to non-existent resources
+          await httpClient.get(`/${ep}/${id}`);
+        } else if (method === 'POST') {
+          // POST requests with invalid/incomplete data
+          await httpClient.post(`/${ep}`, body);
+        } else if (method === 'PUT') {
+          // PUT requests with invalid data
+          await httpClient.put(`/${ep}/1`, body);
+        }
       } else {
+        // Handle successful real endpoint requests
         switch (endpoint.endpoint) {
           case 'health':
-            await fetch('/api/health');
+            await httpClient.get('/health');
             break;
           case 'products':
-            await fetch('/api/products');
+            await httpClient.get('/products');
             break;
-          case 'performance':
-            await testPerformance.mutateAsync();
+          case 'orders':
+            await httpClient.get('/orders');
             break;
-          case 'random':
-            await testRandomError.mutateAsync();
+          case 'reservations':
+            await httpClient.get('/reservations');
+            break;
+          case 'settings':
+            await httpClient.get('/settings');
             break;
           default:
-            await fetch('/api/health');
+            await httpClient.get('/health');
         }
       }
       
@@ -1804,7 +1901,7 @@ const Config = () => {
           <CardContent>
             <div className="space-y-4">
               <p className="text-muted-foreground">
-                Test HTTP error logging by triggering different server responses. All errors will be captured in the performance logs.
+                Test HTTP error logging using real API endpoints with invalid data or non-existent resources. All errors will be captured in the performance logs and sent through OTEL collector to Mezmo.
               </p>
 
               {/* Server Health Status */}
@@ -1951,7 +2048,7 @@ const Config = () => {
           <CardContent>
             <div className="space-y-6">
               <p className="text-muted-foreground">
-                Generate high-volume API activity to stress test your performance monitoring and logging systems.
+                Generate high-volume API activity using real endpoints (products, orders, reservations, settings) to create authentic performance logs that flow through OTEL collector to Mezmo.
               </p>
 
               {/* Configuration Grid */}
