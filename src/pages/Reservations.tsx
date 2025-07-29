@@ -23,6 +23,7 @@ const Reservations = () => {
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [formData, setFormData] = useState({
     customerName: '',
     customerEmail: '',
@@ -88,6 +89,7 @@ const Reservations = () => {
       specialRequests: ''
     });
     setSelectedDate(new Date());
+    setCalendarOpen(false);
     setShowForm(false);
 
     toast({
@@ -129,7 +131,10 @@ const Reservations = () => {
       <div className="max-w-4xl mx-auto">
         {!showForm ? (
           <div className="text-center mb-8">
-            <Button size="lg" onClick={() => setShowForm(true)} className="bg-blue-600 hover:bg-blue-700 text-white">
+            <Button size="lg" onClick={() => {
+              setShowForm(true);
+              setCalendarOpen(false);
+            }} className="bg-blue-600 hover:bg-blue-700 text-white">
               Make New Reservation
             </Button>
           </div>
@@ -137,7 +142,7 @@ const Reservations = () => {
           <Card className="mb-8">
             <CardHeader>
               <CardTitle className="flex items-center space-x-2">
-                <Calendar className="h-5 w-5" />
+                <CalendarIcon className="h-5 w-5" />
                 <span>New Reservation</span>
               </CardTitle>
             </CardHeader>
@@ -176,7 +181,7 @@ const Reservations = () => {
                       required
                     />
                   </div>
-                  <div>
+                  <div className="space-y-2">
                     <Label>Party Size *</Label>
                     <Select value={formData.partySize} onValueChange={(value) => setFormData(prev => ({ ...prev, partySize: value }))}>
                       <SelectTrigger>
@@ -193,10 +198,10 @@ const Reservations = () => {
                   </div>
                 </div>
 
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
+                <div className="grid md:grid-cols-2 gap-4 mb-6">
+                  <div className="space-y-2">
                     <Label>Date *</Label>
-                    <Popover>
+                    <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
                       <PopoverTrigger asChild>
                         <Button
                           variant="outline"
@@ -209,19 +214,20 @@ const Reservations = () => {
                           {selectedDate ? format(selectedDate, "PPP") : "Pick a date"}
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
+                      <PopoverContent className="w-auto p-0">
                         <Calendar
                           mode="single"
                           selected={selectedDate}
-                          onSelect={setSelectedDate}
+                          onSelect={(date) => {
+                            setSelectedDate(date);
+                            setCalendarOpen(false);
+                          }}
                           disabled={(date) => date < new Date()}
-                          initialFocus
-                          className="p-3 pointer-events-auto"
                         />
                       </PopoverContent>
                     </Popover>
                   </div>
-                  <div>
+                  <div className="space-y-2">
                     <Label>Time *</Label>
                     <Select value={formData.time} onValueChange={(value) => setFormData(prev => ({ ...prev, time: value }))}>
                       <SelectTrigger>
