@@ -1,18 +1,28 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Menu, X, Utensils, ShoppingBag, Calendar, Settings, LogIn, LogOut, ShoppingCart } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
 import { useCart } from '@/hooks/useCart';
+import { DataStore } from '@/stores/dataStore';
+import { Product } from '@/types';
 import LoginDialog from './LoginDialog';
+import CheckoutDialog from './CheckoutDialog';
 
 const Navigation = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [products, setProducts] = useState<Product[]>([]);
   const location = useLocation();
   const { isLoggedIn, login, logout } = useAuth();
-  const { getTotalItems } = useCart();
+  const { getTotalItems, clearCart, cart } = useCart();
+
+  useEffect(() => {
+    const dataStore = DataStore.getInstance();
+    setProducts(dataStore.getProducts());
+  }, []);
 
   const navItems = [
     { path: '/', label: 'Home', icon: Utensils },
@@ -40,7 +50,12 @@ const Navigation = () => {
                 <Link key={item.path} to={item.path}>
                   <Button
                     variant={isActive(item.path) ? "default" : "ghost"}
-                    className="flex items-center space-x-2"
+                    className={cn(
+                      "flex items-center space-x-2",
+                      isActive(item.path) 
+                        ? "bg-primary text-primary-foreground shadow-md hover:bg-primary/90" 
+                        : "hover:bg-accent hover:text-accent-foreground"
+                    )}
                   >
                     <Icon className="h-4 w-4" />
                     <span>{item.label}</span>
@@ -50,19 +65,21 @@ const Navigation = () => {
             })}
             
             {/* Cart Button */}
-            {isLoggedIn && getTotalItems() > 0 && (
-              <Link to="/menu">
-                <Button
-                  variant="ghost"
-                  className="flex items-center space-x-2 relative"
-                >
-                  <ShoppingCart className="h-4 w-4" />
-                  <span>Cart</span>
+            {isLoggedIn && (
+              <Button
+                variant="ghost"
+                onClick={() => setCheckoutOpen(true)}
+                className="flex items-center space-x-2 relative"
+                disabled={getTotalItems() === 0}
+              >
+                <ShoppingCart className="h-4 w-4" />
+                <span>Cart</span>
+                {getTotalItems() > 0 && (
                   <span className="absolute -top-1 -right-1 bg-primary text-primary-foreground text-xs rounded-full h-5 w-5 flex items-center justify-center">
                     {getTotalItems()}
                   </span>
-                </Button>
-              </Link>
+                )}
+              </Button>
             )}
             
             {/* Login/Logout Button */}
@@ -112,7 +129,12 @@ const Navigation = () => {
                   >
                     <Button
                       variant={isActive(item.path) ? "default" : "ghost"}
-                      className="w-full justify-start space-x-2"
+                      className={cn(
+                        "w-full justify-start space-x-2",
+                        isActive(item.path) 
+                          ? "bg-primary text-primary-foreground shadow-md hover:bg-primary/90" 
+                          : "hover:bg-accent hover:text-accent-foreground"
+                      )}
                     >
                       <Icon className="h-4 w-4" />
                       <span>{item.label}</span>
@@ -122,19 +144,19 @@ const Navigation = () => {
               })}
               
               {/* Mobile Cart Button */}
-              {isLoggedIn && getTotalItems() > 0 && (
-                <Link
-                  to="/menu"
-                  onClick={() => setIsOpen(false)}
+              {isLoggedIn && (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setCheckoutOpen(true);
+                    setIsOpen(false);
+                  }}
+                  className="w-full justify-start space-x-2 relative"
+                  disabled={getTotalItems() === 0}
                 >
-                  <Button
-                    variant="ghost"
-                    className="w-full justify-start space-x-2 relative"
-                  >
-                    <ShoppingCart className="h-4 w-4" />
-                    <span>Cart ({getTotalItems()})</span>
-                  </Button>
-                </Link>
+                  <ShoppingCart className="h-4 w-4" />
+                  <span>Cart{getTotalItems() > 0 ? ` (${getTotalItems()})` : ''}</span>
+                </Button>
               )}
               
               {/* Mobile Login/Logout Button */}
@@ -172,6 +194,14 @@ const Navigation = () => {
         open={loginOpen}
         onOpenChange={setLoginOpen}
         onLogin={login}
+      />
+      
+      <CheckoutDialog
+        open={checkoutOpen}
+        onOpenChange={setCheckoutOpen}
+        cart={cart}
+        products={products}
+        onOrderComplete={clearCart}
       />
     </nav>
   );

@@ -4,19 +4,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { DataStore } from '@/stores/dataStore';
 import { Product } from '@/types';
-import { Plus, Minus, CreditCard } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
+import { Plus, Minus } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useCart } from '@/hooks/useCart';
-import CheckoutDialog from '@/components/CheckoutDialog';
 
 const Menu = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
-  const [checkoutOpen, setCheckoutOpen] = useState(false);
-  const { toast } = useToast();
   const { isLoggedIn } = useAuth();
-  const { cart, addToCart, removeFromCart, clearCart, getTotalItems, getTotalPrice } = useCart();
+  const { cart, addToCart, removeFromCart } = useCart();
 
   useEffect(() => {
     const dataStore = DataStore.getInstance();
@@ -28,18 +24,6 @@ const Menu = () => {
     ? products 
     : products.filter(p => p.category === selectedCategory);
 
-  const handleCheckout = () => {
-    if (!isLoggedIn) {
-      toast({
-        title: "Login required",
-        description: "Please login to place an order.",
-        variant: "destructive"
-      });
-      return;
-    }
-    setCheckoutOpen(true);
-  };
-
   return (
     <div className="container mx-auto px-4 py-8">
       {/* Header */}
@@ -50,26 +34,6 @@ const Menu = () => {
         </p>
       </div>
 
-      {/* Cart Summary for checkout */}
-      {isLoggedIn && getTotalItems() > 0 && (
-        <div className="bg-primary/10 border border-primary/20 p-4 rounded-lg mb-8 max-w-md mx-auto">
-          <div className="flex items-center justify-between">
-            <div className="text-sm">
-              <span className="font-semibold">{getTotalItems()} items</span>
-              <span className="mx-2">•</span>
-              <span className="font-bold">${getTotalPrice(products).toFixed(2)}</span>
-            </div>
-            <Button
-              onClick={handleCheckout}
-              size="sm"
-              className="ml-4"
-            >
-              <CreditCard className="h-4 w-4 mr-2" />
-              Checkout
-            </Button>
-          </div>
-        </div>
-      )}
 
       {/* Category Filter */}
       <div className="flex flex-wrap gap-2 mb-8 justify-center">
@@ -151,14 +115,6 @@ const Menu = () => {
           <p className="text-muted-foreground text-lg">No items found in this category.</p>
         </div>
       )}
-
-      <CheckoutDialog
-        open={checkoutOpen}
-        onOpenChange={setCheckoutOpen}
-        cart={cart}
-        products={products}
-        onOrderComplete={clearCart}
-      />
     </div>
   );
 };
