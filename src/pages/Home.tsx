@@ -3,8 +3,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Calendar, ShoppingBag, Star, Clock, MapPin, Phone } from 'lucide-react';
 import restaurantHero from '@/assets/restaurant-hero.jpg';
+import { useComponentPerformance, usePerformance } from '@/hooks/usePerformance';
 
 const Home = () => {
+  // Track component performance
+  useComponentPerformance('Home');
+  const { trackUserInteraction } = usePerformance();
+  
   const features = [
     {
       icon: ShoppingBag,
@@ -48,12 +53,27 @@ const Home = () => {
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
               <Link to="/menu">
-                <Button size="lg" className="text-lg px-8">
+                <Button 
+                  size="lg" 
+                  className="text-lg px-8"
+                  onClick={() => {
+                    const endTracking = trackUserInteraction('click', 'hero-view-menu-button');
+                    endTracking();
+                  }}
+                >
                   View Menu
                 </Button>
               </Link>
               <Link to="/reservations">
-                <Button size="lg" variant="outline" className="text-lg px-8 bg-white/10 border-white/30 text-white hover:bg-white hover:text-primary">
+                <Button 
+                  size="lg" 
+                  variant="outline" 
+                  className="text-lg px-8 bg-white/10 border-white/30 text-white hover:bg-white hover:text-primary"
+                  onClick={() => {
+                    const endTracking = trackUserInteraction('click', 'hero-make-reservation-button');
+                    endTracking();
+                  }}
+                >
                   Make Reservation
                 </Button>
               </Link>

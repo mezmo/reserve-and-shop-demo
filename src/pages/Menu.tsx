@@ -7,17 +7,24 @@ import { Product } from '@/types';
 import { Plus, Minus } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useCart } from '@/hooks/useCart';
+import { useComponentPerformance, usePerformance } from '@/hooks/usePerformance';
 
 const Menu = () => {
+  // Track component performance
+  useComponentPerformance('Menu');
+  const { trackDataFetch, trackUserInteraction } = usePerformance();
+  
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const { isLoggedIn } = useAuth();
   const { cart, addToCart, removeFromCart } = useCart();
 
   useEffect(() => {
+    const endTracking = trackDataFetch('Load menu products');
     const dataStore = DataStore.getInstance();
     setProducts(dataStore.getProducts());
-  }, []);
+    endTracking();
+  }, [trackDataFetch]);
 
   const categories = ['All', ...Array.from(new Set(products.map(p => p.category)))];
   const filteredProducts = selectedCategory === 'All' 
@@ -41,7 +48,11 @@ const Menu = () => {
           <Button
             key={category}
             variant={selectedCategory === category ? "default" : "outline"}
-            onClick={() => setSelectedCategory(category)}
+            onClick={() => {
+              const endTracking = trackUserInteraction('click', `category-filter-${category}`);
+              setSelectedCategory(category);
+              endTracking();
+            }}
             className="mb-2"
           >
             {category}
@@ -85,7 +96,11 @@ const Menu = () => {
                         <Button
                           size="icon"
                           variant="outline"
-                          onClick={() => removeFromCart(product.id)}
+                          onClick={() => {
+                            const endTracking = trackUserInteraction('click', `remove-from-cart-${product.name}`);
+                            removeFromCart(product.id);
+                            endTracking();
+                          }}
                           className="border-primary text-primary hover:bg-primary hover:text-primary-foreground"
                         >
                           <Minus className="h-4 w-4" />
@@ -97,7 +112,11 @@ const Menu = () => {
                     )}
                     <Button
                       size="icon"
-                      onClick={() => addToCart(product.id)}
+                      onClick={() => {
+                        const endTracking = trackUserInteraction('click', `add-to-cart-${product.name}`);
+                        addToCart(product.id);
+                        endTracking();
+                      }}
                       className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-md"
                     >
                       <Plus className="h-4 w-4" />

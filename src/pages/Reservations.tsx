@@ -13,8 +13,13 @@ import { CalendarIcon, Clock, Users, CheckCircle, XCircle, AlertCircle } from 'l
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
+import { useComponentPerformance, usePerformance } from '@/hooks/usePerformance';
 
 const Reservations = () => {
+  // Track component performance
+  useComponentPerformance('Reservations');
+  const { trackDataFetch, trackUserInteraction } = usePerformance();
+  
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
@@ -29,9 +34,11 @@ const Reservations = () => {
   const { toast } = useToast();
 
   useEffect(() => {
+    const endTracking = trackDataFetch('Load reservations');
     const dataStore = DataStore.getInstance();
     setReservations(dataStore.getReservations());
-  }, []);
+    endTracking();
+  }, [trackDataFetch]);
 
   const timeSlots = [
     '11:00', '11:30', '12:00', '12:30', '13:00', '13:30',

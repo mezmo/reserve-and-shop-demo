@@ -4,15 +4,20 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { DataStore } from '@/stores/dataStore';
-import { Download, Upload, RefreshCw, Settings, AlertTriangle } from 'lucide-react';
+import { Download, Upload, RefreshCw, Settings, AlertTriangle, Activity, FileText, Monitor } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { usePerformance } from '@/hooks/usePerformance';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 
 const Config = () => {
   const [importData, setImportData] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
+  const { getConfig, updateConfig, getSessionId, getStoredLogs, clearStoredLogs, flushLogs } = usePerformance();
+  const performanceConfig = getConfig();
 
   const handleExport = () => {
     const dataStore = DataStore.getInstance();
@@ -110,6 +115,68 @@ const Config = () => {
 
   const summary = getCurrentDataSummary();
 
+  const handlePerformanceConfigChange = (key: string, value: any) => {
+    updateConfig({ [key]: value });
+    toast({
+      title: "Performance Settings Updated",
+      description: `${key} has been ${value ? 'enabled' : 'disabled'}.`
+    });
+  };
+
+  const handleDownloadPerformanceLogs = () => {
+    const logs = getStoredLogs();
+    if (logs.length === 0) {
+      toast({
+        title: "No Logs Available",
+        description: "No performance logs found. Try navigating around the app first.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const logContent = logs.map(log => `${log.timestamp} - ${log.content} - Session: ${log.session}`).join('\n');
+    const blob = new Blob([logContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `performance-logs-${new Date().toISOString().split('T')[0]}.log`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    URL.revokeObjectURL(url);
+    
+    toast({
+      title: "Performance Logs Downloaded",
+      description: `Downloaded ${logs.length} log entries.`
+    });
+  };
+
+  const handleClearPerformanceLogs = () => {
+    clearStoredLogs();
+    toast({
+      title: "Performance Logs Cleared",
+      description: "All stored performance logs have been cleared."
+    });
+  };
+
+  const handleFlushLogs = async () => {
+    try {
+      await flushLogs();
+      toast({
+        title: "Logs Flushed",
+        description: "Performance logs have been flushed to file system."
+      });
+    } catch (error) {
+      toast({
+        title: "Flush Failed",
+        description: "Could not flush logs to file system.",
+        variant: "destructive"
+      });
+    }
+  };
+
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="text-center mb-8">
@@ -139,6 +206,162 @@ const Config = () => {
               <div className="text-center p-4 bg-muted/50 rounded-lg">
                 <div className="text-2xl font-bold text-primary">{summary.orders}</div>
                 <div className="text-sm text-muted-foreground">Orders</div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Performance Monitoring */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2">
+              <Activity className="h-5 w-5" />
+              <span>Performance Monitoring</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid gap-6">
+              {/* Enable/Disable Performance Logging */}
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <Label className="text-base font-medium">Enable Performance Logging</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Track page loads, route changes, and user interactions
+                  </p>
+                </div>
+                <Switch
+                  checked={performanceConfig.enabled}
+                  onCheckedChange={(checked) => handlePerformanceConfigChange('enabled', checked)}
+                />
+              </div>
+
+              {/* Log Format */}
+              <div className="space-y-2">
+                <Label className="text-base font-medium">Log Format</Label>
+                <Select
+                  value={performanceConfig.format}
+                  onValueChange={(value) => handlePerformanceConfigChange('format', value)}
+                  disabled={!performanceConfig.enabled}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="string">String (Human readable)</SelectItem>
+                    <SelectItem value="json">JSON (Machine parseable)</SelectItem>
+                    <SelectItem value="clf">CLF (Common Log Format)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-sm text-muted-foreground">
+                  {performanceConfig.format === 'json' 
+                    ? 'Structured JSON format for log parsing tools'
+                    : performanceConfig.format === 'clf'
+                    ? 'Common Log Format for web server logs (HTTP requests only)'
+                    : 'Human-readable format for manual inspection'
+                  }
+                </p>
+              </div>
+
+              {/* Log Level */}
+              <div className="space-y-2">
+                <Label className="text-base font-medium">Log Detail Level</Label>
+                <Select
+                  value={performanceConfig.level}
+                  onValueChange={(value) => handlePerformanceConfigChange('level', value)}
+                  disabled={!performanceConfig.enabled}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="basic">Basic (Page loads only)</SelectItem>
+                    <SelectItem value="detailed">Detailed (+ Components)</SelectItem>
+                    <SelectItem value="debug">Debug (+ Memory usage)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Session Tracking */}
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <Label className="text-base font-medium">Session Tracking</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Track user sessions for journey analysis
+                  </p>
+                </div>
+                <Switch
+                  checked={performanceConfig.sessionTracking}
+                  onCheckedChange={(checked) => handlePerformanceConfigChange('sessionTracking', checked)}
+                  disabled={!performanceConfig.enabled}
+                />
+              </div>
+
+              {/* Current Session Info */}
+              {performanceConfig.enabled && performanceConfig.sessionTracking && (
+                <div className="bg-muted/50 p-4 rounded-lg">
+                  <div className="flex items-center space-x-2 mb-2">
+                    <Monitor className="h-4 w-4" />
+                    <span className="font-medium">Current Session</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground font-mono">
+                    Session ID: {getSessionId()}
+                  </p>
+                </div>
+              )}
+
+              {/* Performance Log Actions */}
+              <div className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  <Button 
+                    onClick={handleDownloadPerformanceLogs}
+                    variant="outline"
+                    size="sm"
+                    disabled={!performanceConfig.enabled}
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Download Logs
+                  </Button>
+                  <Button 
+                    onClick={handleFlushLogs}
+                    variant="outline"
+                    size="sm"
+                    disabled={!performanceConfig.enabled}
+                  >
+                    <FileText className="mr-2 h-4 w-4" />
+                    Flush to File
+                  </Button>
+                  <Button 
+                    onClick={handleClearPerformanceLogs}
+                    variant="outline"
+                    size="sm"
+                    disabled={!performanceConfig.enabled}
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Clear Logs
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Download: Get logs as a file • Flush: Write buffered logs to /tmp/restaurant-performance.log • Clear: Remove all stored logs
+                </p>
+              </div>
+
+              {/* Docker Log Information */}
+              <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
+                <div className="flex items-center space-x-2 mb-2">
+                  <FileText className="h-4 w-4 text-blue-600" />
+                  <span className="font-medium text-blue-800">Docker Container Log Access</span>
+                </div>
+                <div className="space-y-2 text-sm text-blue-700">
+                  <div>
+                    <strong>Log Location:</strong> <code className="bg-blue-100 px-1 rounded">/tmp/restaurant-performance.log</code>
+                  </div>
+                  <div>
+                    <strong>View logs:</strong> <code className="bg-blue-100 px-1 rounded">docker exec -it &lt;container_name&gt; tail -f /tmp/restaurant-performance.log</code>
+                  </div>
+                  <div>
+                    <strong>Copy logs:</strong> <code className="bg-blue-100 px-1 rounded">docker cp &lt;container_name&gt;:/tmp/restaurant-performance.log ./performance.log</code>
+                  </div>
+                </div>
               </div>
             </div>
           </CardContent>
