@@ -1,12 +1,18 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { Menu, X, Utensils, ShoppingBag, Calendar, Settings } from 'lucide-react';
+import { Menu, X, Utensils, ShoppingBag, Calendar, Settings, LogIn, LogOut, ShoppingCart } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/hooks/useAuth';
+import { useCart } from '@/hooks/useCart';
+import LoginDialog from './LoginDialog';
 
 const Navigation = () => {
   const [isOpen, setIsOpen] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
   const location = useLocation();
+  const { isLoggedIn, login, logout } = useAuth();
+  const { getTotalItems } = useCart();
 
   const navItems = [
     { path: '/', label: 'Home', icon: Utensils },
@@ -42,6 +48,43 @@ const Navigation = () => {
                 </Link>
               );
             })}
+            
+            {/* Cart Button */}
+            {isLoggedIn && getTotalItems() > 0 && (
+              <Link to="/menu">
+                <Button
+                  variant="ghost"
+                  className="flex items-center space-x-2 relative"
+                >
+                  <ShoppingCart className="h-4 w-4" />
+                  <span>Cart</span>
+                  <span className="absolute -top-1 -right-1 bg-primary text-primary-foreground text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                    {getTotalItems()}
+                  </span>
+                </Button>
+              </Link>
+            )}
+            
+            {/* Login/Logout Button */}
+            {isLoggedIn ? (
+              <Button
+                variant="ghost"
+                onClick={logout}
+                className="flex items-center space-x-2"
+              >
+                <LogOut className="h-4 w-4" />
+                <span>Logout</span>
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                onClick={() => setLoginOpen(true)}
+                className="flex items-center space-x-2"
+              >
+                <LogIn className="h-4 w-4" />
+                <span>Login</span>
+              </Button>
+            )}
           </div>
 
           {/* Mobile Menu Button */}
@@ -77,10 +120,59 @@ const Navigation = () => {
                   </Link>
                 );
               })}
+              
+              {/* Mobile Cart Button */}
+              {isLoggedIn && getTotalItems() > 0 && (
+                <Link
+                  to="/menu"
+                  onClick={() => setIsOpen(false)}
+                >
+                  <Button
+                    variant="ghost"
+                    className="w-full justify-start space-x-2 relative"
+                  >
+                    <ShoppingCart className="h-4 w-4" />
+                    <span>Cart ({getTotalItems()})</span>
+                  </Button>
+                </Link>
+              )}
+              
+              {/* Mobile Login/Logout Button */}
+              {isLoggedIn ? (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    logout();
+                    setIsOpen(false);
+                  }}
+                  className="w-full justify-start space-x-2"
+                >
+                  <LogOut className="h-4 w-4" />
+                  <span>Logout</span>
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setLoginOpen(true);
+                    setIsOpen(false);
+                  }}
+                  className="w-full justify-start space-x-2"
+                >
+                  <LogIn className="h-4 w-4" />
+                  <span>Login</span>
+                </Button>
+              )}
             </div>
           </div>
         )}
       </div>
+      
+      <LoginDialog 
+        open={loginOpen}
+        onOpenChange={setLoginOpen}
+        onLogin={login}
+      />
     </nav>
   );
 };

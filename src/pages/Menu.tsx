@@ -4,14 +4,19 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { DataStore } from '@/stores/dataStore';
 import { Product } from '@/types';
-import { ShoppingCart, Plus, Minus } from 'lucide-react';
+import { Plus, Minus, CreditCard } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/hooks/useAuth';
+import { useCart } from '@/hooks/useCart';
+import CheckoutDialog from '@/components/CheckoutDialog';
 
 const Menu = () => {
   const [products, setProducts] = useState<Product[]>([]);
-  const [cart, setCart] = useState<{ [key: string]: number }>({});
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
   const { toast } = useToast();
+  const { isLoggedIn } = useAuth();
+  const { cart, addToCart, removeFromCart, clearCart, getTotalItems, getTotalPrice } = useCart();
 
   useEffect(() => {
     const dataStore = DataStore.getInstance();
@@ -23,38 +28,16 @@ const Menu = () => {
     ? products 
     : products.filter(p => p.category === selectedCategory);
 
-  const addToCart = (productId: string) => {
-    setCart(prev => ({
-      ...prev,
-      [productId]: (prev[productId] || 0) + 1
-    }));
-    toast({
-      title: "Added to cart",
-      description: "Item has been added to your cart."
-    });
-  };
-
-  const removeFromCart = (productId: string) => {
-    setCart(prev => {
-      const newCart = { ...prev };
-      if (newCart[productId] > 1) {
-        newCart[productId]--;
-      } else {
-        delete newCart[productId];
-      }
-      return newCart;
-    });
-  };
-
-  const getTotalItems = () => {
-    return Object.values(cart).reduce((sum, qty) => sum + qty, 0);
-  };
-
-  const getTotalPrice = () => {
-    return Object.entries(cart).reduce((total, [productId, qty]) => {
-      const product = products.find(p => p.id === productId);
-      return total + (product?.price || 0) * qty;
-    }, 0);
+  const handleCheckout = () => {
+    if (!isLoggedIn) {
+      toast({
+        title: "Login required",
+        description: "Please login to place an order.",
+        variant: "destructive"
+      });
+      return;
+    }
+    setCheckoutOpen(true);
   };
 
   return (
@@ -67,15 +50,23 @@ const Menu = () => {
         </p>
       </div>
 
-      {/* Cart Summary */}
-      {getTotalItems() > 0 && (
-        <div className="fixed bottom-6 right-6 bg-primary text-primary-foreground p-4 rounded-lg shadow-warm z-40">
-          <div className="flex items-center space-x-3">
-            <ShoppingCart className="h-5 w-5" />
+      {/* Cart Summary for checkout */}
+      {isLoggedIn && getTotalItems() > 0 && (
+        <div className="bg-primary/10 border border-primary/20 p-4 rounded-lg mb-8 max-w-md mx-auto">
+          <div className="flex items-center justify-between">
             <div className="text-sm">
-              <div>{getTotalItems()} items</div>
-              <div className="font-semibold">${getTotalPrice().toFixed(2)}</div>
+              <span className="font-semibold">{getTotalItems()} items</span>
+              <span className="mx-2">•</span>
+              <span className="font-bold">${getTotalPrice(products).toFixed(2)}</span>
             </div>
+            <Button
+              onClick={handleCheckout}
+              size="sm"
+              className="ml-4"
+            >
+              <CreditCard className="h-4 w-4 mr-2" />
+              Checkout
+            </Button>
           </div>
         </div>
       )}
@@ -131,10 +122,11 @@ const Menu = () => {
                           size="icon"
                           variant="outline"
                           onClick={() => removeFromCart(product.id)}
+                          className="border-primary text-primary hover:bg-primary hover:text-primary-foreground"
                         >
                           <Minus className="h-4 w-4" />
                         </Button>
-                        <span className="font-semibold w-8 text-center">
+                        <span className="font-semibold w-8 text-center bg-primary text-primary-foreground rounded px-2 py-1">
                           {cart[product.id]}
                         </span>
                       </>
@@ -142,6 +134,7 @@ const Menu = () => {
                     <Button
                       size="icon"
                       onClick={() => addToCart(product.id)}
+                      className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-md"
                     >
                       <Plus className="h-4 w-4" />
                     </Button>
@@ -158,6 +151,14 @@ const Menu = () => {
           <p className="text-muted-foreground text-lg">No items found in this category.</p>
         </div>
       )}
+
+      <CheckoutDialog
+        open={checkoutOpen}
+        onOpenChange={setCheckoutOpen}
+        cart={cart}
+        products={products}
+        onOrderComplete={clearCart}
+      />
     </div>
   );
 };
