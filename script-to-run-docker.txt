@@ -1,3 +1,0 @@
-docker build -t reserve-and-shop-easy .
-
-docker run -it --rm -p 8080:8080 -v C:\Users\bshel\Documents\Github\reserve-and-shop-easy:/app:rw reserve-and-shop-easy

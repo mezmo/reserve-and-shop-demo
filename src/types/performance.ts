@@ -37,4 +37,11 @@ export type PerformanceEventType =
   | 'COMPONENT_UNMOUNT'
   | 'USER_INTERACTION'
   | 'DATA_FETCH'
-  | 'ERROR';
+  | 'HTTP_REQUEST'
+  | 'HTTP_REQUEST_START'
+  | 'HTTP_ERROR'
+  | 'HTTP_TIMEOUT'
+  | 'HTTP_NETWORK_ERROR'
+  | 'ERROR'
+  | 'SESSION_START'
+  | 'LOG_ROTATION';

@@ -10,6 +10,7 @@ import { DataStore } from '@/stores/dataStore';
 import { Download, Upload, RefreshCw, Settings, AlertTriangle, Activity, FileText, Monitor } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { usePerformance } from '@/hooks/usePerformance';
+import { useTestError, useTestRandomError, useTestTimeout, useTestPerformance, useHealthCheck } from '@/services/apiService';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 
 const Config = () => {
@@ -18,6 +19,13 @@ const Config = () => {
   const { toast } = useToast();
   const { getConfig, updateConfig, getSessionId, getStoredLogs, clearStoredLogs, flushLogs } = usePerformance();
   const performanceConfig = getConfig();
+  
+  // HTTP testing mutations
+  const testError = useTestError();
+  const testRandomError = useTestRandomError();
+  const testTimeout = useTestTimeout();
+  const testPerformance = useTestPerformance();
+  const { data: healthData, isLoading: healthLoading, error: healthError } = useHealthCheck();
 
   const handleExport = () => {
     const dataStore = DataStore.getInstance();
@@ -172,6 +180,71 @@ const Config = () => {
       toast({
         title: "Flush Failed",
         description: "Could not flush logs to file system.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  // HTTP error testing functions
+  const handleTestError = async (statusCode: number, delay: number = 0) => {
+    try {
+      await testError.mutateAsync({ statusCode, delay });
+      toast({
+        title: "Test Successful",
+        description: `Successfully handled ${statusCode} response. Check the performance logs.`
+      });
+    } catch (error: any) {
+      toast({
+        title: "HTTP Error Logged",
+        description: `${error.status} ${error.statusText} - Error has been logged for analysis.`,
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleTestRandomError = async () => {
+    try {
+      await testRandomError.mutateAsync();
+      toast({
+        title: "Random Test Successful",
+        description: "Random test completed successfully. Check the performance logs."
+      });
+    } catch (error: any) {
+      toast({
+        title: "Random HTTP Error Logged",
+        description: `${error.status} ${error.statusText} - Error has been logged for analysis.`,
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleTestTimeout = async () => {
+    try {
+      await testTimeout.mutateAsync(3000); // 3 second timeout
+      toast({
+        title: "Timeout Test Successful",
+        description: "Timeout test completed successfully."
+      });
+    } catch (error: any) {
+      toast({
+        title: "Timeout Error Logged",
+        description: "Timeout error has been logged for analysis.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleTestPerformance = async () => {
+    try {
+      const result = await testPerformance.mutateAsync();
+      toast({
+        title: "Performance Test Complete",
+        description: `Response time: ${result.delay_ms}ms. Check logs for details.`
+      });
+    } catch (error: any) {
+      toast({
+        title: "Performance Test Failed",
+        description: "Performance test failed. Error has been logged.",
         variant: "destructive"
       });
     }
@@ -362,6 +435,153 @@ const Config = () => {
                     <strong>Copy logs:</strong> <code className="bg-blue-100 px-1 rounded">docker cp &lt;container_name&gt;:/tmp/restaurant-performance.log ./performance.log</code>
                   </div>
                 </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* HTTP Error Testing */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2">
+              <AlertTriangle className="h-5 w-5" />
+              <span>HTTP Error Testing</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <p className="text-muted-foreground">
+                Test HTTP error logging by triggering different server responses. All errors will be captured in the performance logs.
+              </p>
+
+              {/* Server Health Status */}
+              <div className="bg-muted/50 p-4 rounded-lg">
+                <div className="flex items-center space-x-2 mb-2">
+                  <Monitor className="h-4 w-4" />
+                  <span className="font-medium">Server Status</span>
+                </div>
+                {healthLoading ? (
+                  <div className="text-sm text-muted-foreground">Checking server health...</div>
+                ) : healthError ? (
+                  <div className="text-sm text-red-600">❌ Server unavailable</div>
+                ) : (
+                  <div className="text-sm text-green-600">✅ Server online - {healthData?.status}</div>
+                )}
+              </div>
+
+              {/* Error Testing Buttons */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleTestError(400)}
+                  disabled={testError.isPending}
+                  className="bg-red-50 border-red-200 hover:bg-red-100"
+                >
+                  Test 400
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleTestError(401)}
+                  disabled={testError.isPending}
+                  className="bg-red-50 border-red-200 hover:bg-red-100"
+                >
+                  Test 401
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleTestError(404)}
+                  disabled={testError.isPending}
+                  className="bg-red-50 border-red-200 hover:bg-red-100"
+                >
+                  Test 404
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleTestError(422)}
+                  disabled={testError.isPending}
+                  className="bg-red-50 border-red-200 hover:bg-red-100"
+                >
+                  Test 422
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleTestError(500)}
+                  disabled={testError.isPending}
+                  className="bg-orange-50 border-orange-200 hover:bg-orange-100"
+                >
+                  Test 500
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleTestError(502)}
+                  disabled={testError.isPending}
+                  className="bg-orange-50 border-orange-200 hover:bg-orange-100"
+                >
+                  Test 502
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleTestError(503)}
+                  disabled={testError.isPending}
+                  className="bg-orange-50 border-orange-200 hover:bg-orange-100"
+                >
+                  Test 503
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleTestError(504)}
+                  disabled={testError.isPending}
+                  className="bg-orange-50 border-orange-200 hover:bg-orange-100"
+                >
+                  Test 504
+                </Button>
+              </div>
+
+              {/* Advanced Testing */}
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={handleTestRandomError}
+                    disabled={testRandomError.isPending}
+                    className="bg-purple-50 border-purple-200 hover:bg-purple-100"
+                  >
+                    🎲 Random Error
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleTestTimeout}
+                    disabled={testTimeout.isPending}
+                    className="bg-yellow-50 border-yellow-200 hover:bg-yellow-100"
+                  >
+                    ⏱️ Test Timeout
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleTestPerformance}
+                    disabled={testPerformance.isPending}
+                    className="bg-blue-50 border-blue-200 hover:bg-blue-100"
+                  >
+                    📊 Performance Test
+                  </Button>
+                </div>
+              </div>
+
+              <div className="text-xs text-muted-foreground">
+                <strong>Legend:</strong> 
+                <span className="ml-2">🔴 4xx Client Errors</span>
+                <span className="ml-2">🟠 5xx Server Errors</span>
+                <span className="ml-2">🟣 Random</span>
+                <span className="ml-2">🟡 Timeout</span>
+                <span className="ml-2">🔵 Performance</span>
               </div>
             </div>
           </CardContent>

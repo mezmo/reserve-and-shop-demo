@@ -23,7 +23,7 @@ const logWriterPlugin = () => ({
             if (fileData) {
               const content = fileData.split('\r\n\r\n')[1]?.split('\r\n--')[0];
               if (content) {
-                const logFile = '/tmp/restaurant-performance.log';
+                const logFile = '/tmp/codeuser/restaurant-performance.log';
                 
                 // Ensure directory exists
                 const logDir = path.dirname(logFile);
@@ -58,6 +58,13 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
   },
   plugins: [
     react(),

@@ -259,6 +259,138 @@ class PerformanceLogger {
     });
   }
 
+  logHttpSuccess(method: string, url: string, status: number, duration: number, size?: number, attempt?: number): void {
+    if (!this.config.enabled) return;
+
+    this.logEntry({
+      timestamp: new Date().toISOString(),
+      event: 'HTTP_REQUEST',
+      path: url,
+      duration,
+      details: {
+        method,
+        status,
+        size,
+        attempt,
+        success: true,
+        statusText: this.getStatusText(status),
+        path: window.location.pathname
+      }
+    });
+  }
+
+  logHttpError(method: string, url: string, status: number, statusText: string, duration: number, response?: any, attempt?: number): void {
+    if (!this.config.enabled) return;
+
+    const errorType = status >= 500 ? 'SERVER_ERROR' : 'CLIENT_ERROR';
+    
+    this.logEntry({
+      timestamp: new Date().toISOString(),
+      event: 'HTTP_ERROR',
+      path: url,
+      duration,
+      details: {
+        method,
+        status,
+        statusText,
+        attempt,
+        errorType,
+        response: this.config.level === 'debug' ? response : undefined,
+        success: false,
+        path: window.location.pathname
+      }
+    });
+
+    // Also log as a general error for error tracking
+    this.logEntry({
+      timestamp: new Date().toISOString(),
+      event: 'ERROR',
+      details: {
+        error: `HTTP ${status}: ${statusText}`,
+        context: `${method} ${url}`,
+        httpStatus: status,
+        path: window.location.pathname
+      }
+    });
+  }
+
+  logHttpTimeout(method: string, url: string, timeout: number, attempt?: number): void {
+    if (!this.config.enabled) return;
+
+    this.logEntry({
+      timestamp: new Date().toISOString(),
+      event: 'HTTP_TIMEOUT',
+      path: url,
+      duration: timeout,
+      details: {
+        method,
+        timeout,
+        attempt,
+        success: false,
+        path: window.location.pathname
+      }
+    });
+
+    // Also log as a general error
+    this.logEntry({
+      timestamp: new Date().toISOString(),
+      event: 'ERROR',
+      details: {
+        error: `Request timeout after ${timeout}ms`,
+        context: `${method} ${url}`,
+        path: window.location.pathname
+      }
+    });
+  }
+
+  logHttpNetworkError(method: string, url: string, errorMessage: string, duration: number, attempt?: number): void {
+    if (!this.config.enabled) return;
+
+    this.logEntry({
+      timestamp: new Date().toISOString(),
+      event: 'HTTP_NETWORK_ERROR',
+      path: url,
+      duration,
+      details: {
+        method,
+        errorMessage,
+        attempt,
+        success: false,
+        path: window.location.pathname
+      }
+    });
+
+    // Also log as a general error
+    this.logEntry({
+      timestamp: new Date().toISOString(),
+      event: 'ERROR',
+      details: {
+        error: errorMessage,
+        context: `${method} ${url}`,
+        path: window.location.pathname
+      }
+    });
+  }
+
+  private getStatusText(status: number): string {
+    const statusTexts: { [key: number]: string } = {
+      200: 'OK',
+      201: 'Created',
+      204: 'No Content',
+      400: 'Bad Request',
+      401: 'Unauthorized',
+      403: 'Forbidden',
+      404: 'Not Found',
+      422: 'Unprocessable Entity',
+      429: 'Too Many Requests',
+      500: 'Internal Server Error',
+      502: 'Bad Gateway',
+      503: 'Service Unavailable',
+      504: 'Gateway Timeout'
+    };
+    return statusTexts[status] || 'Unknown';
+  }
+
   private getNavigationTiming(): NavigationTiming {
     try {
       // Use modern Navigation Timing API
