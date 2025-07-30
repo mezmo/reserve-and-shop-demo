@@ -692,6 +692,7 @@ const generateOTELConfig = ({
         '/tmp/codeuser/events.log', 
         '/tmp/codeuser/performance.log',
         '/tmp/codeuser/errors.log',
+        '/tmp/codeuser/metrics.log',
         '/tmp/codeuser/app.log'
       ],
       start_at: 'beginning',
@@ -768,18 +769,8 @@ const generateOTELConfig = ({
       }
     };
 
-    // Metrics-specific logs from Winston
-    config.receivers['filelog/metrics'] = {
-      include: ['/tmp/codeuser/metrics.log'],
-      start_at: 'beginning',
-      operators: [
-        {
-          type: 'add',
-          field: 'attributes.data_type',
-          value: 'metrics'
-        }
-      ]
-    };
+    // Note: filelog receiver only supports logs, not metrics
+    // metrics.log should be handled by the logs pipeline if needed
 
     if (metricsHasPipelineId) {
       // Mezmo Pipeline for metrics
@@ -802,7 +793,7 @@ const generateOTELConfig = ({
     }
 
     config.service.pipelines.metrics = {
-      receivers: ['hostmetrics', 'filelog/metrics'],
+      receivers: ['hostmetrics'],
       processors: ['resource', 'batch'],
       exporters: ['otlphttp/metrics']
     };
