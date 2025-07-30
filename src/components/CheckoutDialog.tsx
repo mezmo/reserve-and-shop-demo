@@ -122,6 +122,13 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
     const performanceLogger = PerformanceLogger.getInstance();
     const startTime = Date.now();
 
+    // Debug: Check if performance logging is enabled
+    console.log('🔧 CheckoutDialog: Starting payment process', {
+      performanceLoggerEnabled: performanceLogger.getConfig().enabled,
+      customerName,
+      totalAmount: calculateTotal()
+    });
+
     try {
       // Create order ID for tracking
       const orderId = `order-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -147,6 +154,7 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
         },
         'initiated'
       );
+      console.log('🔧 CheckoutDialog: Logged payment initiated for', orderId);
 
       // Log payment processing start
       performanceLogger.logPaymentAttempt(

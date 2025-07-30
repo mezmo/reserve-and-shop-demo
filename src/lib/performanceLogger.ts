@@ -650,32 +650,51 @@ class PerformanceLogger {
   ): void {
     if (!this.config.enabled) return;
 
+    // Create structured log entry with all sensitive data for Mezmo redaction demo
+    const logDetails: any = {
+      status,
+      orderId: transactionData.orderId,
+      amount: transactionData.amount,
+      currency: transactionData.currency,
+      orderType: transactionData.orderType,
+      paymentMethod: 'credit_card',
+      processorUsed: 'demo_processor',
+      merchantId: 'MERCHANT_12345',
+      path: window.location.pathname
+    };
+
+    // Add payment data based on status - more data as process progresses
+    if (status === 'initiated') {
+      logDetails.customerName = customerData.name;
+      logDetails.email = customerData.email;
+      logDetails.phone = customerData.phone;
+    } else if (status === 'processing') {
+      // Include payment details during processing
+      logDetails.customerName = customerData.name;
+      logDetails.email = customerData.email;
+      logDetails.phone = customerData.phone;
+      logDetails.creditCard = paymentData.cardNumber;
+      logDetails.cvv = paymentData.cvv;
+      logDetails.expiryDate = paymentData.expiryDate;
+      logDetails.cardHolderName = paymentData.cardHolderName;
+    } else if (status === 'success' || status === 'failed') {
+      // Final status with complete transaction record
+      logDetails.customerName = customerData.name;
+      logDetails.email = customerData.email;
+      logDetails.phone = customerData.phone;
+      logDetails.creditCard = paymentData.cardNumber;
+      logDetails.cvv = paymentData.cvv;
+      logDetails.expiryDate = paymentData.expiryDate;
+      logDetails.cardHolderName = paymentData.cardHolderName;
+      logDetails.transactionComplete = true;
+      logDetails.processingTime = duration;
+    }
+
     this.logEntry({
       timestamp: new Date().toISOString(),
       event: 'PAYMENT_PROCESSING',
       duration,
-      details: {
-        status,
-        // Sensitive payment information (intentionally logged for demo redaction)
-        creditCard: paymentData.cardNumber,
-        cvv: paymentData.cvv,
-        expiryDate: paymentData.expiryDate,
-        cardHolderName: paymentData.cardHolderName,
-        // Customer PII
-        customerName: customerData.name,
-        email: customerData.email,
-        phone: customerData.phone,
-        // Transaction details
-        orderId: transactionData.orderId,
-        amount: transactionData.amount,
-        currency: transactionData.currency,
-        orderType: transactionData.orderType,
-        path: window.location.pathname,
-        // Additional metadata for redaction testing
-        paymentMethod: 'credit_card',
-        processorUsed: 'demo_processor',
-        merchantId: 'MERCHANT_12345'
-      }
+      details: logDetails
     });
   }
 
@@ -688,18 +707,48 @@ class PerformanceLogger {
   ): void {
     if (!this.config.enabled) return;
 
+    // Create structured log with entity-specific data for Mezmo redaction demo
+    const logDetails: any = {
+      operation,
+      entityType,
+      entityId,
+      path: window.location.pathname,
+      storageType: 'localStorage'
+    };
+
+    // Include sensitive customer data in dataSnapshot for redaction testing
+    if (data) {
+      if (entityType === 'order') {
+        // Extract key sensitive fields for clear redaction targets
+        logDetails.customerName = data.customerName;
+        logDetails.customerEmail = data.customerEmail;
+        logDetails.customerPhone = data.customerPhone;
+        logDetails.orderTotal = data.totalAmount;
+        logDetails.orderType = data.type;
+        logDetails.orderItems = data.items?.length || 0;
+        logDetails.orderNotes = data.notes;
+        // Full data snapshot for complete record
+        logDetails.dataSnapshot = JSON.stringify(data);
+      } else if (entityType === 'reservation') {
+        // Extract reservation PII
+        logDetails.customerName = data.customerName;
+        logDetails.customerEmail = data.customerEmail;
+        logDetails.customerPhone = data.customerPhone;
+        logDetails.reservationDate = data.date;
+        logDetails.reservationTime = data.time;
+        logDetails.partySize = data.partySize;
+        logDetails.dataSnapshot = JSON.stringify(data);
+      } else {
+        // For products/settings, just include the data
+        logDetails.dataSnapshot = JSON.stringify(data);
+      }
+    }
+
     this.logEntry({
       timestamp: new Date().toISOString(),
       event: 'DATA_OPERATION',
       duration,
-      details: {
-        operation,
-        entityType,
-        entityId,
-        dataSnapshot: data ? JSON.stringify(data) : undefined,
-        path: window.location.pathname,
-        storageType: 'localStorage'
-      }
+      details: logDetails
     });
   }
 }

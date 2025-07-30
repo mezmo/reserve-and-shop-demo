@@ -80,16 +80,10 @@ export class DataStore {
   }
 
   private saveData(): void {
-    const startTime = Date.now();
     try {
       localStorage.setItem('restaurant-app-data', JSON.stringify(this.data));
-      this.performanceLogger.logDataOperation(
-        'UPDATE',
-        'settings',
-        'app-data',
-        this.data,
-        Date.now() - startTime
-      );
+      // Note: Individual operations (addOrder, addReservation, etc.) already log their specific changes
+      // No need to log the entire data dump here
     } catch (error) {
       console.error('Error saving data to localStorage:', error);
     }
