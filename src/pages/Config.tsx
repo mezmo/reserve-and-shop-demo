@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Progress } from '@/components/ui/progress';
 import { DataStore } from '@/stores/dataStore';
-import { Download, Upload, RefreshCw, Settings, AlertTriangle, Activity, FileText, Monitor, Zap, Play, Square, Cloud, CloudOff, CheckCircle, XCircle, Eye, EyeOff } from 'lucide-react';
+import { Download, Upload, RefreshCw, Settings, AlertTriangle, Activity, FileText, Monitor, Zap, Play, Square, Cloud, CloudOff, CheckCircle, XCircle, Eye, EyeOff, Info } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { usePerformance } from '@/hooks/usePerformance';
 import { useTestError, useTestRandomError, useTestTimeout, useTestPerformance, useHealthCheck } from '@/services/apiService';
@@ -1190,7 +1190,6 @@ const Config = () => {
       if (startResponse.ok) {
         setOtelStatus('connected');
         setOtelLastSync(new Date().toISOString());
-        setOtelStats(prev => ({ ...prev, logsSent: prev.logsSent + 1 }));
         toast({
           title: "OTEL Collector Started",
           description: `OpenTelemetry Collector is now forwarding telemetry to Mezmo (PID: ${result.pid}).`
@@ -1200,11 +1199,6 @@ const Config = () => {
       }
     } catch (error) {
       setOtelStatus('error');
-      setOtelStats(prev => ({ 
-        ...prev, 
-        errors: prev.errors + 1,
-        lastError: error.message
-      }));
       toast({
         title: "Collector Start Failed",
         description: error.message,
@@ -1287,11 +1281,6 @@ const Config = () => {
       }
     } catch (error) {
       setOtelStatus('error');
-      setOtelStats(prev => ({ 
-        ...prev, 
-        errors: prev.errors + 1,
-        lastError: error.message
-      }));
       toast({
         title: "Connection Test Failed",
         description: error.message,
@@ -1403,6 +1392,19 @@ const Config = () => {
             setOtelLogsEnabled(status.enabledPipelines.logs);
             setOtelMetricsEnabled(status.enabledPipelines.metrics);
             setOtelTracesEnabled(status.enabledPipelines.traces);
+          }
+
+          // Fetch real collector metrics if running
+          if (status.status === 'connected') {
+            try {
+              const metricsResponse = await fetch('/api/otel/metrics');
+              const metricsData = await metricsResponse.json();
+              if (metricsResponse.ok) {
+                setOtelStats(metricsData);
+              }
+            } catch (error) {
+              console.warn('Could not fetch OTEL metrics:', error);
+            }
           }
         }
       } catch (error) {
@@ -1565,6 +1567,20 @@ const Config = () => {
                     )}
                   </div>
                 ))}
+
+                {/* Configuration Help */}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
+                  <div className="flex items-start space-x-2">
+                    <Info className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                    <div className="space-y-1 text-sm">
+                      <p className="font-medium text-blue-900">Configuration Guide</p>
+                      <div className="text-blue-800 space-y-1">
+                        <p><strong>Log Level:</strong> Controls verbosity - DEBUG (most detailed) > INFO (standard) > WARN (warnings only) > ERROR (errors only)</p>
+                        <p><strong>Format:</strong> Output structure - JSON for machine parsing, CLF for web servers, String for human reading</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
 
                 {/* Analytics Dashboard */}
                 <div className="bg-muted/50 p-4 rounded-lg">

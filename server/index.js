@@ -665,6 +665,9 @@ const generateOTELConfig = ({
       telemetry: {
         logs: {
           level: debugLevel || 'info'
+        },
+        metrics: {
+          address: '0.0.0.0:8888'
         }
       }
     }
@@ -907,6 +910,64 @@ app.get('/api/otel/status', (req, res) => {
   } catch (error) {
     console.error('Error checking OTEL status:', error);
     res.status(500).json({ error: 'Failed to check OTEL Collector status' });
+  }
+});
+
+// Get OTEL Collector internal metrics
+app.get('/api/otel/metrics', async (req, res) => {
+  try {
+    // Check if collector is running first
+    const pidFile = '/tmp/codeuser/otel-collector.pid';
+    if (!fs.existsSync(pidFile)) {
+      return res.json({
+        logsSent: 0,
+        metricsCollected: 0,
+        tracesReceived: 0,
+        errors: 0,
+        lastError: 'Collector not running'
+      });
+    }
+
+    // Scrape metrics from collector's internal endpoint
+    const response = await fetch('http://localhost:8888/metrics');
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch collector metrics');
+    }
+    
+    const metricsText = await response.text();
+    
+    // Parse Prometheus-format metrics
+    const stats = {
+      logsSent: 0,
+      metricsCollected: 0,
+      tracesReceived: 0,
+      errors: 0,
+      lastError: null
+    };
+    
+    // Extract relevant metrics using regex (accounting for labels)
+    const logsSentMatch = metricsText.match(/otelcol_exporter_sent_log_records_total\{[^}]*exporter="otlphttp\/logs"[^}]*\}\s+(\d+)/);
+    const metricsCollectedMatch = metricsText.match(/otelcol_exporter_sent_metric_points_total\{[^}]*exporter="otlphttp\/metrics"[^}]*\}\s+(\d+)/);
+    const tracesReceivedMatch = metricsText.match(/otelcol_exporter_sent_spans_total\{[^}]*exporter="otlphttp\/traces"[^}]*\}\s+(\d+)/);
+    const errorsMatch = metricsText.match(/otelcol_exporter_send_failed_log_records_total\{[^}]*\}\s+(\d+)/);
+    
+    if (logsSentMatch) stats.logsSent = parseInt(logsSentMatch[1]);
+    if (metricsCollectedMatch) stats.metricsCollected = parseInt(metricsCollectedMatch[1]);
+    if (tracesReceivedMatch) stats.tracesReceived = parseInt(tracesReceivedMatch[1]);
+    if (errorsMatch) stats.errors = parseInt(errorsMatch[1]);
+    
+    res.json(stats);
+    
+  } catch (error) {
+    console.error('Error fetching OTEL metrics:', error);
+    res.json({
+      logsSent: 0,
+      metricsCollected: 0,
+      tracesReceived: 0,
+      errors: 0,
+      lastError: error.message
+    });
   }
 });
 
