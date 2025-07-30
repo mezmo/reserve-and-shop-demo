@@ -1582,6 +1582,37 @@ const Config = () => {
                   </div>
                 </div>
 
+                {/* Logging Architecture Documentation */}
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
+                  <div className="flex items-start space-x-2">
+                    <FileText className="h-4 w-4 text-gray-600 mt-0.5 flex-shrink-0" />
+                    <div className="space-y-2 text-sm">
+                      <p className="font-medium text-gray-900">Logging Architecture</p>
+                      <div className="text-gray-700 space-y-2">
+                        <div>
+                          <p className="font-medium">Log Files & Purpose:</p>
+                          <ul className="ml-4 space-y-1 text-xs">
+                            <li><strong>access.log</strong> - HTTP requests (CLF format)</li>
+                            <li><strong>events.log</strong> - Application & business events</li>
+                            <li><strong>performance.log</strong> - Timing & performance data</li>
+                            <li><strong>metrics.log</strong> - Quantitative metrics & KPIs</li>
+                            <li><strong>errors.log</strong> - Application errors & exceptions</li>
+                            <li><strong>app.log</strong> - General application logs</li>
+                          </ul>
+                        </div>
+                        <div>
+                          <p className="font-medium">Log Forwarding:</p>
+                          <ul className="ml-4 space-y-1 text-xs">
+                            <li><strong>Mezmo Log Forwarder</strong> - Sends all 6 log files to Mezmo logs</li>
+                            <li><strong>OTEL Logs Pipeline</strong> - Forwards all 6 log files as structured logs</li>
+                            <li><strong>OTEL Metrics Pipeline</strong> - Collects system metrics (CPU, memory, disk, network)</li>
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Analytics Dashboard */}
                 <div className="bg-muted/50 p-4 rounded-lg">
                   <div className="flex items-center justify-between mb-4">
@@ -1831,6 +1862,21 @@ const Config = () => {
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* Mezmo Architecture Documentation */}
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
+              <div className="flex items-start space-x-2">
+                <Info className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                <div className="space-y-1 text-sm">
+                  <p className="font-medium text-blue-900">Mezmo Log Forwarding</p>
+                  <div className="text-blue-800 space-y-1">
+                    <p><strong>What it forwards:</strong> All 6 structured log files (access, events, performance, metrics, errors, app)</p>
+                    <p><strong>Destination:</strong> Your Mezmo logs account for centralized analysis and alerting</p>
+                    <p><strong>Format:</strong> Original log format preserved (JSON structured logs)</p>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Demo Environment Warning */}
@@ -2132,6 +2178,22 @@ const Config = () => {
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* OTEL Architecture Documentation */}
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4 space-y-2">
+              <div className="flex items-start space-x-2">
+                <Info className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                <div className="space-y-1 text-sm">
+                  <p className="font-medium text-green-900">OpenTelemetry Architecture</p>
+                  <div className="text-green-800 space-y-1">
+                    <p><strong>Logs Pipeline:</strong> Forwards all 6 log files (access, events, performance, metrics, errors, app) as structured logs</p>
+                    <p><strong>Metrics Pipeline:</strong> Collects system telemetry (CPU, memory, disk, network) as proper metrics</p>
+                    <p><strong>Traces Pipeline:</strong> Receives application traces via OTLP protocol (gRPC port 4317)</p>
+                    <p><strong>Benefit:</strong> Separates log data from metrics data for optimal analysis in Mezmo</p>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Information Sections */}

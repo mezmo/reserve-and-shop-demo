@@ -1,4 +1,4 @@
-import { accessLogger, performanceLogger, errorLogger, metricsLogger } from '../logging/winston-config.js';
+import { accessLogger, eventLogger, performanceLogger, errorLogger, metricsLogger } from '../logging/winston-config.js';
 
 // Request ID generator
 const generateRequestId = () => {
@@ -108,43 +108,60 @@ export const loggingMiddleware = (req, res, next) => {
     // Log to access logger (CLF-style)
     accessLogger.info('HTTP request processed', logData);
 
-    // Log to performance logger with additional performance metrics
-    performanceLogger.info('Request performance metrics', {
-      ...logData,
+    // Log to event logger (application event)
+    eventLogger.info('HTTP request processed', {
       eventType: 'http_request',
-      metricType: 'performance',
-      duration: responseTime,
-      throughput: bodySize / Math.max(responseTime, 1) * 1000, // bytes per second
-      slowRequest: responseTime > 1000
+      action: `${req.method} ${urlPattern}`,
+      requestId,
+      method: req.method,
+      url: req.originalUrl,
+      statusCode: res.statusCode,
+      statusCategory: categorizeStatus(res.statusCode),
+      userAgent: req.headers['user-agent'],
+      ip,
+      timestamp: new Date().toISOString()
     });
 
-    // Log metrics
-    metricsLogger.info('HTTP request metrics', {
-      metricName: `http_requests_${req.method.toLowerCase()}`,
-      value: 1,
-      unit: 'count',
-      tags: {
-        method: req.method,
-        status: res.statusCode.toString(),
-        urlPattern,
-        statusCategory: categorizeStatus(res.statusCode)
-      },
-      aggregationType: 'sum',
+    // Log to performance logger (timing data only)
+    performanceLogger.info('HTTP request timing', {
+      operationType: 'http_request',
+      operation: `${req.method} ${urlPattern}`,
+      duration: responseTime,
+      durationUnit: 'milliseconds',
+      throughput: bodySize / Math.max(responseTime, 1) * 1000, // bytes per second
+      throughputUnit: 'bytes_per_second',
+      slowRequest: responseTime > 1000,
       requestId,
       timestamp: new Date().toISOString()
     });
 
-    // Log response time metric
+    // Log to metrics logger (quantitative metrics)
+    metricsLogger.info('HTTP request counter', {
+      metricName: `http_requests_total`,
+      metricType: 'counter',
+      value: 1,
+      unit: 'requests',
+      labels: {
+        method: req.method.toLowerCase(),
+        status_code: res.statusCode.toString(),
+        status_category: categorizeStatus(res.statusCode),
+        endpoint: urlPattern
+      },
+      requestId,
+      timestamp: new Date().toISOString()
+    });
+
+    // Log response time as a separate metric
     metricsLogger.info('HTTP response time', {
-      metricName: 'http_response_time',
+      metricName: 'http_request_duration',
+      metricType: 'histogram',
       value: responseTime,
       unit: 'milliseconds',
-      tags: {
-        method: req.method,
-        status: res.statusCode.toString(),
-        urlPattern
+      labels: {
+        method: req.method.toLowerCase(),
+        status_code: res.statusCode.toString(),
+        endpoint: urlPattern
       },
-      aggregationType: 'average',
       requestId,
       timestamp: new Date().toISOString()
     });
@@ -218,55 +235,63 @@ export const logBusinessEvent = (eventType, action, data = {}, req = null) => {
   const requestId = req?.requestId || 'system';
   const userId = data.userId || req?.userId || 'anonymous';
 
-  performanceLogger.info('Business event occurred', {
+  // Log to event logger (business event)
+  eventLogger.info('Business event occurred', {
     eventType: eventType || 'business',
     action,
-    component: 'business_logic',
     userId,
     requestId,
-    metadata: data,
+    component: 'business_logic',
+    ...data.context,
     timestamp: new Date().toISOString()
   });
 
-  // Also log as metrics
-  metricsLogger.info('Business event metric', {
-    metricName: `business_${eventType}`,
-    value: data.value || 1,
-    unit: data.unit || 'count',
-    tags: {
-      action,
-      userId,
-      ...data.tags
-    },
-    aggregationType: 'sum',
-    requestId,
-    timestamp: new Date().toISOString()
-  });
+  // Log to metrics logger (quantitative business metrics)
+  if (data.value && typeof data.value === 'number') {
+    metricsLogger.info('Business metric', {
+      metricName: `business_${eventType}_${action}`,
+      metricType: 'counter',
+      value: data.value,
+      unit: data.unit || 'count',
+      labels: {
+        event_type: eventType || 'business',
+        action,
+        user_id: userId,
+        ...data.labels
+      },
+      requestId,
+      timestamp: new Date().toISOString()
+    });
+  }
 };
 
 // Performance timing helper
 export const logPerformanceTiming = (name, duration, component = 'server', metadata = {}, req = null) => {
   const requestId = req?.requestId || 'system';
 
-  performanceLogger.info('Performance timing', {
-    eventType: 'performance',
-    action: name,
-    component,
+  // Log to performance logger (timing data only)
+  performanceLogger.info('Performance timing measured', {
+    operationType: 'custom_timing',
+    operation: name,
     duration,
+    durationUnit: 'milliseconds',
+    component,
     requestId,
-    metadata,
+    ...metadata,
     timestamp: new Date().toISOString()
   });
 
+  // Log to metrics logger (quantitative timing metric)
   metricsLogger.info('Performance timing metric', {
-    metricName: `performance_${name}`,
+    metricName: `performance_duration_${name}`,
+    metricType: 'histogram',
     value: duration,
     unit: 'milliseconds',
-    tags: {
+    labels: {
+      operation: name,
       component,
-      ...metadata
+      ...metadata.labels
     },
-    aggregationType: 'average',
     requestId,
     timestamp: new Date().toISOString()
   });
