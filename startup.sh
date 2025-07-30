@@ -45,6 +45,11 @@ mkdir -p /tmp/codeuser /logs
 chmod 755 /tmp/codeuser /logs
 
 # Create structured log files with proper permissions
+# Server operational logs
+touch /tmp/codeuser/server.log
+touch /tmp/codeuser/server-error.log
+
+# Application business logs  
 touch /tmp/codeuser/access.log
 touch /tmp/codeuser/events.log
 touch /tmp/codeuser/metrics.log
@@ -53,13 +58,19 @@ touch /tmp/codeuser/performance.log
 touch /tmp/codeuser/app.log
 chmod 644 /tmp/codeuser/*.log
 
-echo "📝 Structured logging configured:"
-echo "   Access logs: /tmp/codeuser/access.log"
-echo "   Event logs: /tmp/codeuser/events.log"  
-echo "   Metrics logs: /tmp/codeuser/metrics.log"
-echo "   Error logs: /tmp/codeuser/errors.log"
-echo "   Performance logs: /tmp/codeuser/performance.log"
-echo "   Application logs: /tmp/codeuser/app.log"
+echo "📝 Logging structure configured:"
+echo ""
+echo "🖥️  Server Logs (Operations):"
+echo "   Server operations: /tmp/codeuser/server.log"
+echo "   Server errors: /tmp/codeuser/server-error.log"
+echo ""
+echo "📊 Application Logs (Business):"
+echo "   HTTP requests: /tmp/codeuser/access.log"
+echo "   Business events: /tmp/codeuser/events.log"
+echo "   Performance metrics: /tmp/codeuser/metrics.log"
+echo "   Application errors: /tmp/codeuser/errors.log"
+echo "   Performance timing: /tmp/codeuser/performance.log"
+echo "   General app logs: /tmp/codeuser/app.log"
 
 # LogDNA agent management functions
 start_logdna_agent() {
@@ -236,7 +247,8 @@ npm run --silent 2>/dev/null | grep -E "^\s+(dev|server|client)" || echo "   dev
 echo ""
 
 # Start the application in the background
-nohup npm run dev > /tmp/codeuser/app.log 2>&1 &
+# Separate server logs from application logs
+nohup npm run dev > /tmp/codeuser/server.log 2> /tmp/codeuser/server-error.log &
 DEV_PID=$!
 
 # Function to cleanup background processes on exit
@@ -258,17 +270,20 @@ sleep 5
 if kill -0 $DEV_PID 2>/dev/null; then
     echo "🎉 Services started successfully!"
     echo "💡 Development server is running in the background (PID: $DEV_PID)"
-    echo "📋 Logs available at: /tmp/codeuser/app.log"
+    echo "📋 Server logs: /tmp/codeuser/server.log | Application logs: /tmp/codeuser/*.log"
     echo "🔧 You can now run commands. Type 'exit' to stop the container."
     echo ""
     
     # Show the first few lines of logs to verify it's working
-    echo "📄 Recent logs:"
-    tail -n 10 /tmp/codeuser/app.log 2>/dev/null || echo "No logs yet"
+    echo "📄 Recent server logs:"
+    tail -n 10 /tmp/codeuser/server.log 2>/dev/null || echo "No server logs yet"
     echo ""
 else
     echo "❌ Failed to start development server. Check logs:"
-    cat /tmp/codeuser/app.log 2>/dev/null || echo "No log file found"
+    echo "📄 Server output:"
+    cat /tmp/codeuser/server.log 2>/dev/null || echo "No server log file found"
+    echo "📄 Server errors:"
+    cat /tmp/codeuser/server-error.log 2>/dev/null || echo "No server error log file found"
     echo ""
     echo "🔧 Falling back to interactive shell for debugging..."
 fi

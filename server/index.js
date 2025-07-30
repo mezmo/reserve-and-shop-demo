@@ -4,7 +4,8 @@ import fs from 'fs';
 import { execSync, spawn } from 'child_process';
 import yaml from 'js-yaml';
 import { loggingMiddleware, errorLoggingMiddleware, logBusinessEvent, logPerformanceTiming } from './middleware/logging-middleware.js';
-import { appLogger, updateLogLevel, getLogLevels } from './logging/winston-config.js';
+import { updateLogFormat, getLogFormats } from './logging/winston-config.js';
+import { appLogger, serverLogger, updateLogLevel, getLogLevels } from './logging/winston-config.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -1392,8 +1393,44 @@ app.post('/api/logging/levels', (req, res) => {
   
   res.json({ 
     success: true, 
-    message: `Log level for ${loggerName} updated to ${level}`,
+    message: `Log level for ${loggerName} updated to ${level.toLowerCase()}`,
     levels: getLogLevels()
+  });
+});
+
+// Format configuration endpoints
+app.get('/api/logging/formats', (req, res) => {
+  res.json(getLogFormats());
+});
+
+app.post('/api/logging/formats', (req, res) => {
+  const { loggerName, format } = req.body;
+  
+  if (!loggerName || !format) {
+    return res.status(400).json({ error: 'Logger name and format are required' });
+  }
+  
+  const validFormats = ['json', 'clf', 'string', 'csv', 'xml'];
+  if (!validFormats.includes(format.toLowerCase())) {
+    return res.status(400).json({ error: 'Invalid log format. Must be one of: ' + validFormats.join(', ') });
+  }
+  
+  const validLoggers = ['access', 'event', 'metrics', 'error', 'performance', 'app'];
+  if (!validLoggers.includes(loggerName)) {
+    return res.status(400).json({ error: 'Invalid logger name. Must be one of: ' + validLoggers.join(', ') });
+  }
+  
+  updateLogFormat(loggerName, format.toLowerCase());
+  
+  logBusinessEvent('log_format_changed', 'configure', {
+    loggerName,
+    format: format.toLowerCase()
+  }, req);
+  
+  res.json({ 
+    success: true, 
+    message: `Log format for ${loggerName} updated to ${format.toLowerCase()}`,
+    formats: getLogFormats()
   });
 });
 
@@ -1456,6 +1493,15 @@ app.listen(PORT, () => {
   // Log server startup as business event
   logBusinessEvent('server_started', 'startup', {
     port: PORT,
+    timestamp: new Date().toISOString()
+  });
+
+  // Also log to server operational log
+  serverLogger.info('Server started successfully', {
+    port: PORT,
+    environment: process.env.NODE_ENV || 'development',
+    pid: process.pid,
+    logLevels: getLogLevels(),
     timestamp: new Date().toISOString()
   });
 });

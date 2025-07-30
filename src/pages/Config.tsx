@@ -138,6 +138,39 @@ const Config = () => {
     metrics: { level: 'INFO', format: 'json', enabled: true },
     error: { level: 'WARN', format: 'json', enabled: true }
   });
+
+  // Define appropriate formats for each logger type
+  const getAvailableFormats = (loggerType) => {
+    switch (loggerType) {
+      case 'access':
+        return [
+          { value: 'clf', label: 'CLF (Common Log Format)', description: 'Standard web server format' },
+          { value: 'json', label: 'JSON (Structured)', description: 'Machine-readable structured data' }
+        ];
+      case 'event':
+        return [
+          { value: 'json', label: 'JSON (Structured)', description: 'Perfect for business events' },
+          { value: 'csv', label: 'CSV (Spreadsheet)', description: 'Easy analysis in Excel/sheets' },
+          { value: 'xml', label: 'XML (Markup)', description: 'Enterprise integration format' },
+          { value: 'string', label: 'STRING (Human Readable)', description: 'Easy to read logs' }
+        ];
+      case 'metrics':
+        return [
+          { value: 'json', label: 'JSON (Structured)', description: 'Standard metrics format' },
+          { value: 'csv', label: 'CSV (Spreadsheet)', description: 'Perfect for data analysis' },
+          { value: 'string', label: 'STRING (Human Readable)', description: 'Easy to read metrics' }
+        ];
+      case 'error':
+        return [
+          { value: 'json', label: 'JSON (Structured)', description: 'Structured error data' },
+          { value: 'string', label: 'STRING (Human Readable)', description: 'Easy to read errors' }
+        ];
+      default:
+        return [
+          { value: 'json', label: 'JSON (Structured)', description: 'Default structured format' }
+        ];
+    }
+  };
   const [loggingAnalytics, setLoggingAnalytics] = useState(null);
   
   // HTTP testing mutations
@@ -162,7 +195,10 @@ const Config = () => {
     });
   };
 
-  const handleLoggerConfigChange = (loggerType, key, value) => {
+  const handleLoggerConfigChange = async (loggerType, key, value) => {
+    // Store previous value for rollback
+    const previousValue = loggerConfigs[loggerType]?.[key];
+    
     setLoggerConfigs(prev => ({
       ...prev,
       [loggerType]: {
@@ -171,11 +207,45 @@ const Config = () => {
       }
     }));
 
+    try {
+      // Send the configuration change to the server
+      const endpoint = key === 'level' ? '/api/logging/levels' : '/api/logging/formats';
+      const payload = key === 'level' 
+        ? { loggerName: loggerType, level: value }
+        : { loggerName: loggerType, format: value };
 
-    toast({
-      title: "Logger Configuration Updated",
-      description: `${loggerType} logger ${key} updated to ${value}`
-    });
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        toast({
+          title: "Logger Configuration Updated",
+          description: `${loggerType} logger ${key} set to ${value} on server`
+        });
+      } else {
+        throw new Error(result.error || 'Failed to update configuration');
+      }
+    } catch (error) {
+      toast({
+        title: "Configuration Update Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+      
+      // Revert the local state change on error
+      setLoggerConfigs(prev => ({
+        ...prev,
+        [loggerType]: {
+          ...prev[loggerType],
+          [key]: previousValue
+        }
+      }));
+    }
   };
 
   const handleRefreshAnalytics = () => {
@@ -1823,15 +1893,12 @@ const Config = () => {
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              {['json', 'clf', 'string', 'csv', 'xml', 'custom'].map((format) => (
-                                <SelectItem key={format} value={format}>
-                                  {format.toUpperCase()}
-                                  {format === 'json' && ' (Structured)'}
-                                  {format === 'clf' && ' (Common Log Format)'}
-                                  {format === 'string' && ' (Human Readable)'}
-                                  {format === 'csv' && ' (Spreadsheet)'}
-                                  {format === 'xml' && ' (Markup)'}
-                                  {format === 'custom' && ' (Template)'}
+                              {getAvailableFormats(loggerType).map((format) => (
+                                <SelectItem key={format.value} value={format.value}>
+                                  <div className="flex flex-col">
+                                    <span className="font-medium">{format.label}</span>
+                                    <span className="text-xs text-muted-foreground">{format.description}</span>
+                                  </div>
                                 </SelectItem>
                               ))}
                             </SelectContent>
