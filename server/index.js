@@ -3,6 +3,8 @@ import cors from 'cors';
 import fs from 'fs';
 import { execSync, spawn } from 'child_process';
 import yaml from 'js-yaml';
+import { loggingMiddleware, errorLoggingMiddleware, logBusinessEvent, logPerformanceTiming } from './middleware/logging-middleware.js';
+import { appLogger, updateLogLevel, getLogLevels } from './logging/winston-config.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -11,12 +13,8 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// Request logging middleware
-app.use((req, res, next) => {
-  const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] ${req.method} ${req.path} - ${req.ip}`);
-  next();
-});
+// Structured logging middleware (replaces basic console logging)
+app.use(loggingMiddleware);
 
 // In-memory data store (simulating a database)
 let data = {
@@ -83,11 +81,23 @@ app.get('/api/products/:id', (req, res) => {
 });
 
 app.post('/api/products', (req, res) => {
+  const startTime = Date.now();
   const product = {
     id: Date.now().toString(),
     ...req.body
   };
   data.products.push(product);
+  
+  // Log business event
+  logBusinessEvent('product_created', 'create', {
+    productId: product.id,
+    category: product.category,
+    price: product.price
+  }, req);
+  
+  const duration = Date.now() - startTime;
+  logPerformanceTiming('product_creation', duration, 'products', { productId: product.id }, req);
+  
   res.status(201).json(product);
 });
 
@@ -114,9 +124,16 @@ app.get('/api/orders/:id', (req, res) => {
 });
 
 app.post('/api/orders', (req, res) => {
+  const startTime = Date.now();
+  
   // Validate required fields
   const { customerName, customerEmail, items } = req.body;
   if (!customerName || !customerEmail || !items || items.length === 0) {
+    appLogger.warn('Order validation failed', {
+      requestId: req.requestId,
+      missingFields: { customerName: !customerName, customerEmail: !customerEmail, items: !items || items.length === 0 },
+      ip: req.ip
+    });
     return res.status(400).json({ 
       error: 'Missing required fields: customerName, customerEmail, and items are required' 
     });
@@ -130,6 +147,22 @@ app.post('/api/orders', (req, res) => {
   };
   
   data.orders.push(order);
+  
+  // Calculate order total for business metrics
+  const total = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  
+  // Log business event
+  logBusinessEvent('order_created', 'create', {
+    orderId: order.id,
+    customerEmail: customerEmail,
+    itemCount: items.length,
+    value: total,
+    unit: 'USD'
+  }, req);
+  
+  const duration = Date.now() - startTime;
+  logPerformanceTiming('order_processing', duration, 'orders', { orderId: order.id, itemCount: items.length }, req);
+  
   res.status(201).json(order);
 });
 
@@ -156,9 +189,16 @@ app.get('/api/reservations/:id', (req, res) => {
 });
 
 app.post('/api/reservations', (req, res) => {
+  const startTime = Date.now();
+  
   // Validate required fields
   const { name, email, date, time, guests } = req.body;
   if (!name || !email || !date || !time || !guests) {
+    appLogger.warn('Reservation validation failed', {
+      requestId: req.requestId,
+      missingFields: { name: !name, email: !email, date: !date, time: !time, guests: !guests },
+      ip: req.ip
+    });
     return res.status(400).json({ 
       error: 'Missing required fields: name, email, date, time, and guests are required' 
     });
@@ -172,6 +212,22 @@ app.post('/api/reservations', (req, res) => {
   };
   
   data.reservations.push(reservation);
+  
+  // Log business event
+  logBusinessEvent('reservation_created', 'create', {
+    reservationId: reservation.id,
+    customerEmail: email,
+    guests: guests,
+    date: date,
+    time: time
+  }, req);
+  
+  const duration = Date.now() - startTime;
+  logPerformanceTiming('reservation_processing', duration, 'reservations', { 
+    reservationId: reservation.id, 
+    guests: guests 
+  }, req);
+  
   res.status(201).json(reservation);
 });
 
@@ -210,33 +266,64 @@ app.get('/api/mezmo/status', (req, res) => {
     let pid = null;
     let hasConfig = false;
     
-    if (fs.existsSync(configFile)) {
-      hasConfig = true;
-    }
-    
-    if (fs.existsSync(pidFile)) {
-      try {
-        pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
-        // Check if PID is still running
-        process.kill(pid, 0); // This throws if process doesn't exist
-        status = 'connected';
-      } catch (error) {
-        // Process not running, clean up stale PID file
-        fs.unlinkSync(pidFile);
-        status = 'disconnected';
-        pid = null;
+    // Safely check if config file exists
+    try {
+      if (fs.existsSync(configFile)) {
+        hasConfig = true;
       }
+    } catch (configError) {
+      console.warn('Error checking config file:', configError);
+      hasConfig = false;
     }
     
-    res.json({
+    // Safely check PID file and process status
+    try {
+      if (fs.existsSync(pidFile)) {
+        const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
+        pid = parseInt(pidContent);
+        
+        if (!isNaN(pid)) {
+          // Check if PID is still running
+          process.kill(pid, 0); // This throws if process doesn't exist
+          status = 'connected';
+        } else {
+          // Invalid PID in file, clean up
+          fs.unlinkSync(pidFile);
+          status = 'disconnected';
+          pid = null;
+        }
+      }
+    } catch (pidError) {
+      // Process not running or other error, clean up stale PID file
+      try {
+        if (fs.existsSync(pidFile)) {
+          fs.unlinkSync(pidFile);
+        }
+      } catch (cleanupError) {
+        console.warn('Error cleaning up PID file:', cleanupError);
+      }
+      status = 'disconnected';
+      pid = null;
+    }
+    
+    const response = {
       status,
       pid,
       hasConfig,
       timestamp: new Date().toISOString()
-    });
+    };
+    
+    res.json(response);
   } catch (error) {
     console.error('Error checking LogDNA status:', error);
-    res.status(500).json({ error: 'Failed to check LogDNA status' });
+    // Ensure we always send a valid JSON response
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Failed to check LogDNA status',
+        details: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
   }
 });
 
@@ -252,9 +339,15 @@ app.post('/api/mezmo/configure', (req, res) => {
     const envFile = `${configDir}/logdna.env`;
     const yamlFile = `${configDir}/config.yaml`;
     
-    // Ensure config directory exists
+    // Ensure config directories exist with proper permissions
+    const dbDir = '/var/lib/logdna';
+    
     if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
+      fs.mkdirSync(configDir, { recursive: true, mode: 0o755 });
+    }
+    
+    if (!fs.existsSync(dbDir)) {
+      fs.mkdirSync(dbDir, { recursive: true, mode: 0o755 });
     }
     
     // Create environment file with both LOGDNA_ and MZ_ prefixed variables
@@ -330,14 +423,24 @@ startup: {}
     });
   } catch (error) {
     console.error('Error configuring LogDNA:', error);
-    res.status(500).json({ error: 'Failed to configure LogDNA agent' });
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Failed to configure LogDNA agent',
+        details: error.message,
+        code: error.code,
+        timestamp: new Date().toISOString()
+      });
+    }
   }
 });
 
 app.post('/api/mezmo/start', (req, res) => {
   try {
-    // Check if already running
     const pidFile = '/tmp/codeuser/logdna-agent.pid';
+    const logFile = '/tmp/codeuser/logdna-agent.log';
+    const envFile = '/etc/logdna/logdna.env';
+    
+    // Check if already running
     if (fs.existsSync(pidFile)) {
       const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
       try {
@@ -349,43 +452,87 @@ app.post('/api/mezmo/start', (req, res) => {
       }
     }
     
-    // Start the agent
-    const logFile = '/tmp/codeuser/logdna-agent.log';
-    const envFile = '/etc/logdna/logdna.env';
-    
+    // Check if configuration exists
     if (!fs.existsSync(envFile)) {
       return res.status(400).json({ error: 'LogDNA not configured. Please configure first.' });
     }
     
-    // Source environment variables and start agent
-    const startCommand = `
+    // Check if LogDNA agent binary exists
+    if (!fs.existsSync('/usr/bin/logdna-agent')) {
+      return res.status(500).json({ 
+        error: 'LogDNA agent binary not found',
+        details: 'The LogDNA agent is not installed in this container. Install it first or use OTEL Collector instead.'
+      });
+    }
+    
+    try {
+      // Source environment variables and start agent
+      // Note: LogDNA agent might need elevated privileges
+      const startCommand = `
 set -a
 source ${envFile}
 set +a
 nohup /usr/bin/logdna-agent > ${logFile} 2>&1 & echo $! > ${pidFile}
 `;
-    
-    execSync(startCommand, { shell: '/bin/bash' });
-    
-    // Give it a moment to start
-    setTimeout(() => {
-      if (fs.existsSync(pidFile)) {
-        const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
-        console.log('✅ LogDNA agent started with PID:', pid);
-        res.json({ 
-          success: true,
-          message: 'LogDNA agent started', 
-          pid,
-          timestamp: new Date().toISOString()
-        });
-      } else {
-        res.status(500).json({ error: 'Failed to start LogDNA agent' });
-      }
-    }, 1000);
+      
+      execSync(startCommand, { shell: '/bin/bash' });
+      
+      // Give it a moment to start and verify
+      setTimeout(() => {
+        // Check if response hasn't been sent yet
+        if (res.headersSent) {
+          return; // Response already sent, nothing to do
+        }
+        
+        if (fs.existsSync(pidFile)) {
+          const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
+          const pid = parseInt(pidContent);
+          
+          if (!isNaN(pid)) {
+            try {
+              // Check if process is actually running
+              process.kill(pid, 0);
+              console.log('✅ LogDNA agent started with PID:', pid);
+              return res.json({ 
+                success: true,
+                message: 'LogDNA agent started successfully', 
+                pid,
+                timestamp: new Date().toISOString()
+              });
+            } catch (killError) {
+              // Process not running
+              return res.status(500).json({ 
+                error: 'LogDNA agent failed to start',
+                details: 'Process started but is not running. Check logs for details.'
+              });
+            }
+          } else {
+            return res.status(500).json({ 
+              error: 'Invalid PID in pid file',
+              details: `PID file contains: ${pidContent}`
+            });
+          }
+        } else {
+          return res.status(500).json({ 
+            error: 'Failed to start LogDNA agent',
+            details: 'PID file was not created. Check if the binary exists and has proper permissions.'
+          });
+        }
+      }, 1000);
+      
+    } catch (execError) {
+      return res.status(500).json({ 
+        error: 'Failed to execute start command',
+        details: execError.message
+      });
+    }
     
   } catch (error) {
     console.error('Error starting LogDNA agent:', error);
-    res.status(500).json({ error: 'Failed to start LogDNA agent' });
+    return res.status(500).json({ 
+      error: 'Failed to start LogDNA agent',
+      details: error.message
+    });
   }
 });
 
@@ -394,13 +541,27 @@ app.post('/api/mezmo/stop', (req, res) => {
     const pidFile = '/tmp/codeuser/logdna-agent.pid';
     
     if (!fs.existsSync(pidFile)) {
-      return res.json({ message: 'LogDNA agent is not running' });
+      return res.json({ 
+        message: 'LogDNA agent is not running',
+        timestamp: new Date().toISOString()
+      });
     }
     
-    const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+    const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
+    const pid = parseInt(pidContent);
+    
+    if (isNaN(pid)) {
+      // Invalid PID, clean up file
+      fs.unlinkSync(pidFile);
+      return res.json({ 
+        message: 'LogDNA agent was not running (invalid PID)',
+        timestamp: new Date().toISOString()
+      });
+    }
     
     try {
-      process.kill(pid, 'SIGTERM');
+      // Use sudo to kill the process if it was started with elevated privileges
+      execSync(`sudo kill ${pid}`, { stdio: 'inherit' });
       fs.unlinkSync(pidFile);
       console.log('🛑 LogDNA agent stopped');
       res.json({ 
@@ -408,14 +569,37 @@ app.post('/api/mezmo/stop', (req, res) => {
         message: 'LogDNA agent stopped',
         timestamp: new Date().toISOString()
       });
-    } catch (error) {
-      // Process might already be dead
-      fs.unlinkSync(pidFile);
-      res.json({ message: 'LogDNA agent was not running' });
+    } catch (killError) {
+      // Process might already be dead, try regular kill and cleanup
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch (e) {
+        // Ignore if process doesn't exist
+      }
+      
+      // Clean up PID file
+      try {
+        if (fs.existsSync(pidFile)) {
+          fs.unlinkSync(pidFile);
+        }
+      } catch (cleanupError) {
+        console.warn('Error cleaning up PID file:', cleanupError);
+      }
+      
+      res.json({ 
+        message: 'LogDNA agent was not running',
+        timestamp: new Date().toISOString()
+      });
     }
   } catch (error) {
     console.error('Error stopping LogDNA agent:', error);
-    res.status(500).json({ error: 'Failed to stop LogDNA agent' });
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Failed to stop LogDNA agent',
+        details: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
   }
 });
 
@@ -424,7 +608,10 @@ app.get('/api/mezmo/logs', (req, res) => {
     const logFile = '/tmp/codeuser/logdna-agent.log';
     
     if (!fs.existsSync(logFile)) {
-      return res.json({ logs: 'No logs available' });
+      return res.json({ 
+        logs: 'No logs available',
+        timestamp: new Date().toISOString()
+      });
     }
     
     const logs = fs.readFileSync(logFile, 'utf8');
@@ -436,12 +623,26 @@ app.get('/api/mezmo/logs', (req, res) => {
     });
   } catch (error) {
     console.error('Error reading LogDNA logs:', error);
-    res.status(500).json({ error: 'Failed to read LogDNA logs' });
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Failed to read LogDNA logs',
+        details: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
   }
 });
 
 // OpenTelemetry Collector Management
-const generateOTELConfig = ({ logsEnabled, metricsEnabled, tracesEnabled, ingestionKey, host, serviceName, tags, pipelineId, debugLevel }) => {
+const generateOTELConfig = ({ 
+  serviceName, 
+  tags, 
+  debugLevel,
+  // Multi-pipeline configuration
+  logsEnabled, logsIngestionKey, logsPipelineId, logsHost,
+  metricsEnabled, metricsIngestionKey, metricsPipelineId, metricsHost,
+  tracesEnabled, tracesIngestionKey, tracesPipelineId, tracesHost
+}) => {
   const config = {
     receivers: {},
     processors: {
@@ -453,7 +654,8 @@ const generateOTELConfig = ({ logsEnabled, metricsEnabled, tracesEnabled, ingest
         attributes: [
           { key: 'service.name', value: serviceName || 'restaurant-app', action: 'upsert' },
           { key: 'service.version', value: '1.0.0', action: 'upsert' },
-          { key: 'deployment.environment', value: 'demo', action: 'upsert' }
+          { key: 'deployment.environment', value: 'demo', action: 'upsert' },
+          { key: 'service.tags', value: tags || 'restaurant-app,otel', action: 'upsert' }
         ]
       }
     },
@@ -462,108 +664,162 @@ const generateOTELConfig = ({ logsEnabled, metricsEnabled, tracesEnabled, ingest
       pipelines: {},
       telemetry: {
         logs: {
-          level: debugLevel || 'info'  // Default to 'info', allow override
+          level: debugLevel || 'info'
         }
       }
     }
   };
 
-  // Determine if this is a Mezmo Pipeline (has pipeline ID) or legacy LogDNA
-  const isMezmoPipeline = pipelineId && pipelineId.length > 0;
-  const baseEndpoint = isMezmoPipeline 
-    ? `https://pipeline.mezmo.com/v1/${pipelineId}`
-    : `https://${host || 'logs.mezmo.com'}`;
+  console.log('🔧 Multi-Pipeline OTEL Config Generation:');
+  console.log('   Service Name:', serviceName);
+  console.log('   Debug Level:', debugLevel);
 
-  console.log('🔧 OTEL Config Generation:');
-  console.log('   Pipeline Mode:', isMezmoPipeline ? 'Mezmo Pipeline' : 'Legacy LogDNA');
-  console.log('   Base Endpoint:', baseEndpoint);
-  console.log('   Pipeline ID:', pipelineId || 'N/A');
+  // LOGS PIPELINE - Multiple structured log files
+  if (logsEnabled && logsIngestionKey) {
+    const logsHasPipelineId = logsPipelineId && logsPipelineId.length > 0;
+    const logsEndpoint = logsHasPipelineId 
+      ? `https://pipeline.mezmo.com/v1/${logsPipelineId}`
+      : `https://${logsHost || 'logs.mezmo.com'}`;
 
-  // Conditionally add logs pipeline
-  if (logsEnabled) {
+    console.log('   📄 Logs Pipeline:');
+    console.log('     Endpoint:', logsEndpoint);
+    console.log('     Pipeline ID:', logsPipelineId || 'Legacy');
+
+    // File receiver for structured logs
     config.receivers.filelog = {
-      include: ['/tmp/codeuser/*.log'],
-      start_at: 'beginning'
-      // Remove JSON parser since our logs are plain text, not JSON
+      include: [
+        '/tmp/codeuser/access.log',
+        '/tmp/codeuser/events.log', 
+        '/tmp/codeuser/performance.log',
+        '/tmp/codeuser/errors.log',
+        '/tmp/codeuser/app.log'
+      ],
+      start_at: 'beginning',
+      operators: [
+        {
+          type: 'add',
+          field: 'attributes.log_type',
+          value: 'structured'
+        },
+        {
+          type: 'add', 
+          field: 'attributes.service',
+          value: serviceName || 'restaurant-app'
+        }
+      ]
     };
 
-    // Add logging exporter for debugging (limited output)
-    config.exporters['logging'] = {
-      loglevel: 'info'  // Reduce to info to avoid spam
+    // Debug exporters
+    config.exporters['logging/logs'] = {
+      loglevel: 'info'
     };
     
-    // Add file exporter to capture a small sample
-    config.exporters['file'] = {
-      path: '/tmp/codeuser/otel-debug-sample.json',
+    config.exporters['file/logs'] = {
+      path: '/tmp/codeuser/otel-logs-debug.json',
       format: 'json'
     };
 
-    if (isMezmoPipeline) {
-      // Mezmo Pipeline expects OTLP protobuf format - use otlphttp exporter
+    if (logsHasPipelineId) {
+      // Mezmo Pipeline for logs
       config.exporters['otlphttp/logs'] = {
-        logs_endpoint: baseEndpoint,
+        logs_endpoint: logsEndpoint,
         headers: {
-          authorization: ingestionKey,
-          'content-type': 'application/x-protobuf'  // CRITICAL: Required for protobuf format
+          authorization: logsIngestionKey,
+          'content-type': 'application/x-protobuf'
         }
       };
     } else {
-      // Legacy LogDNA configuration - use official Mezmo exporter  
-      config.exporters['mezmo'] = {
+      // Legacy LogDNA for logs
+      config.exporters['mezmo/logs'] = {
         ingest_url: "https://logs.mezmo.com/otel/ingest/rest",
-        ingest_key: ingestionKey
+        ingest_key: logsIngestionKey
       };
     }
 
     config.service.pipelines.logs = {
       receivers: ['filelog'],
       processors: ['resource', 'batch'],
-      exporters: isMezmoPipeline ? ['file', 'otlphttp/logs'] : ['logging', 'mezmo']  // CRITICAL: Added missing otlphttp/logs exporter
+      exporters: logsHasPipelineId 
+        ? ['file/logs', 'otlphttp/logs'] 
+        : ['logging/logs', 'mezmo/logs']
     };
   }
 
-  // Conditionally add metrics pipeline
-  if (metricsEnabled) {
+  // METRICS PIPELINE - System and application metrics
+  if (metricsEnabled && metricsIngestionKey) {
+    const metricsHasPipelineId = metricsPipelineId && metricsPipelineId.length > 0;
+    const metricsEndpoint = metricsHasPipelineId 
+      ? `https://pipeline.mezmo.com/v1/${metricsPipelineId}`
+      : `https://${metricsHost || 'logs.mezmo.com'}`;
+
+    console.log('   📊 Metrics Pipeline:');
+    console.log('     Endpoint:', metricsEndpoint);
+    console.log('     Pipeline ID:', metricsPipelineId || 'Legacy');
+
+    // Host metrics receiver
     config.receivers.hostmetrics = {
       collection_interval: '30s',
       scrapers: {
-        cpu: {},
-        memory: {},
-        disk: {},
-        filesystem: {},
-        network: {}
+        cpu: { metrics: { 'system.cpu.utilization': { enabled: true } } },
+        memory: { metrics: { 'system.memory.utilization': { enabled: true } } },
+        disk: { metrics: { 'system.disk.io': { enabled: true } } },
+        filesystem: { metrics: { 'system.filesystem.utilization': { enabled: true } } },
+        network: { metrics: { 'system.network.io': { enabled: true } } }
       }
     };
 
-    if (isMezmoPipeline) {
-      // Mezmo Pipeline configuration
+    // Metrics-specific logs from Winston
+    config.receivers['filelog/metrics'] = {
+      include: ['/tmp/codeuser/metrics.log'],
+      start_at: 'beginning',
+      operators: [
+        {
+          type: 'add',
+          field: 'attributes.data_type',
+          value: 'metrics'
+        }
+      ]
+    };
+
+    if (metricsHasPipelineId) {
+      // Mezmo Pipeline for metrics
       config.exporters['otlphttp/metrics'] = {
-        endpoint: baseEndpoint,
+        endpoint: metricsEndpoint,
         headers: {
-          authorization: ingestionKey,
-          'content-type': 'application/json'
+          authorization: metricsIngestionKey,
+          'content-type': 'application/x-protobuf'
         }
       };
     } else {
-      // Legacy LogDNA configuration
+      // Legacy LogDNA for metrics
       config.exporters['otlphttp/metrics'] = {
-        endpoint: `${baseEndpoint}/v1/metrics`,
+        endpoint: `${metricsEndpoint}/v1/metrics`,
         headers: {
-          authorization: `Bearer ${ingestionKey}`,
+          authorization: `Bearer ${metricsIngestionKey}`,
           'x-mezmo-service': serviceName || 'restaurant-app'
         }
       };
     }
 
     config.service.pipelines.metrics = {
-      receivers: ['hostmetrics'],
+      receivers: ['hostmetrics', 'filelog/metrics'],
       processors: ['resource', 'batch'],
       exporters: ['otlphttp/metrics']
     };
   }
 
-  // Conditionally add traces pipeline
-  if (tracesEnabled) {
+  // TRACES PIPELINE - Application tracing
+  if (tracesEnabled && tracesIngestionKey) {
+    const tracesHasPipelineId = tracesPipelineId && tracesPipelineId.length > 0;
+    const tracesEndpoint = tracesHasPipelineId 
+      ? `https://pipeline.mezmo.com/v1/${tracesPipelineId}`
+      : `https://${tracesHost || 'logs.mezmo.com'}`;
+
+    console.log('   🔍 Traces Pipeline:');
+    console.log('     Endpoint:', tracesEndpoint);
+    console.log('     Pipeline ID:', tracesPipelineId || 'Legacy');
+
+    // OTLP receiver for traces
     config.receivers.otlp = {
       protocols: {
         grpc: {
@@ -575,21 +831,21 @@ const generateOTELConfig = ({ logsEnabled, metricsEnabled, tracesEnabled, ingest
       }
     };
 
-    if (isMezmoPipeline) {
-      // Mezmo Pipeline configuration
+    if (tracesHasPipelineId) {
+      // Mezmo Pipeline for traces
       config.exporters['otlphttp/traces'] = {
-        endpoint: baseEndpoint,
+        endpoint: tracesEndpoint,
         headers: {
-          authorization: ingestionKey,
-          'content-type': 'application/json'
+          authorization: tracesIngestionKey,
+          'content-type': 'application/x-protobuf'
         }
       };
     } else {
-      // Legacy LogDNA configuration
+      // Legacy LogDNA for traces
       config.exporters['otlphttp/traces'] = {
-        endpoint: `${baseEndpoint}/v1/traces`,
+        endpoint: `${tracesEndpoint}/v1/traces`,
         headers: {
-          authorization: `Bearer ${ingestionKey}`,
+          authorization: `Bearer ${tracesIngestionKey}`,
           'x-mezmo-service': serviceName || 'restaurant-app'
         }
       };
@@ -602,6 +858,7 @@ const generateOTELConfig = ({ logsEnabled, metricsEnabled, tracesEnabled, ingest
     };
   }
 
+  console.log('   ✅ Multi-pipeline configuration generated');
   return config;
 };
 
@@ -665,24 +922,24 @@ app.get('/api/otel/status', (req, res) => {
 app.post('/api/otel/configure', (req, res) => {
   try {
     const { 
-      ingestionKey, 
-      host, 
       serviceName, 
       tags,
-      pipelineId,
-      logsEnabled, 
-      metricsEnabled, 
-      tracesEnabled,
-      debugLevel
+      debugLevel,
+      // Multi-pipeline parameters
+      logsEnabled, logsIngestionKey, logsPipelineId, logsHost,
+      metricsEnabled, metricsIngestionKey, metricsPipelineId, metricsHost,
+      tracesEnabled, tracesIngestionKey, tracesPipelineId, tracesHost
     } = req.body;
     
-    if (!ingestionKey) {
-      return res.status(400).json({ error: 'Ingestion key is required' });
-    }
+    // Validate that at least one pipeline is enabled with a key
+    const hasValidLogs = logsEnabled && logsIngestionKey;
+    const hasValidMetrics = metricsEnabled && metricsIngestionKey;
+    const hasValidTraces = tracesEnabled && tracesIngestionKey;
     
-    // Ensure at least one pipeline is enabled
-    if (!logsEnabled && !metricsEnabled && !tracesEnabled) {
-      return res.status(400).json({ error: 'At least one pipeline (logs, metrics, or traces) must be enabled' });
+    if (!hasValidLogs && !hasValidMetrics && !hasValidTraces) {
+      return res.status(400).json({ 
+        error: 'At least one pipeline must be enabled with a valid ingestion key' 
+      });
     }
     
     const configDir = '/etc/otelcol';
@@ -693,30 +950,50 @@ app.post('/api/otel/configure', (req, res) => {
       fs.mkdirSync(configDir, { recursive: true });
     }
     
-    // Generate dynamic configuration based on enabled pipelines
+    // Generate dynamic multi-pipeline configuration
     const config = generateOTELConfig({
-      logsEnabled,
-      metricsEnabled, 
-      tracesEnabled,
-      ingestionKey,
-      host: host || 'logs.mezmo.com',
       serviceName: serviceName || 'restaurant-app',
       tags: tags || 'restaurant-app,otel',
-      pipelineId: pipelineId || '',
-      debugLevel: debugLevel || 'info'
+      debugLevel: debugLevel || 'info',
+      // Logs pipeline
+      logsEnabled: hasValidLogs,
+      logsIngestionKey,
+      logsPipelineId,
+      logsHost: logsHost || 'logs.mezmo.com',
+      // Metrics pipeline
+      metricsEnabled: hasValidMetrics,
+      metricsIngestionKey,
+      metricsPipelineId,
+      metricsHost: metricsHost || 'logs.mezmo.com',
+      // Traces pipeline
+      tracesEnabled: hasValidTraces,
+      tracesIngestionKey,
+      tracesPipelineId,
+      tracesHost: tracesHost || 'logs.mezmo.com'
     });
     
     // Write configuration file
     const yamlContent = yaml.dump(config, { indent: 2 });
     fs.writeFileSync(configFile, yamlContent);
     
-    console.log('📊 OpenTelemetry Collector configuration updated');
-    console.log('   Enabled pipelines:', { logsEnabled, metricsEnabled, tracesEnabled });
+    console.log('📊 Multi-Pipeline OpenTelemetry Collector configuration updated');
+    console.log('   Logs Pipeline:', hasValidLogs ? `✅ ${logsPipelineId || 'Legacy'}` : '❌ Disabled');
+    console.log('   Metrics Pipeline:', hasValidMetrics ? `✅ ${metricsPipelineId || 'Legacy'}` : '❌ Disabled');
+    console.log('   Traces Pipeline:', hasValidTraces ? `✅ ${tracesPipelineId || 'Legacy'}` : '❌ Disabled');
     
     res.json({
       success: true,
-      message: 'OTEL Collector configuration saved',
-      enabledPipelines: { logsEnabled, metricsEnabled, tracesEnabled },
+      message: 'Multi-pipeline OTEL Collector configuration saved',
+      enabledPipelines: { 
+        logs: hasValidLogs, 
+        metrics: hasValidMetrics, 
+        traces: hasValidTraces 
+      },
+      pipelineDetails: {
+        logs: hasValidLogs ? { pipelineId: logsPipelineId, host: logsHost } : null,
+        metrics: hasValidMetrics ? { pipelineId: metricsPipelineId, host: metricsHost } : null,
+        traces: hasValidTraces ? { pipelineId: tracesPipelineId, host: tracesHost } : null
+      },
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -1037,14 +1314,96 @@ app.get('/api/test/performance', (req, res) => {
   }, delay);
 });
 
-// Error handling middleware
+// Add new logging endpoints for dynamic configuration
+app.get('/api/logging/levels', (req, res) => {
+  res.json(getLogLevels());
+});
+
+app.post('/api/logging/levels', (req, res) => {
+  const { loggerName, level } = req.body;
+  
+  if (!loggerName || !level) {
+    return res.status(400).json({ error: 'Logger name and level are required' });
+  }
+  
+  const validLevels = ['error', 'warn', 'info', 'debug', 'trace'];
+  if (!validLevels.includes(level.toLowerCase())) {
+    return res.status(400).json({ error: 'Invalid log level. Must be one of: ' + validLevels.join(', ') });
+  }
+  
+  updateLogLevel(loggerName, level.toLowerCase());
+  
+  logBusinessEvent('log_level_changed', 'configure', {
+    loggerName,
+    level: level.toLowerCase()
+  }, req);
+  
+  res.json({ 
+    success: true, 
+    message: `Log level for ${loggerName} updated to ${level}`,
+    levels: getLogLevels()
+  });
+});
+
+// Log beacon endpoint for client-side logs
+app.post('/api/log-beacon', (req, res) => {
+  try {
+    const logFile = req.body.get('logFile');
+    const filePath = req.body.get('filePath') || '/tmp/codeuser/client.log';
+    const loggerType = req.body.get('loggerType') || 'client';
+    
+    if (logFile) {
+      const logContent = logFile.stream ? logFile.stream.read() : logFile;
+      
+      // Write to appropriate log file
+      fs.appendFileSync(filePath.replace('/logs/', '/tmp/codeuser/'), logContent);
+      
+      appLogger.debug('Client log received via beacon', {
+        loggerType,
+        filePath,
+        size: logContent.length
+      });
+    }
+    
+    res.status(204).send(); // No content response for beacon
+  } catch (error) {
+    appLogger.error('Error processing log beacon', { error: error.message });
+    res.status(500).json({ error: 'Failed to process log beacon' });
+  }
+});
+
+// Structured error handling middleware
+app.use(errorLoggingMiddleware);
+
+// Final error handler
 app.use((err, req, res, next) => {
-  console.error('Server error:', err);
-  res.status(500).json({ error: 'Internal server error' });
+  // Winston logging is handled by errorLoggingMiddleware
+  // This is just the final response handler
+  if (!res.headersSent) {
+    res.status(500).json({ 
+      error: 'Internal server error',
+      requestId: req.requestId || 'unknown',
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`API available at http://localhost:${PORT}/api`);
+  appLogger.info('Server started successfully', {
+    port: PORT,
+    environment: process.env.NODE_ENV || 'development',
+    pid: process.pid,
+    logLevels: getLogLevels()
+  });
+  
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📡 API available at http://localhost:${PORT}/api`);
+  console.log(`📊 Logging levels:`, getLogLevels());
+  
+  // Log server startup as business event
+  logBusinessEvent('server_started', 'startup', {
+    port: PORT,
+    timestamp: new Date().toISOString()
+  });
 });

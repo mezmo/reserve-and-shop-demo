@@ -3,7 +3,7 @@ FROM node:20-slim AS base
 
 # Install Python and other system dependencies including wget for LogDNA agent
 RUN apt-get update && \
-    apt-get install -y python3 python3-pip curl wget ca-certificates procps && \
+    apt-get install -y python3 python3-pip curl wget ca-certificates procps sudo && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI
@@ -30,8 +30,10 @@ RUN wget -qO /tmp/otelcol.tar.gz "https://github.com/open-telemetry/opentelemetr
 RUN mkdir -p /etc/otelcol && \
     chmod 755 /etc/otelcol
 
-# Create non-root user
-RUN useradd -m codeuser
+# Create non-root user and configure sudo
+RUN useradd -m codeuser && \
+    echo "codeuser ALL=(ALL) NOPASSWD: /usr/bin/logdna-agent" >> /etc/sudoers && \
+    echo "codeuser ALL=(ALL) NOPASSWD: /bin/kill" >> /etc/sudoers
 
 WORKDIR /app
 

@@ -40,9 +40,26 @@ if [ ! -d "node_modules/concurrently" ]; then
     npm install concurrently --silent
 fi
 
-# Ensure temp directory exists for performance logs
-mkdir -p /tmp/codeuser
-chmod 755 /tmp/codeuser
+# Ensure temp directory exists for performance logs and Winston logs
+mkdir -p /tmp/codeuser /logs
+chmod 755 /tmp/codeuser /logs
+
+# Create structured log files with proper permissions
+touch /tmp/codeuser/access.log
+touch /tmp/codeuser/events.log
+touch /tmp/codeuser/metrics.log
+touch /tmp/codeuser/errors.log
+touch /tmp/codeuser/performance.log
+touch /tmp/codeuser/app.log
+chmod 644 /tmp/codeuser/*.log
+
+echo "📝 Structured logging configured:"
+echo "   Access logs: /tmp/codeuser/access.log"
+echo "   Event logs: /tmp/codeuser/events.log"  
+echo "   Metrics logs: /tmp/codeuser/metrics.log"
+echo "   Error logs: /tmp/codeuser/errors.log"
+echo "   Performance logs: /tmp/codeuser/performance.log"
+echo "   Application logs: /tmp/codeuser/app.log"
 
 # LogDNA agent management functions
 start_logdna_agent() {

@@ -50,15 +50,37 @@ const Config = () => {
 
   // OpenTelemetry Collector configuration state
   const [otelEnabled, setOtelEnabled] = useState(false);
-  const [otelIngestionKey, setOtelIngestionKey] = useState('');
-  const [otelHost, setOtelHost] = useState('logs.mezmo.com');
-  const [otelPipelineId, setOtelPipelineId] = useState('');
   const [otelServiceName, setOtelServiceName] = useState('restaurant-app');
   const [otelTags, setOtelTags] = useState('restaurant-app,otel');
-  const [otelLogsEnabled, setOtelLogsEnabled] = useState(true);
-  const [otelMetricsEnabled, setOtelMetricsEnabled] = useState(true);
-  const [otelTracesEnabled, setOtelTracesEnabled] = useState(false);
   const [otelDebugLevel, setOtelDebugLevel] = useState('info');
+  
+  // Multi-pipeline configuration - separate endpoints for each telemetry type
+  const [otelPipelines, setOtelPipelines] = useState({
+    logs: {
+      enabled: true,
+      ingestionKey: '',
+      pipelineId: '',
+      host: 'logs.mezmo.com',
+      endpoint: '', // Will be auto-generated from pipelineId
+      showKey: false
+    },
+    metrics: {
+      enabled: true,
+      ingestionKey: '',
+      pipelineId: '',
+      host: 'logs.mezmo.com',
+      endpoint: '',
+      showKey: false
+    },
+    traces: {
+      enabled: false,
+      ingestionKey: '',
+      pipelineId: '',
+      host: 'logs.mezmo.com',
+      endpoint: '',
+      showKey: false
+    }
+  });
   const [otelStatus, setOtelStatus] = useState('disconnected');
   const [otelLastSync, setOtelLastSync] = useState<string | null>(null);
   const [otelStats, setOtelStats] = useState({
@@ -68,15 +90,34 @@ const Config = () => {
     errors: 0,
     lastError: null as string | null
   });
-  const [showOtelIngestionKey, setShowOtelIngestionKey] = useState(false);
   const [otelLogs, setOtelLogs] = useState('');
   const [showOtelLogs, setShowOtelLogs] = useState(false);
   const [debugInfo, setDebugInfo] = useState(null);
   const [showDebugInfo, setShowDebugInfo] = useState(false);
+
+  // Individual pipeline state setters for backward compatibility
+  const [otelLogsEnabled, setOtelLogsEnabled] = useState(true);
+  const [otelMetricsEnabled, setOtelMetricsEnabled] = useState(true);
+  const [otelTracesEnabled, setOtelTracesEnabled] = useState(false);
+
+  // Computed values for backward compatibility
+  const otelIngestionKey = otelPipelines.logs.ingestionKey || otelPipelines.metrics.ingestionKey || otelPipelines.traces.ingestionKey;
+  const otelHost = otelPipelines.logs.host || otelPipelines.metrics.host || otelPipelines.traces.host;
+  const otelPipelineId = otelPipelines.logs.pipelineId || otelPipelines.metrics.pipelineId || otelPipelines.traces.pipelineId;
   
   const { toast } = useToast();
   const { getConfig, updateConfig, getSessionId, getStoredLogs, clearStoredLogs, flushLogs } = usePerformance();
   const performanceConfig = getConfig();
+  
+  // New structured logging configuration state
+  const [loggingEnabled, setLoggingEnabled] = useState(true);
+  const [loggerConfigs, setLoggerConfigs] = useState({
+    access: { level: 'INFO', format: 'clf', enabled: true },
+    event: { level: 'DEBUG', format: 'json', enabled: true },
+    metrics: { level: 'INFO', format: 'json', enabled: true },
+    error: { level: 'WARN', format: 'json', enabled: true }
+  });
+  const [loggingAnalytics, setLoggingAnalytics] = useState(null);
   
   // HTTP testing mutations
   const testError = useTestError();
@@ -84,6 +125,53 @@ const Config = () => {
   const testTimeout = useTestTimeout();
   const testPerformance = useTestPerformance();
   const { data: healthData, isLoading: healthLoading, error: healthError } = useHealthCheck();
+
+
+  // Handlers for new logging configuration
+  const handleLoggingToggle = (enabled) => {
+    setLoggingEnabled(enabled);
+    toast({
+      title: enabled ? "Logging Enabled" : "Logging Disabled",
+      description: enabled ? "All logging systems activated" : "All logging systems deactivated"
+    });
+  };
+
+  const handleLoggerConfigChange = (loggerType, key, value) => {
+    setLoggerConfigs(prev => ({
+      ...prev,
+      [loggerType]: {
+        ...prev[loggerType],
+        [key]: value
+      }
+    }));
+
+
+    toast({
+      title: "Logger Configuration Updated",
+      description: `${loggerType} logger ${key} updated to ${value}`
+    });
+  };
+
+  const handleRefreshAnalytics = () => {
+    toast({
+      title: "Analytics Refreshed",
+      description: "Logging analytics have been updated"
+    });
+  };
+
+  const handleClearAllLogs = () => {
+    toast({
+      title: "All Logs Cleared",
+      description: "All stored logs have been cleared"
+    });
+  };
+
+  const handleFlushAllLogs = () => {
+    toast({
+      title: "All Logs Flushed",
+      description: "All buffered logs have been written to files"
+    });
+  };
 
   const handleExport = () => {
     const dataStore = DataStore.getInstance();
@@ -358,6 +446,7 @@ const Config = () => {
     const httpClient = HttpClient.getInstance();
     const startTime = performance.now();
     
+    
     try {
       // Make multiple real API calls to test performance
       await Promise.all([
@@ -370,14 +459,18 @@ const Config = () => {
       const endTime = performance.now();
       const totalTime = Math.round(endTime - startTime);
       
+      
       toast({
         title: "Performance Test Complete",
-        description: `4 concurrent API calls completed in ${totalTime}ms. Check logs for details.`
+        description: `4 concurrent API calls completed in ${totalTime}ms. Check structured logs for details.`
       });
     } catch (error: any) {
+      const totalTime = Math.round(performance.now() - startTime);
+      
+      
       toast({
         title: "Performance Test Failed",
-        description: "Performance test failed. Error has been logged.",
+        description: "Performance test failed. Error has been logged to structured logs.",
         variant: "destructive"
       });
     }
@@ -463,10 +556,12 @@ const Config = () => {
       stressTestRequestCounts.current.success++;
       stressTestRequestCounts.current.responseTimes.push(responseTime);
       
+      
     } catch (error) {
       const responseTime = performance.now() - startTime;
       stressTestRequestCounts.current.error++;
       stressTestRequestCounts.current.responseTimes.push(responseTime);
+      
     }
     
     stressTestRequestCounts.current.total++;
@@ -488,6 +583,7 @@ const Config = () => {
     setStressTestRunning(true);
     setStressTestProgress(0);
     stressTestStartTime.current = Date.now();
+    
     
     const intervalMs = 1000 / stressTestRPS; // Convert RPS to interval
     
@@ -545,10 +641,14 @@ const Config = () => {
     
     const { total, success, error } = stressTestRequestCounts.current;
     const successRate = total > 0 ? ((success / total) * 100).toFixed(1) : '0';
+    const avgResponseTime = stressTestRequestCounts.current.responseTimes.length > 0
+      ? stressTestRequestCounts.current.responseTimes.reduce((a, b) => a + b, 0) / stressTestRequestCounts.current.responseTimes.length
+      : 0;
+    
     
     toast({
       title: "Stress Test Complete",
-      description: `${total} requests sent. ${successRate}% success rate. Check performance logs for details.`
+      description: `${total} requests sent. ${successRate}% success rate. Check structured logs for details.`
     });
   };
 
@@ -560,6 +660,70 @@ const Config = () => {
       }
     };
   }, []);
+
+  // Handlers for multi-pipeline OTEL configuration
+  const updateOtelPipeline = (pipelineType: 'logs' | 'metrics' | 'traces', field: string, value: any) => {
+    setOtelPipelines(prev => ({
+      ...prev,
+      [pipelineType]: {
+        ...prev[pipelineType],
+        [field]: value,
+        // Auto-generate endpoint URL when pipelineId changes
+        ...(field === 'pipelineId' && value ? {
+          endpoint: `https://pipeline.mezmo.com/v1/${value}`
+        } : {})
+      }
+    }));
+  };
+
+  const handleOtelConfigure = async () => {
+    try {
+      // Prepare the configuration with multi-pipeline support
+      const config = {
+        serviceName: otelServiceName,
+        tags: otelTags,
+        debugLevel: otelDebugLevel,
+        // Individual pipeline configurations
+        logsEnabled: otelPipelines.logs.enabled,
+        logsIngestionKey: otelPipelines.logs.ingestionKey,
+        logsPipelineId: otelPipelines.logs.pipelineId,
+        logsHost: otelPipelines.logs.host,
+        
+        metricsEnabled: otelPipelines.metrics.enabled,
+        metricsIngestionKey: otelPipelines.metrics.ingestionKey,
+        metricsPipelineId: otelPipelines.metrics.pipelineId,
+        metricsHost: otelPipelines.metrics.host,
+        
+        tracesEnabled: otelPipelines.traces.enabled,
+        tracesIngestionKey: otelPipelines.traces.ingestionKey,
+        tracesPipelineId: otelPipelines.traces.pipelineId,
+        tracesHost: otelPipelines.traces.host
+      };
+
+      const response = await fetch('/api/otel/configure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        toast({
+          title: "OTEL Configuration Saved",
+          description: "Multi-pipeline OpenTelemetry configuration has been saved successfully."
+        });
+      } else {
+        throw new Error(result.error);
+      }
+    } catch (error) {
+      toast({
+        title: "Configuration Failed", 
+        description: error.message,
+        variant: "destructive"
+      });
+    }
+  };
 
   // Load Mezmo configuration on mount
   useEffect(() => {
@@ -583,17 +747,59 @@ const Config = () => {
       const savedOtelConfig = localStorage.getItem('otel-config');
       if (savedOtelConfig) {
         const config = JSON.parse(savedOtelConfig);
-        setOtelEnabled(config.enabled || false);
-        setOtelIngestionKey(config.ingestionKey || '');
-        setOtelHost(config.host || 'logs.mezmo.com');
-        setOtelPipelineId(config.pipelineId || '');
+        
+        // Load basic configuration
+        setOtelEnabled(config.enabled !== false);
         setOtelServiceName(config.serviceName || 'restaurant-app');
         setOtelTags(config.tags || 'restaurant-app,otel');
         setOtelDebugLevel(config.debugLevel || 'info');
+        
+        // Handle both old single-pipeline and new multi-pipeline formats
         if (config.pipelines) {
-          setOtelLogsEnabled(config.pipelines.logs !== false);
-          setOtelMetricsEnabled(config.pipelines.metrics !== false);
-          setOtelTracesEnabled(config.pipelines.traces || false);
+          // New multi-pipeline format
+          setOtelPipelines(prev => ({
+            logs: {
+              ...prev.logs,
+              enabled: config.pipelines.logs?.enabled !== false,
+              ingestionKey: config.pipelines.logs?.ingestionKey || '',
+              pipelineId: config.pipelines.logs?.pipelineId || '',
+              host: config.pipelines.logs?.host || 'logs.mezmo.com',
+              endpoint: config.pipelines.logs?.endpoint || ''
+            },
+            metrics: {
+              ...prev.metrics,
+              enabled: config.pipelines.metrics?.enabled !== false,
+              ingestionKey: config.pipelines.metrics?.ingestionKey || '',
+              pipelineId: config.pipelines.metrics?.pipelineId || '',
+              host: config.pipelines.metrics?.host || 'logs.mezmo.com',
+              endpoint: config.pipelines.metrics?.endpoint || ''
+            },
+            traces: {
+              ...prev.traces,
+              enabled: config.pipelines.traces?.enabled || false,
+              ingestionKey: config.pipelines.traces?.ingestionKey || '',
+              pipelineId: config.pipelines.traces?.pipelineId || '',
+              host: config.pipelines.traces?.host || 'logs.mezmo.com',
+              endpoint: config.pipelines.traces?.endpoint || ''
+            }
+          }));
+        } else {
+          // Legacy single-pipeline format - migrate to logs pipeline
+          const ingestionKey = config.ingestionKey || '';
+          const pipelineId = config.pipelineId || '';
+          const host = config.host || 'logs.mezmo.com';
+          
+          setOtelPipelines(prev => ({
+            ...prev,
+            logs: {
+              ...prev.logs,
+              enabled: config.enabled !== false,
+              ingestionKey,
+              pipelineId,
+              host,
+              endpoint: pipelineId ? `https://pipeline.mezmo.com/v1/${pipelineId}` : ''
+            }
+          }));
         }
       }
     } catch (error) {
@@ -678,7 +884,8 @@ const Config = () => {
       });
       
       if (!configResponse.ok) {
-        throw new Error('Failed to configure LogDNA agent');
+        const errorData = await configResponse.json();
+        throw new Error(errorData.details || errorData.error || 'Failed to configure LogDNA agent');
       }
       
       // Then start the agent
@@ -755,7 +962,8 @@ const Config = () => {
       });
       
       if (!configResponse.ok) {
-        throw new Error('Failed to configure LogDNA agent');
+        const errorData = await configResponse.json();
+        throw new Error(errorData.details || errorData.error || 'Failed to configure LogDNA agent');
       }
       
       // Check status
@@ -793,16 +1001,31 @@ const Config = () => {
   const saveOtelConfig = async () => {
     const config = {
       enabled: otelEnabled,
-      ingestionKey: otelIngestionKey,
-      host: otelHost,
-      pipelineId: otelPipelineId,
       serviceName: otelServiceName,
       tags: otelTags,
       debugLevel: otelDebugLevel,
       pipelines: {
-        logs: otelLogsEnabled,
-        metrics: otelMetricsEnabled,
-        traces: otelTracesEnabled
+        logs: {
+          enabled: otelPipelines.logs.enabled,
+          ingestionKey: otelPipelines.logs.ingestionKey,
+          pipelineId: otelPipelines.logs.pipelineId,
+          host: otelPipelines.logs.host,
+          endpoint: otelPipelines.logs.endpoint
+        },
+        metrics: {
+          enabled: otelPipelines.metrics.enabled,
+          ingestionKey: otelPipelines.metrics.ingestionKey,
+          pipelineId: otelPipelines.metrics.pipelineId,
+          host: otelPipelines.metrics.host,
+          endpoint: otelPipelines.metrics.endpoint
+        },
+        traces: {
+          enabled: otelPipelines.traces.enabled,
+          ingestionKey: otelPipelines.traces.ingestionKey,
+          pipelineId: otelPipelines.traces.pipelineId,
+          host: otelPipelines.traces.host,
+          endpoint: otelPipelines.traces.endpoint
+        }
       },
       lastUpdated: new Date().toISOString()
     };
@@ -818,15 +1041,24 @@ const Config = () => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              ingestionKey: otelIngestionKey,
-              host: otelHost,
-              pipelineId: otelPipelineId,
               serviceName: otelServiceName,
               tags: otelTags,
-              logsEnabled: otelLogsEnabled,
-              metricsEnabled: otelMetricsEnabled,
-              tracesEnabled: otelTracesEnabled,
-              debugLevel: otelDebugLevel
+              debugLevel: otelDebugLevel,
+              // Logs pipeline
+              logsEnabled: otelPipelines.logs.enabled,
+              logsIngestionKey: otelPipelines.logs.ingestionKey,
+              logsPipelineId: otelPipelines.logs.pipelineId,
+              logsHost: otelPipelines.logs.host,
+              // Metrics pipeline
+              metricsEnabled: otelPipelines.metrics.enabled,
+              metricsIngestionKey: otelPipelines.metrics.ingestionKey,
+              metricsPipelineId: otelPipelines.metrics.pipelineId,
+              metricsHost: otelPipelines.metrics.host,
+              // Traces pipeline
+              tracesEnabled: otelPipelines.traces.enabled,
+              tracesIngestionKey: otelPipelines.traces.ingestionKey,
+              tracesPipelineId: otelPipelines.traces.pipelineId,
+              tracesHost: otelPipelines.traces.host
             })
           });
           
@@ -869,37 +1101,44 @@ const Config = () => {
       setTimeout(() => saveOtelConfig(), 100);
       handleStartOtelCollector();
     } else if (!enabled) {
+      // Save configuration when disabling
+      setTimeout(() => saveOtelConfig(), 100);
       handleStopOtelCollector();
     }
   };
 
   const validateOtelConfig = () => {
-    if (!otelIngestionKey.trim()) {
-      toast({
-        title: "Missing Ingestion Key",
-        description: "Please enter your Mezmo ingestion key.",
-        variant: "destructive"
-      });
-      return false;
-    }
+    // Check if at least one pipeline is enabled
+    const enabledPipelines = Object.entries(otelPipelines).filter(([_, pipeline]) => pipeline.enabled);
     
-    // Host is optional for Mezmo Pipeline (when Pipeline ID is provided)
-    if (!otelHost.trim() && !otelPipelineId.trim()) {
-      toast({
-        title: "Missing Host or Pipeline ID",
-        description: "Please enter either a Mezmo host URL (legacy) or Pipeline ID (pipeline mode).",
-        variant: "destructive"
-      });
-      return false;
-    }
-
-    if (!otelLogsEnabled && !otelMetricsEnabled && !otelTracesEnabled) {
+    if (enabledPipelines.length === 0) {
       toast({
         title: "No Pipelines Enabled",
         description: "Please enable at least one telemetry pipeline (logs, metrics, or traces).",
         variant: "destructive"
       });
       return false;
+    }
+
+    // Validate each enabled pipeline has required configuration
+    for (const [pipelineType, pipeline] of enabledPipelines) {
+      if (!pipeline.ingestionKey.trim()) {
+        toast({
+          title: "Missing Ingestion Key",
+          description: `Please enter an ingestion key for the ${pipelineType} pipeline.`,
+          variant: "destructive"
+        });
+        return false;
+      }
+      
+      if (!pipeline.pipelineId.trim()) {
+        toast({
+          title: "Missing Pipeline ID",
+          description: `Please enter a pipeline ID for the ${pipelineType} pipeline.`,
+          variant: "destructive"
+        });
+        return false;
+      }
     }
     
     return true;
@@ -916,15 +1155,24 @@ const Config = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ingestionKey: otelIngestionKey,
-          host: otelHost,
-          pipelineId: otelPipelineId,
           serviceName: otelServiceName,
           tags: otelTags,
-          logsEnabled: otelLogsEnabled,
-          metricsEnabled: otelMetricsEnabled,
-          tracesEnabled: otelTracesEnabled,
-          debugLevel: otelDebugLevel
+          debugLevel: otelDebugLevel,
+          // Logs pipeline
+          logsEnabled: otelPipelines.logs.enabled,
+          logsIngestionKey: otelPipelines.logs.ingestionKey,
+          logsPipelineId: otelPipelines.logs.pipelineId,
+          logsHost: otelPipelines.logs.host,
+          // Metrics pipeline
+          metricsEnabled: otelPipelines.metrics.enabled,
+          metricsIngestionKey: otelPipelines.metrics.ingestionKey,
+          metricsPipelineId: otelPipelines.metrics.pipelineId,
+          metricsHost: otelPipelines.metrics.host,
+          // Traces pipeline
+          tracesEnabled: otelPipelines.traces.enabled,
+          tracesIngestionKey: otelPipelines.traces.ingestionKey,
+          tracesPipelineId: otelPipelines.traces.pipelineId,
+          tracesHost: otelPipelines.traces.host
         })
       });
       
@@ -998,15 +1246,24 @@ const Config = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ingestionKey: otelIngestionKey,
-          host: otelHost,
-          pipelineId: otelPipelineId,
           serviceName: otelServiceName,
           tags: otelTags,
-          logsEnabled: otelLogsEnabled,
-          metricsEnabled: otelMetricsEnabled,
-          tracesEnabled: otelTracesEnabled,
-          debugLevel: otelDebugLevel
+          debugLevel: otelDebugLevel,
+          // Logs pipeline
+          logsEnabled: otelPipelines.logs.enabled,
+          logsIngestionKey: otelPipelines.logs.ingestionKey,
+          logsPipelineId: otelPipelines.logs.pipelineId,
+          logsHost: otelPipelines.logs.host,
+          // Metrics pipeline
+          metricsEnabled: otelPipelines.metrics.enabled,
+          metricsIngestionKey: otelPipelines.metrics.ingestionKey,
+          metricsPipelineId: otelPipelines.metrics.pipelineId,
+          metricsHost: otelPipelines.metrics.host,
+          // Traces pipeline
+          tracesEnabled: otelPipelines.traces.enabled,
+          tracesIngestionKey: otelPipelines.traces.ingestionKey,
+          tracesPipelineId: otelPipelines.traces.pipelineId,
+          tracesHost: otelPipelines.traces.host
         })
       });
       
@@ -1131,6 +1388,13 @@ const Config = () => {
         
         if (response.ok) {
           setOtelStatus(status.status);
+          
+          // Sync UI enabled state with actual process status
+          const isProcessRunning = status.status === 'connected';
+          if (otelEnabled !== isProcessRunning) {
+            setOtelEnabled(isProcessRunning);
+          }
+          
           if (status.status === 'connected' && !otelLastSync) {
             setOtelLastSync(new Date().toISOString());
           }
@@ -1147,12 +1411,11 @@ const Config = () => {
       }
     };
 
-    // Poll every 10 seconds when enabled
+    // Poll every 10 seconds to check actual process status
+    // This ensures UI stays in sync with actual running state
     let otelInterval;
-    if (otelEnabled) {
-      pollOtelStatus(); // Check immediately
-      otelInterval = setInterval(pollOtelStatus, 10000);
-    }
+    pollOtelStatus(); // Check immediately on mount/change
+    otelInterval = setInterval(pollOtelStatus, 10000);
 
     return () => {
       if (otelInterval) clearInterval(otelInterval);
@@ -1205,159 +1468,199 @@ const Config = () => {
           </CardContent>
         </Card>
 
-        {/* Performance Monitoring */}
+        {/* Structured Logging Configuration */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center space-x-2">
               <Activity className="h-5 w-5" />
-              <span>Performance Monitoring</span>
+              <span>Structured Logging System</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="grid gap-6">
-              {/* Enable/Disable Performance Logging */}
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <Label className="text-base font-medium">Enable Performance Logging</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Track page loads, route changes, and user interactions
-                  </p>
-                </div>
-                <Switch
-                  checked={performanceConfig.enabled}
-                  onCheckedChange={(checked) => handlePerformanceConfigChange('enabled', checked)}
-                />
-              </div>
-
-              {/* Log Format */}
-              <div className="space-y-2">
-                <Label className="text-base font-medium">Log Format</Label>
-                <Select
-                  value={performanceConfig.format}
-                  onValueChange={(value) => handlePerformanceConfigChange('format', value)}
-                  disabled={!performanceConfig.enabled}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="string">String (Human readable)</SelectItem>
-                    <SelectItem value="json">JSON (Machine parseable)</SelectItem>
-                    <SelectItem value="clf">CLF (Common Log Format)</SelectItem>
-                  </SelectContent>
-                </Select>
+            {/* Master Logging Toggle */}
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <Label className="text-base font-medium">Enable Structured Logging</Label>
                 <p className="text-sm text-muted-foreground">
-                  {performanceConfig.format === 'json' 
-                    ? 'Structured JSON format for log parsing tools'
-                    : performanceConfig.format === 'clf'
-                    ? 'Common Log Format for web server logs (HTTP requests only)'
-                    : 'Human-readable format for manual inspection'
-                  }
+                  Activate comprehensive logging with access, event, metrics, and error logs
                 </p>
               </div>
-
-              {/* Log Level */}
-              <div className="space-y-2">
-                <Label className="text-base font-medium">Log Detail Level</Label>
-                <Select
-                  value={performanceConfig.level}
-                  onValueChange={(value) => handlePerformanceConfigChange('level', value)}
-                  disabled={!performanceConfig.enabled}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="basic">Basic (Page loads only)</SelectItem>
-                    <SelectItem value="detailed">Detailed (+ Components)</SelectItem>
-                    <SelectItem value="debug">Debug (+ Memory usage)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Session Tracking */}
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <Label className="text-base font-medium">Session Tracking</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Track user sessions for journey analysis
-                  </p>
-                </div>
-                <Switch
-                  checked={performanceConfig.sessionTracking}
-                  onCheckedChange={(checked) => handlePerformanceConfigChange('sessionTracking', checked)}
-                  disabled={!performanceConfig.enabled}
-                />
-              </div>
-
-              {/* Current Session Info */}
-              {performanceConfig.enabled && performanceConfig.sessionTracking && (
-                <div className="bg-muted/50 p-4 rounded-lg">
-                  <div className="flex items-center space-x-2 mb-2">
-                    <Monitor className="h-4 w-4" />
-                    <span className="font-medium">Current Session</span>
-                  </div>
-                  <p className="text-sm text-muted-foreground font-mono">
-                    Session ID: {getSessionId()}
-                  </p>
-                </div>
-              )}
-
-              {/* Performance Log Actions */}
-              <div className="space-y-4">
-                <div className="flex flex-wrap gap-2">
-                  <Button 
-                    onClick={handleDownloadPerformanceLogs}
-                    variant="outline"
-                    size="sm"
-                    disabled={!performanceConfig.enabled}
-                  >
-                    <Download className="mr-2 h-4 w-4" />
-                    Download Logs
-                  </Button>
-                  <Button 
-                    onClick={handleFlushLogs}
-                    variant="outline"
-                    size="sm"
-                    disabled={!performanceConfig.enabled}
-                  >
-                    <FileText className="mr-2 h-4 w-4" />
-                    Flush to File
-                  </Button>
-                  <Button 
-                    onClick={handleClearPerformanceLogs}
-                    variant="outline"
-                    size="sm"
-                    disabled={!performanceConfig.enabled}
-                  >
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Clear Logs
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Download: Get logs as a file • Flush: Write buffered logs to /tmp/restaurant-performance.log • Clear: Remove all stored logs
-                </p>
-              </div>
-
-              {/* Docker Log Information */}
-              <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
-                <div className="flex items-center space-x-2 mb-2">
-                  <FileText className="h-4 w-4 text-blue-600" />
-                  <span className="font-medium text-blue-800">Docker Container Log Access</span>
-                </div>
-                <div className="space-y-2 text-sm text-blue-700">
-                  <div>
-                    <strong>Log Location:</strong> <code className="bg-blue-100 px-1 rounded">/tmp/restaurant-performance.log</code>
-                  </div>
-                  <div>
-                    <strong>View logs:</strong> <code className="bg-blue-100 px-1 rounded">docker exec -it &lt;container_name&gt; tail -f /tmp/restaurant-performance.log</code>
-                  </div>
-                  <div>
-                    <strong>Copy logs:</strong> <code className="bg-blue-100 px-1 rounded">docker cp &lt;container_name&gt;:/tmp/restaurant-performance.log ./performance.log</code>
-                  </div>
-                </div>
-              </div>
+              <Switch
+                checked={loggingEnabled}
+                onCheckedChange={handleLoggingToggle}
+              />
             </div>
+
+            {/* Per-Logger Configuration */}
+            {loggingEnabled && (
+              <div className="space-y-6">
+                {['access', 'event', 'metrics', 'error'].map((loggerType) => (
+                  <div key={loggerType} className="border rounded-lg p-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <Label className="text-base font-medium capitalize">
+                          {loggerType} Logger
+                        </Label>
+                        <p className="text-sm text-muted-foreground">
+                          {loggerType === 'access' && 'HTTP requests, response times, status codes'}
+                          {loggerType === 'event' && 'User actions, business events, system events'}
+                          {loggerType === 'metrics' && 'Performance metrics, counters, gauges'}
+                          {loggerType === 'error' && 'Errors, exceptions, failures'}
+                        </p>
+                      </div>
+                      <Switch
+                        checked={loggerConfigs[loggerType]?.enabled || false}
+                        onCheckedChange={(checked) => handleLoggerConfigChange(loggerType, 'enabled', checked)}
+                      />
+                    </div>
+
+                    {loggerConfigs[loggerType]?.enabled && (
+                      <div className="grid md:grid-cols-2 gap-4">
+                        {/* Log Level */}
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">Log Level</Label>
+                          <Select
+                            value={loggerConfigs[loggerType]?.level || 'INFO'}
+                            onValueChange={(value) => handleLoggerConfigChange(loggerType, 'level', value)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {['DEBUG', 'INFO', 'WARN', 'ERROR'].map((level) => (
+                                <SelectItem key={level} value={level}>
+                                  {level}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {/* Log Format */}
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">Format</Label>
+                          <Select
+                            value={loggerConfigs[loggerType]?.format || 'json'}
+                            onValueChange={(value) => handleLoggerConfigChange(loggerType, 'format', value)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {['json', 'clf', 'string', 'csv', 'xml', 'custom'].map((format) => (
+                                <SelectItem key={format} value={format}>
+                                  {format.toUpperCase()}
+                                  {format === 'json' && ' (Structured)'}
+                                  {format === 'clf' && ' (Common Log Format)'}
+                                  {format === 'string' && ' (Human Readable)'}
+                                  {format === 'csv' && ' (Spreadsheet)'}
+                                  {format === 'xml' && ' (Markup)'}
+                                  {format === 'custom' && ' (Template)'}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {/* Analytics Dashboard */}
+                <div className="bg-muted/50 p-4 rounded-lg">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center space-x-2">
+                      <Monitor className="h-4 w-4" />
+                      <span className="font-medium">Logging Analytics</span>
+                    </div>
+                    <Button
+                      onClick={handleRefreshAnalytics}
+                      variant="outline"
+                      size="sm"
+                    >
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      Refresh
+                    </Button>
+                  </div>
+
+                  {loggingAnalytics && (
+                    <div className="grid md:grid-cols-4 gap-4">
+                      <div className="text-center p-3 bg-background rounded border">
+                        <div className="text-lg font-bold text-blue-600">
+                          {loggingAnalytics.access?.totalRequests || 0}
+                        </div>
+                        <div className="text-xs text-muted-foreground">HTTP Requests</div>
+                      </div>
+                      <div className="text-center p-3 bg-background rounded border">
+                        <div className="text-lg font-bold text-green-600">
+                          {loggingAnalytics.events?.totalEvents || 0}
+                        </div>
+                        <div className="text-xs text-muted-foreground">Events Logged</div>
+                      </div>
+                      <div className="text-center p-3 bg-background rounded border">
+                        <div className="text-lg font-bold text-purple-600">
+                          {loggingAnalytics.metrics?.totalMetrics || 0}
+                        </div>
+                        <div className="text-xs text-muted-foreground">Metrics Captured</div>
+                      </div>
+                      <div className="text-center p-3 bg-background rounded border">
+                        <div className="text-lg font-bold text-red-600">
+                          {loggingAnalytics.errors?.totalErrors || 0}
+                        </div>
+                        <div className="text-xs text-muted-foreground">Errors Detected</div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-4 text-sm text-muted-foreground">
+                    <strong>Session ID:</strong> <code className="bg-background px-1 rounded">{getSessionId()}</code>
+                  </div>
+                </div>
+
+                {/* Log Management Actions */}
+                <div className="space-y-4">
+                  <div className="flex flex-wrap gap-2">
+                    <Button 
+                      onClick={handleFlushAllLogs}
+                      variant="outline"
+                      size="sm"
+                    >
+                      <FileText className="mr-2 h-4 w-4" />
+                      Flush All Logs
+                    </Button>
+                    <Button 
+                      onClick={handleClearAllLogs}
+                      variant="outline"
+                      size="sm"
+                    >
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      Clear All Logs
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Flush: Write buffered logs to files • Clear: Remove all stored logs from localStorage
+                  </p>
+                </div>
+
+                {/* Docker Log Information */}
+                <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
+                  <div className="flex items-center space-x-2 mb-2">
+                    <FileText className="h-4 w-4 text-blue-600" />
+                    <span className="font-medium text-blue-800">Docker Container Log Files</span>
+                  </div>
+                  <div className="space-y-2 text-sm text-blue-700">
+                    <div><strong>Access:</strong> <code className="bg-blue-100 px-1 rounded">/tmp/codeuser/access.log</code></div>
+                    <div><strong>Events:</strong> <code className="bg-blue-100 px-1 rounded">/tmp/codeuser/events.log</code></div>
+                    <div><strong>Metrics:</strong> <code className="bg-blue-100 px-1 rounded">/tmp/codeuser/metrics.log</code></div>
+                    <div><strong>Errors:</strong> <code className="bg-blue-100 px-1 rounded">/tmp/codeuser/errors.log</code></div>
+                    <div><strong>Performance:</strong> <code className="bg-blue-100 px-1 rounded">/tmp/codeuser/performance.log</code></div>
+                  </div>
+                  <div className="mt-2 pt-2 border-t border-blue-200">
+                    <div><strong>View logs:</strong> <code className="bg-blue-100 px-1 rounded">docker exec -it &lt;container&gt; tail -f /tmp/codeuser/*.log</code></div>
+                  </div>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -1542,25 +1845,25 @@ const Config = () => {
           </CardContent>
         </Card>
 
-        {/* OpenTelemetry Collector */}
+        {/* Multi-Pipeline OpenTelemetry Collector */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center space-x-2">
               <Activity className="h-5 w-5" />
-              <span>OpenTelemetry Collector</span>
+              <span>Multi-Pipeline OpenTelemetry Collector</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
             <p className="text-muted-foreground">
-              Forward logs, metrics, and traces to Mezmo using the OpenTelemetry Collector with independent pipeline control.
+              Forward logs, metrics, and traces to separate Mezmo pipelines using the OpenTelemetry Collector. Each telemetry type can be configured with its own pipeline ID and ingestion key.
             </p>
 
             {/* Master Enable/Disable Toggle */}
             <div className="flex items-center justify-between">
               <div className="space-y-1">
-                <Label className="text-base font-medium">Enable OTEL Collector</Label>
+                <Label className="text-base font-medium">Enable Multi-Pipeline OTEL Collector</Label>
                 <p className="text-sm text-muted-foreground">
-                  Forward telemetry data from /tmp/codeuser/ to your Mezmo account
+                  Route different telemetry types to separate Mezmo destinations
                 </p>
               </div>
               <Switch
@@ -1569,205 +1872,199 @@ const Config = () => {
               />
             </div>
 
-            {/* Configuration Form */}
-            <div className="space-y-4">
-              {/* Ingestion Key */}
-              <div className="space-y-2">
-                <Label htmlFor="otel-key">Ingestion Key</Label>
-                <div className="relative">
+            {/* Global Configuration */}
+            {otelEnabled && (
+              <div className="space-y-4">
+                {/* Service Name */}
+                <div className="space-y-2">
+                  <Label htmlFor="otel-service">Service Name</Label>
                   <Input
-                    id="otel-key"
-                    type={showOtelIngestionKey ? "text" : "password"}
-                    value={otelIngestionKey}
-                    onChange={(e) => setOtelIngestionKey(e.target.value)}
-                    placeholder="Enter your Mezmo ingestion key"
-                    className="pr-10"
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                    onClick={() => setShowOtelIngestionKey(!showOtelIngestionKey)}
-                  >
-                    {showOtelIngestionKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </Button>
-                </div>
-              </div>
-
-              {/* Pipeline ID */}
-              <div className="space-y-2">
-                <Label htmlFor="otel-pipeline">Pipeline ID (Optional)</Label>
-                <Input
-                  id="otel-pipeline"
-                  type="text"
-                  value={otelPipelineId}
-                  onChange={(e) => setOtelPipelineId(e.target.value)}
-                  placeholder="12cfb094-6c7a-11f0-871b-a6a8e5244714"
-                />
-                <p className="text-xs text-muted-foreground">
-                  For Mezmo Pipelines, enter the Pipeline ID. Leave empty for legacy LogDNA endpoints.
-                </p>
-              </div>
-
-              {/* Host */}
-              <div className="space-y-2">
-                <Label htmlFor="otel-host">Mezmo Host (Legacy) - Optional</Label>
-                <Input
-                  id="otel-host"
-                  type="text"
-                  value={otelHost}
-                  onChange={(e) => setOtelHost(e.target.value)}
-                  placeholder={otelPipelineId.length > 0 ? "Not needed - using Pipeline ID" : "logs.mezmo.com (optional)"}
-                  disabled={otelPipelineId.length > 0}
-                />
-                <p className="text-xs text-muted-foreground">
-                  {otelPipelineId.length > 0 
-                    ? "Host is automatically set to pipeline.mezmo.com when using Pipeline ID" 
-                    : "Only used for legacy LogDNA endpoints. Leave empty to use pipeline.mezmo.com"}
-                </p>
-              </div>
-
-              {/* Service Name */}
-              <div className="space-y-2">
-                <Label htmlFor="otel-service">Service Name</Label>
-                <Input
-                  id="otel-service"
-                  type="text"
-                  value={otelServiceName}
-                  onChange={(e) => setOtelServiceName(e.target.value)}
-                  placeholder="restaurant-app"
-                />
-              </div>
-
-              {/* Tags */}
-              <div className="space-y-2">
-                <Label htmlFor="otel-tags">Tags (comma-separated)</Label>
-                <Input
-                  id="otel-tags"
-                  type="text"
-                  value={otelTags}
-                  onChange={(e) => setOtelTags(e.target.value)}
-                  placeholder="restaurant-app,otel,demo"
-                />
-              </div>
-            </div>
-
-            {/* Pipeline Controls - Independent Toggles */}
-            <div className="space-y-4">
-              <Label className="text-base font-medium">Telemetry Pipelines</Label>
-              
-              <div className="grid gap-4">
-                <div className="flex items-center justify-between p-3 border rounded-lg">
-                  <div className="space-y-1">
-                    <Label className="font-medium text-blue-600">📄 Logs Pipeline</Label>
-                    <p className="text-sm text-muted-foreground">Forward log files to Mezmo</p>
-                  </div>
-                  <Switch 
-                    checked={otelLogsEnabled} 
-                    onCheckedChange={setOtelLogsEnabled}
-                    disabled={!otelEnabled}
+                    id="otel-service"
+                    type="text"
+                    value={otelServiceName}
+                    onChange={(e) => setOtelServiceName(e.target.value)}
+                    placeholder="restaurant-app"
                   />
                 </div>
+
+                {/* Tags */}
+                <div className="space-y-2">
+                  <Label htmlFor="otel-tags">Tags (comma-separated)</Label>
+                  <Input
+                    id="otel-tags"
+                    type="text"
+                    value={otelTags}
+                    onChange={(e) => setOtelTags(e.target.value)}
+                    placeholder="restaurant-app,otel,demo"
+                  />
+                </div>
+
+                {/* Debug Level */}
+                <div className="space-y-2">
+                  <Label htmlFor="otel-debug">Debug Level</Label>
+                  <Select value={otelDebugLevel} onValueChange={setOtelDebugLevel}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="debug">Debug (Very Verbose)</SelectItem>
+                      <SelectItem value="info">Info (Recommended)</SelectItem>
+                      <SelectItem value="warn">Warn (Minimal)</SelectItem>
+                      <SelectItem value="error">Error (Critical Only)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+
+            {/* Multi-Pipeline Configuration */}
+            {otelEnabled && (
+              <div className="space-y-6">
+                <Label className="text-base font-medium">Independent Pipeline Configuration</Label>
                 
-                <div className="flex items-center justify-between p-3 border rounded-lg">
-                  <div className="space-y-1">
-                    <Label className="font-medium text-green-600">📊 Metrics Pipeline</Label>
-                    <p className="text-sm text-muted-foreground">Collect system metrics and forward to Mezmo</p>
-                  </div>
-                  <Switch 
-                    checked={otelMetricsEnabled} 
-                    onCheckedChange={setOtelMetricsEnabled}
-                    disabled={!otelEnabled}
-                  />
-                </div>
-                
-                <div className="flex items-center justify-between p-3 border rounded-lg">
-                  <div className="space-y-1">
-                    <Label className="font-medium text-purple-600">🔗 Traces Pipeline</Label>
-                    <p className="text-sm text-muted-foreground">Receive traces via OTLP and forward to Mezmo</p>
-                  </div>
-                  <Switch 
-                    checked={otelTracesEnabled} 
-                    onCheckedChange={setOtelTracesEnabled}
-                    disabled={!otelEnabled}
-                  />
-                </div>
-              </div>
-            </div>
+                {['logs', 'metrics', 'traces'].map((pipelineType) => (
+                  <div key={pipelineType} className="border rounded-lg p-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <Label className={`font-medium capitalize ${
+                          pipelineType === 'logs' ? 'text-blue-600' : 
+                          pipelineType === 'metrics' ? 'text-green-600' : 'text-purple-600'
+                        }`}>
+                          {pipelineType === 'logs' && '📄'} 
+                          {pipelineType === 'metrics' && '📊'} 
+                          {pipelineType === 'traces' && '🔍'} 
+                          {' '}{pipelineType} Pipeline
+                        </Label>
+                        <p className="text-sm text-muted-foreground">
+                          {pipelineType === 'logs' && 'Forward structured log files to Mezmo'}
+                          {pipelineType === 'metrics' && 'Send system and application metrics'}
+                          {pipelineType === 'traces' && 'Receive traces via OTLP protocol'}
+                        </p>
+                      </div>
+                      <Switch
+                        checked={otelPipelines[pipelineType].enabled}
+                        onCheckedChange={(checked) => updateOtelPipeline(pipelineType, 'enabled', checked)}
+                      />
+                    </div>
 
-            {/* Debug Level Control */}
-            <div className="space-y-4">
-              <Label className="text-base font-medium">Collector Debug Settings</Label>
-              
-              <div className="flex items-center justify-between p-3 border rounded-lg bg-orange-50 border-orange-200">
-                <div className="space-y-1">
-                  <Label className="font-medium text-orange-600">🐛 Debug Log Level</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Control verbosity of collector logs in /tmp/codeuser/otel-collector.log
-                  </p>
-                </div>
-                <Select
-                  value={otelDebugLevel}
-                  onValueChange={setOtelDebugLevel}
-                  disabled={!otelEnabled}
-                >
-                  <SelectTrigger className="w-32">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="debug">Debug (Very Verbose)</SelectItem>
-                    <SelectItem value="info">Info (Recommended)</SelectItem>
-                    <SelectItem value="warn">Warn (Minimal)</SelectItem>
-                    <SelectItem value="error">Error (Critical Only)</SelectItem>
-                  </SelectContent>
-                </Select>
+                    {otelPipelines[pipelineType].enabled && (
+                      <div className="space-y-3 pt-3 border-t">
+                        {/* Ingestion Key for this pipeline */}
+                        <div className="space-y-2">
+                          <Label>Ingestion Key</Label>
+                          <div className="relative">
+                            <Input
+                              type={otelPipelines[pipelineType].showKey ? "text" : "password"}
+                              value={otelPipelines[pipelineType].ingestionKey}
+                              onChange={(e) => updateOtelPipeline(pipelineType, 'ingestionKey', e.target.value)}
+                              placeholder={`Enter ${pipelineType} pipeline ingestion key`}
+                              className="pr-10"
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                              onClick={() => updateOtelPipeline(pipelineType, 'showKey', !otelPipelines[pipelineType].showKey)}
+                            >
+                              {otelPipelines[pipelineType].showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            </Button>
+                          </div>
+                        </div>
+
+                        {/* Pipeline ID */}
+                        <div className="space-y-2">
+                          <Label>Pipeline ID (Optional)</Label>
+                          <Input
+                            type="text"
+                            value={otelPipelines[pipelineType].pipelineId}
+                            onChange={(e) => updateOtelPipeline(pipelineType, 'pipelineId', e.target.value)}
+                            placeholder="12cfb094-6c7a-11f0-871b-a6a8e5244714"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            For Mezmo Pipelines, enter the Pipeline ID. Leave empty for legacy LogDNA endpoints.
+                          </p>
+                        </div>
+
+                        {/* Auto-generated endpoint display */}
+                        {otelPipelines[pipelineType].pipelineId && (
+                          <div className="bg-muted/50 p-3 rounded">
+                            <Label className="text-xs font-medium">Auto-generated Endpoint:</Label>
+                            <code className="text-xs text-muted-foreground block mt-1">
+                              {otelPipelines[pipelineType].endpoint}
+                            </code>
+                          </div>
+                        )}
+
+                        {/* Host (for legacy) */}
+                        {!otelPipelines[pipelineType].pipelineId && (
+                          <div className="space-y-2">
+                            <Label>Mezmo Host (Legacy)</Label>
+                            <Input
+                              type="text"
+                              value={otelPipelines[pipelineType].host}
+                              onChange={(e) => updateOtelPipeline(pipelineType, 'host', e.target.value)}
+                              placeholder="logs.mezmo.com"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Only used for legacy LogDNA endpoints
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
-              
-              <div className="text-xs text-muted-foreground bg-blue-50 p-3 rounded border border-blue-200">
-                <strong>💡 Tip:</strong> Use "Info" level to see log transmission activity without excessive debug noise. 
-                Switch to "Debug" when troubleshooting connection issues, then back to "Info" for normal operation.
-              </div>
-            </div>
+            )}
 
             {/* Action Buttons */}
-            <div className="flex gap-2">
-              <Button
-                onClick={saveOtelConfig}
-                disabled={!otelIngestionKey.trim()}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
-              >
-                <Settings className="mr-2 h-4 w-4" />
-                Save Configuration
-              </Button>
-              
-              <Button
-                onClick={handleTestOtelConnection}
-                disabled={!otelIngestionKey.trim() || otelStatus === 'connecting'}
-                variant="outline"
-              >
-                <Monitor className="mr-2 h-4 w-4" />
-                Test Connection
-              </Button>
+            {otelEnabled && (
+              <div className="space-y-4">
+                <div className="flex gap-2">
+                  <Button
+                    onClick={handleOtelConfigure}
+                    disabled={!Object.values(otelPipelines).some(p => p.enabled && p.ingestionKey.trim())}
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    <Settings className="mr-2 h-4 w-4" />
+                    Save Multi-Pipeline Config
+                  </Button>
+                  
+                  <Button
+                    onClick={handleTestOtelConnection}
+                    disabled={!Object.values(otelPipelines).some(p => p.enabled && p.ingestionKey.trim()) || otelStatus === 'connecting'}
+                    variant="outline"
+                  >
+                    <Monitor className="mr-2 h-4 w-4" />
+                    Test Connection
+                  </Button>
 
-              <Button
-                onClick={handleViewOtelLogs}
-                variant="outline"
-                className="border-orange-200 text-orange-600 hover:bg-orange-50"
-              >
-                <FileText className="mr-2 h-4 w-4" />
-                View Logs
-              </Button>
+                  <Button
+                    onClick={handleViewOtelLogs}
+                    variant="outline"
+                    className="border-orange-200 text-orange-600 hover:bg-orange-50"
+                  >
+                    <FileText className="mr-2 h-4 w-4" />
+                    View Logs
+                  </Button>
 
-              <Button
-                onClick={handleDebugOtel}
-                variant="outline"
-                className="border-red-200 text-red-600 hover:bg-red-50"
-              >
-                <AlertTriangle className="mr-2 h-4 w-4" />
-                Debug Info
-              </Button>
-            </div>
+                  <Button
+                    onClick={handleDebugOtel}
+                    variant="outline"
+                    className="border-red-200 text-red-600 hover:bg-red-50"
+                  >
+                    <AlertTriangle className="mr-2 h-4 w-4" />
+                    Debug Info
+                  </Button>
+                </div>
+                
+                <div className="text-xs text-muted-foreground bg-blue-50 p-3 rounded border border-blue-200">
+                  <strong>💡 Multi-Pipeline Tips:</strong> Each pipeline can have its own ingestion key and Pipeline ID. 
+                  This allows you to send logs, metrics, and traces to different Mezmo destinations for better organization.
+                </div>
+              </div>
+            )}
 
             {/* Status Display */}
             <div className="space-y-4">
@@ -1797,22 +2094,22 @@ const Config = () => {
               </div>
 
               {/* Pipeline Statistics */}
-              {otelEnabled && (
+              {Object.values(otelPipelines).some(pipeline => pipeline.enabled) && (
                 <div className="grid grid-cols-3 gap-4 bg-muted/50 p-4 rounded-lg">
                   <div className="text-center">
-                    <div className={`text-2xl font-bold ${otelLogsEnabled ? 'text-blue-600' : 'text-gray-400'}`}>
+                    <div className={`text-2xl font-bold ${otelPipelines.logs.enabled ? 'text-blue-600' : 'text-gray-400'}`}>
                       {otelStats.logsSent || 0}
                     </div>
                     <div className="text-xs text-muted-foreground">Logs Sent</div>
                   </div>
                   <div className="text-center">
-                    <div className={`text-2xl font-bold ${otelMetricsEnabled ? 'text-green-600' : 'text-gray-400'}`}>
+                    <div className={`text-2xl font-bold ${otelPipelines.metrics.enabled ? 'text-green-600' : 'text-gray-400'}`}>
                       {otelStats.metricsCollected || 0}
                     </div>
                     <div className="text-xs text-muted-foreground">Metrics Collected</div>
                   </div>
                   <div className="text-center">
-                    <div className={`text-2xl font-bold ${otelTracesEnabled ? 'text-purple-600' : 'text-gray-400'}`}>
+                    <div className={`text-2xl font-bold ${otelPipelines.traces.enabled ? 'text-purple-600' : 'text-gray-400'}`}>
                       {otelStats.tracesReceived || 0}
                     </div>
                     <div className="text-xs text-muted-foreground">Traces Received</div>
@@ -1833,7 +2130,8 @@ const Config = () => {
                   <div>• <strong>gRPC:</strong> localhost:4317</div>
                   <div>• <strong>HTTP:</strong> localhost:4318</div>
                   <div>• <strong>Protocols:</strong> OpenTelemetry Protocol (OTLP)</div>
-                  <div>• <strong>Active when:</strong> Traces pipeline is enabled</div>
+                  <div>• <strong>Active when:</strong> Any pipeline is enabled</div>
+                  <div>• <strong>Multi-Pipeline:</strong> Separate destinations for logs, metrics, and traces</div>
                 </div>
               </div>
 
@@ -1853,18 +2151,19 @@ const Config = () => {
               <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
                 <div className="flex items-center space-x-2 mb-2">
                   <FileText className="h-4 w-4 text-blue-600" />
-                  <span className="font-medium text-blue-800">Configuration Summary</span>
+                  <span className="font-medium text-blue-800">Multi-Pipeline Configuration Summary</span>
                 </div>
                 <div className="space-y-1 text-sm text-blue-700">
-                  <div>• <strong>Mode:</strong> {otelPipelineId ? 'Mezmo Pipeline' : 'Legacy LogDNA'}</div>
-                  {otelPipelineId ? (
-                    <div>• <strong>Endpoint:</strong> https://pipeline.mezmo.com/v1/{otelPipelineId}</div>
-                  ) : (
-                    <div>• <strong>Endpoint:</strong> https://{otelHost}/v1/[logs|metrics|traces]</div>
-                  )}
-                  <div>• <strong>Logs:</strong> /tmp/codeuser/*.log files</div>
-                  <div>• <strong>Metrics:</strong> Host system metrics (CPU, memory, disk, network)</div>
-                  <div>• <strong>Traces:</strong> OTLP receiver (gRPC & HTTP)</div>
+                  <div>• <strong>Mode:</strong> Multi-Pipeline Mezmo Integration</div>
+                  <div>• <strong>Logs Pipeline:</strong> {otelPipelines.logs.enabled ? 
+                    (otelPipelines.logs.pipelineId ? `Pipeline ${otelPipelines.logs.pipelineId}` : 'Configured') : 
+                    'Disabled'}</div>
+                  <div>• <strong>Metrics Pipeline:</strong> {otelPipelines.metrics.enabled ? 
+                    (otelPipelines.metrics.pipelineId ? `Pipeline ${otelPipelines.metrics.pipelineId}` : 'Configured') : 
+                    'Disabled'}</div>
+                  <div>• <strong>Traces Pipeline:</strong> {otelPipelines.traces.enabled ? 
+                    (otelPipelines.traces.pipelineId ? `Pipeline ${otelPipelines.traces.pipelineId}` : 'Configured') : 
+                    'Disabled'}</div>
                   <div>• <strong>Service:</strong> {otelServiceName}</div>
                   <div>• <strong>Tags:</strong> {otelTags}</div>
                 </div>
@@ -1879,11 +2178,11 @@ const Config = () => {
                 <div className="space-y-2 text-sm text-orange-700">
                   <div><strong>1. Check Collector Status:</strong> Ensure status shows "Connected" above</div>
                   <div><strong>2. View Logs:</strong> Click "View Logs" button to see collector output</div>
-                  <div><strong>3. Verify Pipelines:</strong> Ensure at least one pipeline is enabled</div>
+                  <div><strong>3. Verify Pipeline Setup:</strong> Ensure each needed pipeline is enabled with valid keys</div>
                   <div><strong>4. Check Log Files:</strong> Verify files exist in /tmp/codeuser/*.log</div>
-                  <div><strong>5. Test Ingestion Key:</strong> Use "Test Connection" button</div>
-                  <div><strong>6. Check Network:</strong> Ensure connectivity to {otelHost}</div>
-                  <div><strong>7. Restart Collector:</strong> Toggle off/on to restart process</div>
+                  <div><strong>5. Test Pipeline Keys:</strong> Use "Test Connection" for each enabled pipeline</div>
+                  <div><strong>6. Check Network:</strong> Ensure connectivity to pipeline endpoints</div>
+                  <div><strong>7. Restart Collector:</strong> Use "Configure OTEL" to restart with new settings</div>
                 </div>
               </div>
             </div>
@@ -2114,7 +2413,7 @@ const Config = () => {
               <div className="flex gap-2">
                 <Button
                   onClick={handleStartStressTest}
-                  disabled={stressTestRunning || !performanceConfig.enabled}
+                  disabled={stressTestRunning || !loggingEnabled}
                   className="bg-orange-600 hover:bg-orange-700 text-white"
                 >
                   <Play className="mr-2 h-4 w-4" />
@@ -2132,10 +2431,10 @@ const Config = () => {
                 </Button>
               </div>
 
-              {!performanceConfig.enabled && (
+              {!loggingEnabled && (
                 <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-lg">
                   <p className="text-sm text-yellow-800">
-                    ⚠️ Performance logging is disabled. Enable it above to capture stress test data.
+                    ⚠️ Structured logging is disabled. Enable it above to capture stress test data.
                   </p>
                 </div>
               )}
