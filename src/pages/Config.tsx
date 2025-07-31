@@ -2276,8 +2276,7 @@ const Config = () => {
             </div>
 
             {/* Global Configuration */}
-            {otelEnabled && (
-              <div className="space-y-4">
+            <div className="space-y-4">
                 {/* Service Name */}
                 <div className="space-y-2">
                   <Label htmlFor="otel-service">Service Name</Label>
@@ -2318,11 +2317,9 @@ const Config = () => {
                   </Select>
                 </div>
               </div>
-            )}
 
             {/* Multi-Pipeline Configuration */}
-            {otelEnabled && (
-              <div className="space-y-6">
+            <div className="space-y-6">
                 <Label className="text-base font-medium">Independent Pipeline Configuration</Label>
                 
                 {['logs', 'metrics', 'traces'].map((pipelineType) => (
@@ -2419,11 +2416,9 @@ const Config = () => {
                   </div>
                 ))}
               </div>
-            )}
 
             {/* Action Buttons */}
-            {otelEnabled && (
-              <div className="space-y-4">
+            <div className="space-y-4">
                 <div className="flex gap-2">
                   <Button
                     onClick={handleOtelConfigure}
