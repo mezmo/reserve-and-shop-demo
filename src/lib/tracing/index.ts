@@ -10,6 +10,8 @@ export {
   getThinkTime, 
   shouldExecuteStep 
 } from './userJourneys';
+export { TrafficManager } from './trafficManager';
+export type { TrafficStats, TrafficConfig } from './trafficManager';
 
 // Re-export commonly used OpenTelemetry types
 export { trace, context, SpanStatusCode } from '@opentelemetry/api';

@@ -50,6 +50,20 @@ const Config = () => {
     timeRemaining: 0
   });
 
+  // Virtual traffic simulator state
+  const [trafficEnabled, setTrafficEnabled] = useState(false);
+  const [trafficTargetUsers, setTrafficTargetUsers] = useState(5);
+  const [trafficPattern, setTrafficPattern] = useState<'mixed' | 'buyers' | 'browsers' | 'researchers'>('mixed');
+  const [trafficTiming, setTrafficTiming] = useState<'steady' | 'normal' | 'peak' | 'low' | 'burst'>('steady');
+  const [trafficStats, setTrafficStats] = useState({
+    activeUsers: 0,
+    totalSessionsToday: 0,
+    averageSessionDuration: 0,
+    currentActivities: [] as string[],
+    totalOrders: 0,
+    bounceRate: 0
+  });
+
   // Mezmo configuration state
   const [mezmoEnabled, setMezmoEnabled] = useState(false);
   const [mezmoIngestionKey, setMezmoIngestionKey] = useState('');
@@ -751,7 +765,24 @@ const Config = () => {
             paymentEndTime - paymentStartTime
           );
 
-          // Save order to client-side store (only if payment succeeded)
+          // Save order to both API and client-side store (like real checkout does)
+          try {
+            const response = await fetch('/api/orders', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(order)
+            });
+            
+            if (!response.ok) {
+              throw new Error(`API Error: ${response.status}`);
+            }
+            
+            console.log(`✅ Sample order ${order.id} successfully posted to /api/orders`);
+          } catch (apiError) {
+            console.error(`❌ Failed to post sample order to API:`, apiError);
+            // Still add to local store even if API fails
+          }
+          
           dataStore.addOrder(order);
 
           // Trigger summary refresh
@@ -899,11 +930,6 @@ const Config = () => {
   const handleStartStressTest = async () => {
     if (stressTestRunning) return;
     
-    // Check if tracing is enabled for behavioral simulation
-    const tracingEnabled = localStorage.getItem('otel-config') && 
-                          JSON.parse(localStorage.getItem('otel-config') || '{}').enabled &&
-                          JSON.parse(localStorage.getItem('otel-config') || '{}').pipelines?.traces?.enabled;
-    
     // Reset counters
     stressTestRequestCounts.current = { total: 0, success: 0, error: 0, responseTimes: [] };
     setStressTestStats({
@@ -918,108 +944,49 @@ const Config = () => {
     setStressTestProgress(0);
     stressTestStartTime.current = Date.now();
     
-    if (tracingEnabled) {
-      // Use virtual users with realistic behavior
-      const { VirtualUser } = await import('@/lib/tracing/virtualUser');
-      const { selectWeightedJourney, USER_JOURNEYS } = await import('@/lib/tracing/userJourneys');
+    // Traditional API stress test logic
+    const intervalMs = 1000 / stressTestRPS; // Convert RPS to interval
+    
+    stressTestIntervalRef.current = setInterval(async () => {
+      const elapsed = (Date.now() - stressTestStartTime.current) / 1000;
+      const progress = Math.min((elapsed / stressTestDuration) * 100, 100);
+      const timeRemaining = Math.max(stressTestDuration - elapsed, 0);
       
-      console.log('🎭 Starting stress test with virtual users and tracing enabled');
+      setStressTestProgress(progress);
       
-      // Create virtual users
-      const virtualUsers: any[] = [];
-      for (let i = 0; i < stressTestConcurrent; i++) {
-        const journey = selectWeightedJourney(USER_JOURNEYS);
-        const user = new VirtualUser(`stress-user-${i}`, journey);
-        virtualUsers.push(user);
+      // Update real-time stats
+      const avgResponseTime = stressTestRequestCounts.current.responseTimes.length > 0
+        ? stressTestRequestCounts.current.responseTimes.reduce((a, b) => a + b, 0) / stressTestRequestCounts.current.responseTimes.length
+        : 0;
+      
+      setStressTestStats({
+        totalRequests: stressTestRequestCounts.current.total,
+        successCount: stressTestRequestCounts.current.success,
+        errorCount: stressTestRequestCounts.current.error,
+        avgResponseTime: Math.round(avgResponseTime),
+        timeRemaining: Math.round(timeRemaining)
+      });
+      
+      if (elapsed >= stressTestDuration) {
+        handleStopStressTest();
+        return;
       }
       
-      // Execute with staggered starts (RPS control)
-      const staggerDelay = (1000 / stressTestRPS) / stressTestConcurrent;
-      let activeUsers = 0;
+      // Make concurrent requests
+      const promises = [];
+      for (let i = 0; i < stressTestConcurrent; i++) {
+        const endpoint = getRandomEndpoint(stressTestErrorRate);
+        promises.push(makeStressTestRequest(endpoint));
+      }
       
-      stressTestIntervalRef.current = setInterval(async () => {
-        const elapsed = (Date.now() - stressTestStartTime.current) / 1000;
-        const progress = Math.min((elapsed / stressTestDuration) * 100, 100);
-        const timeRemaining = Math.max(stressTestDuration - elapsed, 0);
-        
-        setStressTestProgress(progress);
-        setStressTestStats(prev => ({
-          ...prev,
-          totalRequests: activeUsers,
-          timeRemaining: Math.round(timeRemaining)
-        }));
-        
-        if (elapsed >= stressTestDuration) {
-          // Stop all virtual users
-          virtualUsers.forEach(user => user.abort());
-          handleStopStressTest();
-          return;
-        }
-        
-        // Start new virtual user journeys
-        if (activeUsers < virtualUsers.length && elapsed < stressTestDuration - 5) {
-          const user = virtualUsers[activeUsers % virtualUsers.length];
-          activeUsers++;
-          
-          user.executeJourney()
-            .then(() => {
-              stressTestRequestCounts.current.success++;
-              stressTestRequestCounts.current.total++;
-            })
-            .catch(() => {
-              stressTestRequestCounts.current.error++;
-              stressTestRequestCounts.current.total++;
-            });
-        }
-      }, 1000); // Check every second
+      // Fire and forget - don't await to maintain rate
+      Promise.allSettled(promises);
       
-    } else {
-      // Fallback to original stress test logic
-      const intervalMs = 1000 / stressTestRPS; // Convert RPS to interval
-      
-      stressTestIntervalRef.current = setInterval(async () => {
-        const elapsed = (Date.now() - stressTestStartTime.current) / 1000;
-        const progress = Math.min((elapsed / stressTestDuration) * 100, 100);
-        const timeRemaining = Math.max(stressTestDuration - elapsed, 0);
-        
-        setStressTestProgress(progress);
-        
-        // Update real-time stats
-        const avgResponseTime = stressTestRequestCounts.current.responseTimes.length > 0
-          ? stressTestRequestCounts.current.responseTimes.reduce((a, b) => a + b, 0) / stressTestRequestCounts.current.responseTimes.length
-          : 0;
-        
-        setStressTestStats({
-          totalRequests: stressTestRequestCounts.current.total,
-          successCount: stressTestRequestCounts.current.success,
-          errorCount: stressTestRequestCounts.current.error,
-          avgResponseTime: Math.round(avgResponseTime),
-          timeRemaining: Math.round(timeRemaining)
-        });
-        
-        if (elapsed >= stressTestDuration) {
-          handleStopStressTest();
-          return;
-        }
-        
-        // Make concurrent requests
-        const promises = [];
-        for (let i = 0; i < stressTestConcurrent; i++) {
-          const endpoint = getRandomEndpoint(stressTestErrorRate);
-          promises.push(makeStressTestRequest(endpoint));
-        }
-        
-        // Fire and forget - don't await to maintain rate
-        Promise.allSettled(promises);
-        
-      }, intervalMs);
-    }
+    }, intervalMs);
     
     toast({
       title: "Stress Test Started",
-      description: tracingEnabled 
-        ? `Starting ${stressTestConcurrent} virtual users with realistic behavior journeys for ${stressTestDuration}s.`
-        : `Running for ${stressTestDuration}s at ${stressTestRPS} RPS with ${stressTestConcurrent} concurrent requests.`
+      description: `Running for ${stressTestDuration}s at ${stressTestRPS} RPS with ${stressTestConcurrent} concurrent requests.`
     });
   };
 
@@ -1961,6 +1928,155 @@ const Config = () => {
       if (otelInterval) clearInterval(otelInterval);
     };
   }, [otelEnabled, otelLastSync]);
+
+  // Initialize traffic manager and poll stats
+  useEffect(() => {
+    let trafficManager: any = null;
+    let statsInterval: NodeJS.Timeout | null = null;
+
+    const initTraffic = async () => {
+      try {
+        console.log('🔧 Initializing Traffic Manager...');
+        const { TrafficManager } = await import('@/lib/tracing/trafficManager');
+        trafficManager = TrafficManager.getInstance();
+        
+        // Load saved configuration
+        const config = trafficManager.getConfig();
+        console.log('📋 Loaded traffic config:', config);
+        
+        setTrafficEnabled(config.enabled);
+        setTrafficTargetUsers(config.targetConcurrentUsers);
+        setTrafficPattern(config.journeyPattern);
+        setTrafficTiming(config.trafficTiming);
+        
+        console.log(`🎛️ UI State set - Enabled: ${config.enabled}, Users: ${config.targetConcurrentUsers}, Pattern: ${config.journeyPattern}, Timing: ${config.trafficTiming}`);
+        
+        // Start traffic if enabled
+        if (config.enabled) {
+          console.log('▶️ Auto-starting traffic manager...');
+          trafficManager.start();
+        } else {
+          console.log('⏸️ Traffic manager disabled, not starting');
+        }
+
+        // Poll stats every 5 seconds
+        const updateStats = () => {
+          const stats = trafficManager.getStats();
+          setTrafficStats(stats);
+          if (stats.activeUsers > 0) {
+            console.log('📊 Traffic stats:', stats);
+          }
+        };
+
+        updateStats(); // Initial update
+        statsInterval = setInterval(updateStats, 5000);
+
+      } catch (error) {
+        console.error('❌ Error initializing traffic manager:', error);
+      }
+    };
+
+    initTraffic();
+
+    return () => {
+      if (statsInterval) {
+        clearInterval(statsInterval);
+      }
+      // Don't destroy the traffic manager - let it persist globally
+    };
+  }, []);
+
+  // Traffic manager controls
+  const handleTrafficToggle = async (enabled: boolean) => {
+    try {
+      console.log(`🔄 Toggling traffic: ${enabled ? 'ON' : 'OFF'}`);
+      const { TrafficManager } = await import('@/lib/tracing/trafficManager');
+      const trafficManager = TrafficManager.getInstance();
+      
+      setTrafficEnabled(enabled);
+      
+      const config = {
+        enabled,
+        targetConcurrentUsers: trafficTargetUsers,
+        journeyPattern: trafficPattern,
+        trafficTiming: trafficTiming
+      };
+
+      console.log('🔧 Updating traffic config:', config);
+      trafficManager.updateConfig(config);
+
+      toast({
+        title: enabled ? "Virtual Traffic Started" : "Virtual Traffic Stopped",
+        description: enabled 
+          ? `Simulating ${trafficTargetUsers} concurrent users browsing the site (${trafficPattern} pattern, ${trafficTiming} timing)`
+          : "Allowing existing virtual users to complete their sessions"
+      });
+
+    } catch (error) {
+      console.error('❌ Error toggling traffic:', error);
+      toast({
+        title: "Error",
+        description: "Failed to toggle virtual traffic",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleTrafficUsersChange = async (users: number) => {
+    try {
+      const { TrafficManager } = await import('@/lib/tracing/trafficManager');
+      const trafficManager = TrafficManager.getInstance();
+      
+      setTrafficTargetUsers(users);
+      
+      trafficManager.updateConfig({
+        targetConcurrentUsers: users,
+        journeyPattern: trafficPattern,
+        trafficTiming: trafficTiming
+      });
+
+    } catch (error) {
+      console.error('Error updating traffic users:', error);
+    }
+  };
+
+  const handleTrafficPatternChange = async (pattern: 'mixed' | 'buyers' | 'browsers' | 'researchers') => {
+    try {
+      const { TrafficManager } = await import('@/lib/tracing/trafficManager');
+      const trafficManager = TrafficManager.getInstance();
+      
+      setTrafficPattern(pattern);
+      
+      trafficManager.updateConfig({
+        enabled: trafficEnabled,
+        targetConcurrentUsers: trafficTargetUsers,
+        journeyPattern: pattern,
+        trafficTiming: trafficTiming
+      });
+
+    } catch (error) {
+      console.error('Error updating traffic pattern:', error);
+    }
+  };
+
+  const handleTrafficTimingChange = async (timing: 'steady' | 'normal' | 'peak' | 'low' | 'burst') => {
+    try {
+      const { TrafficManager } = await import('@/lib/tracing/trafficManager');
+      const trafficManager = TrafficManager.getInstance();
+      
+      setTrafficTiming(timing);
+      
+      trafficManager.updateConfig({
+        enabled: trafficEnabled,
+        targetConcurrentUsers: trafficTargetUsers,
+        journeyPattern: trafficPattern,
+        trafficTiming: timing
+      });
+
+    } catch (error) {
+      console.error('Error updating traffic timing:', error);
+    }
+  };
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -2955,8 +3071,9 @@ const Config = () => {
           <CardContent>
             <div className="space-y-6">
               <p className="text-muted-foreground">
-                Generate high-volume API activity using real endpoints (products, orders, reservations, settings) to create authentic performance logs that flow through OTEL collector to Mezmo.
+                Generate high-volume API requests to test performance limits and create load testing data. Uses real endpoints with configurable request rates, concurrency, and error injection.
               </p>
+
 
               {/* Configuration Grid */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -3095,6 +3212,169 @@ const Config = () => {
                   <div>• Maximum concurrent: 50 requests</div>
                   <div>• Only one stress test can run at a time</div>
                   <div>• All requests will be logged to performance system</div>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Virtual Traffic Simulator */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2">
+              <Activity className="h-5 w-5" />
+              <span>Virtual Traffic Simulator</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-6">
+              <p className="text-muted-foreground">
+                Simulate continuous realistic website traffic with virtual users browsing, shopping, and interacting with your site. 
+                Perfect for testing observability, generating traces, and maintaining constant activity.
+              </p>
+
+              {/* Enable/Disable Toggle */}
+              <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg">
+                <div className="space-y-1">
+                  <h4 className="font-medium">Enable Virtual Traffic</h4>
+                  <p className="text-sm text-muted-foreground">
+                    Continuous simulation of real user behavior
+                  </p>
+                </div>
+                <Switch
+                  checked={trafficEnabled}
+                  onCheckedChange={handleTrafficToggle}
+                />
+              </div>
+
+              {/* Configuration */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="traffic-users">Target Concurrent Users</Label>
+                  <Input
+                    id="traffic-users"
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={trafficTargetUsers}
+                    onChange={(e) => handleTrafficUsersChange(parseInt(e.target.value) || 5)}
+                    disabled={!trafficEnabled}
+                    className="w-full"
+                  />
+                  <p className="text-xs text-muted-foreground">Base number of concurrent users</p>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label>Journey Pattern</Label>
+                  <Select 
+                    value={trafficPattern} 
+                    onValueChange={handleTrafficPatternChange}
+                    disabled={!trafficEnabled}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="mixed">Mixed Behaviors</SelectItem>
+                      <SelectItem value="buyers">Focused Buyers</SelectItem>
+                      <SelectItem value="browsers">Casual Browsers</SelectItem>
+                      <SelectItem value="researchers">Detail Researchers</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {trafficPattern === 'mixed' && 'All user types with varied behaviors'}
+                    {trafficPattern === 'buyers' && 'Purchase-focused users'}
+                    {trafficPattern === 'browsers' && 'Extensive browsing without buying'}
+                    {trafficPattern === 'researchers' && 'Detail-oriented product research'}
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Traffic Timing</Label>
+                  <Select 
+                    value={trafficTiming} 
+                    onValueChange={handleTrafficTimingChange}
+                    disabled={!trafficEnabled}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="steady">Steady Target</SelectItem>
+                      <SelectItem value="normal">Normal Traffic</SelectItem>
+                      <SelectItem value="peak">Peak Hours</SelectItem>
+                      <SelectItem value="low">Low Traffic</SelectItem>
+                      <SelectItem value="burst">Burst Pattern</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {trafficTiming === 'steady' && 'Maintains exact target concurrent users'}
+                    {trafficTiming === 'normal' && 'Steady, consistent user arrivals'}
+                    {trafficTiming === 'peak' && '50% more users, faster arrivals'}
+                    {trafficTiming === 'low' && '40% fewer users, slower arrivals'}
+                    {trafficTiming === 'burst' && 'Random bursts of high activity'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Live Statistics */}
+              {trafficEnabled && (
+                <div className="space-y-4">
+                  <h4 className="font-medium">Live Traffic Statistics</h4>
+                  
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-muted/50 p-4 rounded-lg">
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-green-600">{trafficStats.activeUsers}</div>
+                      <div className="text-xs text-muted-foreground">Active Users</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-blue-600">{trafficStats.totalSessionsToday}</div>
+                      <div className="text-xs text-muted-foreground">Sessions Today</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-purple-600">{trafficStats.totalOrders}</div>
+                      <div className="text-xs text-muted-foreground">Orders Placed</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-orange-600">{trafficStats.averageSessionDuration}s</div>
+                      <div className="text-xs text-muted-foreground">Avg Session</div>
+                    </div>
+                  </div>
+
+                  {/* Current Activities */}
+                  {trafficStats.currentActivities.length > 0 && (
+                    <div className="space-y-2">
+                      <h5 className="text-sm font-medium">Current User Activities</h5>
+                      <div className="flex flex-wrap gap-2">
+                        {trafficStats.currentActivities.map((activity, index) => (
+                          <span
+                            key={index}
+                            className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full"
+                          >
+                            {activity.replace('_', ' ')}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Information */}
+              <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
+                <div className="flex items-start space-x-2">
+                  <Info className="h-4 w-4 text-blue-600 mt-0.5" />
+                  <div className="text-sm text-blue-800">
+                    <div className="font-medium mb-1">How Virtual Traffic Works</div>
+                    <div className="space-y-1 text-xs">
+                      <div>• Spawns virtual users at realistic intervals (30s-2min)</div>
+                      <div>• Users follow authentic journey patterns (browsing, shopping, checkout)</div>
+                      <div>• Generates real API calls, traces, and logs</div>
+                      <div>• Natural bounce rate and session variety</div>
+                      <div>• Maintains target user count with variance for realism</div>
+                      <div>• Integrates with OpenTelemetry tracing when enabled</div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
