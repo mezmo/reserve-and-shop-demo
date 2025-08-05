@@ -695,6 +695,7 @@ const generateOTELConfig = ({
         '/tmp/codeuser/access.log',
         '/tmp/codeuser/events.log', 
         '/tmp/codeuser/performance.log',
+        '/tmp/codeuser/restaurant-performance.log',
         '/tmp/codeuser/errors.log',
         '/tmp/codeuser/metrics.log',
         '/tmp/codeuser/app.log'

@@ -2,6 +2,8 @@ import { trace, context, SpanStatusCode, Span, Context } from '@opentelemetry/ap
 import { UserJourney, JourneyStep, getThinkTime, shouldExecuteStep } from './userJourneys';
 import { SessionTracker } from './sessionTracker';
 import PerformanceLogger from '@/lib/performanceLogger';
+import { DataStore } from '@/stores/dataStore';
+import { generateCustomerProfile, generateSpecialRequest, formatCreditCardNumber, generateOrderType, generatePartySize, type CustomerProfile } from '@/lib/utils/fakeDataGenerator';
 
 export class VirtualUser {
   private tracer = trace.getTracer('virtual-user', '1.0.0');
@@ -14,6 +16,7 @@ export class VirtualUser {
   private cart: Map<string, number> = new Map();
   private products: any[] = [];
   private aborted: boolean = false;
+  private customerProfile: CustomerProfile;
 
   constructor(userId: string, journey: UserJourney, trafficManager?: any) {
     this.userId = userId;
@@ -22,25 +25,33 @@ export class VirtualUser {
     this.sessionTracker = SessionTracker.createStandaloneSession(userId, journey.name);
     this.performanceLogger = PerformanceLogger.getInstance();
     
+    // Generate realistic customer profile for this virtual user
+    this.customerProfile = generateCustomerProfile();
+    
     // Initialize with sample products for cart operations
     this.initializeProducts();
   }
 
   private initializeProducts() {
-    // Sample products for virtual user interactions
-    this.products = [
-      { id: 'prod-1', name: 'Margherita Pizza', price: 14.99 },
-      { id: 'prod-2', name: 'Caesar Salad', price: 11.99 },
-      { id: 'prod-3', name: 'Spaghetti Carbonara', price: 16.99 },
-      { id: 'prod-4', name: 'Grilled Salmon', price: 24.99 },
-      { id: 'prod-5', name: 'Chicken Parmesan', price: 19.99 },
-      { id: 'prod-6', name: 'Tiramisu', price: 7.99 }
-    ];
+    // Use real products from DataStore to match exactly what real users see
+    const dataStore = DataStore.getInstance();
+    const realProducts = dataStore.getProducts();
+    
+    // Map to the format needed by virtual user while preserving real data
+    this.products = realProducts.map(product => ({
+      id: product.id,
+      name: product.name,
+      price: product.price,
+      category: product.category
+    }));
+    
+    console.log(`🏪 Virtual user ${this.customerProfile.fullName} (${this.userId}) initialized with ${this.products.length} real products:`, 
+                this.products.map(p => `${p.id}: ${p.name} ($${p.price})`));
   }
 
   async executeJourney(): Promise<void> {
     try {
-      console.log(`🎭 Virtual user ${this.userId} starting journey: ${this.journey.name}`);
+      console.log(`🎭 ${this.customerProfile.fullName} starting journey: ${this.journey.name}`);
       this.updateActivity(`starting_${this.journey.name.toLowerCase().replace(/\s+/g, '_')}`);
       
       for (let i = 0; i < this.journey.steps.length && !this.aborted; i++) {
@@ -48,25 +59,25 @@ export class VirtualUser {
         this.currentStep = i;
         
         if (!shouldExecuteStep(step)) {
-          console.log(`⏭️ Virtual user ${this.userId} skipping step ${i}: ${step.action}`);
+          console.log(`⏭️ ${this.customerProfile.fullName} skipping step ${i}: ${step.action}`);
           continue;
         }
 
-        console.log(`🔄 Virtual user ${this.userId} executing step ${i}: ${step.action}`);
+        console.log(`🔄 ${this.customerProfile.fullName} executing step ${i}: ${step.action}`);
         this.updateActivity(this.getActivityForStep(step), i, this.journey.steps.length);
         await this.executeStep(step, i);
         
         // Simulate think time between actions
         const thinkTime = getThinkTime(step);
-        console.log(`🤔 Virtual user ${this.userId} thinking for ${thinkTime}ms`);
+        console.log(`🤔 ${this.customerProfile.fullName} thinking for ${thinkTime}ms`);
         this.updateActivity(`thinking_after_${step.action}`, i, this.journey.steps.length);
         await this.sleep(thinkTime);
       }
 
-      console.log(`✅ Virtual user ${this.userId} completed journey: ${this.journey.name}`);
+      console.log(`✅ ${this.customerProfile.fullName} completed journey: ${this.journey.name}`);
       this.updateActivity('journey_completed');
     } catch (error) {
-      console.error(`❌ Virtual user ${this.userId} journey failed:`, error);
+      console.error(`❌ ${this.customerProfile.fullName} journey failed:`, error);
       console.error(`   Step: ${this.currentStep}/${this.journey.steps.length}`);
       console.error(`   Journey: ${this.journey.name}`);
       this.updateActivity('journey_failed');
@@ -134,6 +145,13 @@ export class VirtualUser {
   private async navigate(path: string, parentSpan: Span): Promise<void> {
     const ctx = trace.setSpan(context.active(), parentSpan);
     
+    // Simulate clicking navigation link before navigating
+    const linkSelector = this.getNavigationLinkSelector(path);
+    this.simulateClick(linkSelector, path);
+    
+    // Small delay after click before navigation
+    await this.sleep(100 + Math.random() * 200);
+    
     // Log user interaction for navigation
     this.performanceLogger.logUserInteraction('navigate', `page-${path}`, 0);
     
@@ -168,6 +186,10 @@ export class VirtualUser {
   }
 
   private async browseProducts(parentSpan: Span): Promise<void> {
+    // Simulate clicking on product grid or menu section first
+    this.simulateClick('div.no-id.grid.md.grid.cols.2.lg.grid.cols.3.gap.6', 'Product Grid');
+    await this.sleep(300 + Math.random() * 200);
+    
     // Log user interaction for browsing
     this.performanceLogger.logUserInteraction('browse', 'product-catalog', 0);
     
@@ -177,8 +199,19 @@ export class VirtualUser {
     for (let i = 0; i < browseCount; i++) {
       const product = this.products[Math.floor(Math.random() * this.products.length)];
       
+      // Simulate clicking on product card (matches Card component from Menu.tsx)
+      const productCardSelector = `div.no-id.overflow.hidden.hover.shadow.warm.transition.all.duration.300`;
+      this.simulateClick(productCardSelector, product.name);
+      await this.sleep(200 + Math.random() * 150);
+      
       // Log user interaction for each product view
       this.performanceLogger.logUserInteraction('view', `product-${product.id}`, 0);
+      
+      // Simulate hovering over price or other elements
+      if (Math.random() > 0.5) {
+        this.performanceLogger.logUserInteraction('hover', `span.no-id.text.2xl.font.bold.text.primary`, 0);
+        await this.sleep(400 + Math.random() * 300);
+      }
       
       parentSpan.addEvent('product_viewed', {
         'product.id': product.id,
@@ -195,6 +228,13 @@ export class VirtualUser {
     const product = this.products[Math.floor(Math.random() * this.products.length)];
     const quantity = Math.floor(Math.random() * 3) + 1;
     
+    // Simulate clicking the "Add to Cart" button for this product (matches Menu.tsx structure)
+    const addButtonSelector = `button.no-id.bg.primary.hover.bg.primary.90.text.primary.foreground.shadow.md`;
+    this.simulateClick(addButtonSelector, `Add ${product.name} to Cart`);
+    
+    // Small delay after click before updating cart
+    await this.sleep(150 + Math.random() * 100);
+    
     const quantityBefore = this.cart.get(product.id) || 0;
     this.cart.set(product.id, quantityBefore + quantity);
     const quantityAfter = this.cart.get(product.id) || 0;
@@ -206,17 +246,17 @@ export class VirtualUser {
     
     const totalItems = Array.from(this.cart.values()).reduce((a, b) => a + b, 0);
     
-    // Log cart action with all required data
+    // Log cart action with all required data using real product data
     this.performanceLogger.logCartAction(
       'ADD',
-      { id: product.id, name: product.name, price: product.price, category: 'main' },
+      { id: product.id, name: product.name, price: product.price, category: product.category },
       quantityBefore,
       quantityAfter,
       cartTotal,
       0
     );
     
-    console.log(`🛒 User ${this.userId} added ${quantity}x ${product.name} to cart (${totalItems} total items)`);
+    console.log(`🛒 ${this.customerProfile.fullName} added ${quantity}x ${product.name} to cart (${totalItems} total items)`);
     
     parentSpan.addEvent('item_added_to_cart', {
       'product.id': product.id,
@@ -238,6 +278,13 @@ export class VirtualUser {
     
     if (!product) return;
     
+    // Simulate clicking the "Remove" button for this product (matches Menu.tsx structure)
+    const removeButtonSelector = `button.no-id.border.primary.text.primary.hover.bg.primary.hover.text.primary.foreground`;
+    this.simulateClick(removeButtonSelector, `Remove ${product.name} from Cart`);
+    
+    // Small delay after click before updating cart
+    await this.sleep(100 + Math.random() * 80);
+    
     let quantityAfter = quantityBefore;
     if (quantityBefore > 1) {
       this.cart.set(productId, quantityBefore - 1);
@@ -252,10 +299,10 @@ export class VirtualUser {
       return total + (prod?.price || 0) * qty;
     }, 0);
     
-    // Log cart action with all required data
+    // Log cart action with all required data using real product data
     this.performanceLogger.logCartAction(
       'REMOVE',
-      { id: product.id, name: product.name, price: product.price, category: 'main' },
+      { id: product.id, name: product.name, price: product.price, category: product.category },
       quantityBefore,
       quantityAfter,
       cartTotal,
@@ -287,7 +334,7 @@ export class VirtualUser {
     const orderId = `virtual-order-${this.userId}-${Date.now()}`;
     const itemCount = Array.from(this.cart.values()).reduce((a, b) => a + b, 0);
 
-    console.log(`💳 User ${this.userId} starting checkout - ${itemCount} items, $${totalAmount.toFixed(2)}`);
+    console.log(`💳 ${this.customerProfile.fullName} starting checkout - ${itemCount} items, $${totalAmount.toFixed(2)}`);
     this.updateActivity('starting_payment_process');
 
     // Start checkout span
@@ -295,38 +342,44 @@ export class VirtualUser {
 
     try {
       // Simulate checkout steps
-      await this.simulatePaymentProcess(checkoutSpan);
+      const paymentSucceeded = await this.simulatePaymentProcess(checkoutSpan);
       
-      checkoutSpan.setStatus({ code: SpanStatusCode.OK });
-      console.log(`✅ User ${this.userId} completed checkout - Order ${orderId}`);
-      this.updateActivity('checkout_completed');
-      this.cart.clear();
+      if (paymentSucceeded) {
+        checkoutSpan.setStatus({ code: SpanStatusCode.OK });
+        console.log(`✅ ${this.customerProfile.fullName} completed checkout - Order ${orderId}`);
+        this.updateActivity('checkout_completed');
+        this.cart.clear();
+      } else {
+        // Payment was declined but handled gracefully
+        checkoutSpan.setStatus({ code: SpanStatusCode.OK });
+        console.log(`🛒 ${this.customerProfile.fullName} checkout abandoned after payment decline`);
+      }
     } catch (error) {
-      console.log(`❌ User ${this.userId} checkout failed - ${error.message}`);
+      console.log(`❌ ${this.customerProfile.fullName} checkout failed - ${error.message}`);
       this.updateActivity('checkout_failed');
       checkoutSpan.recordException(error as Error);
       checkoutSpan.setStatus({ code: SpanStatusCode.ERROR });
-      throw error;
+      // Don't re-throw to prevent 404 errors
     } finally {
       checkoutSpan.end();
     }
   }
 
-  private async simulatePaymentProcess(checkoutSpan: Span): Promise<void> {
+  private async simulatePaymentProcess(checkoutSpan: Span): Promise<boolean> {
     const ctx = trace.setSpan(context.active(), checkoutSpan);
 
-    // Generate fake payment and customer data for logging
+    // Use realistic customer data from profile
     const paymentData = {
-      cardNumber: '4532-1234-5678-9012',
-      expiryDate: '12/25',
-      cvv: '123',
-      cardHolderName: `Virtual User ${this.userId}`
+      cardNumber: formatCreditCardNumber(this.customerProfile.creditCard.number),
+      expiryDate: `${this.customerProfile.creditCard.expiryMonth}/${this.customerProfile.creditCard.expiryYear}`,
+      cvv: this.customerProfile.creditCard.cvv,
+      cardHolderName: this.customerProfile.creditCard.holderName
     };
 
     const customerData = {
-      name: `Virtual User ${this.userId}`,
-      email: `${this.userId}@example.com`,
-      phone: '555-0123'
+      name: this.customerProfile.fullName,
+      email: this.customerProfile.email,
+      phone: this.customerProfile.phone
     };
 
     const orderId = `virtual-order-${this.userId}-${Date.now()}`;
@@ -339,11 +392,32 @@ export class VirtualUser {
       orderId,
       amount: totalAmount,
       currency: 'USD',
-      orderType: 'delivery'
+      orderType: generateOrderType()
     };
 
     // Stage 1: Payment initiated
     this.updateActivity('entering_payment_details');
+    
+    // Simulate clicking and filling payment form fields (realistic form structure)
+    this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'Card Number Field');
+    await this.sleep(200 + Math.random() * 100);
+    this.performanceLogger.logUserInteraction('input', 'input.no-id.flex.h.10.w.full.rounded.md.border', 500);
+    
+    await this.sleep(800 + Math.random() * 400);
+    this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'Expiry Date Field');
+    await this.sleep(200 + Math.random() * 100);
+    this.performanceLogger.logUserInteraction('input', 'input#expiry-date', 300);
+    
+    await this.sleep(600 + Math.random() * 300);
+    this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'CVV Field');
+    await this.sleep(200 + Math.random() * 100);
+    this.performanceLogger.logUserInteraction('input', 'input#cvv', 200);
+    
+    await this.sleep(700 + Math.random() * 400);
+    this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'Cardholder Name Field');
+    await this.sleep(200 + Math.random() * 100);
+    this.performanceLogger.logUserInteraction('input', 'input.no-id.flex.h.10.w.full.rounded.md.border', 800);
+    
     checkoutSpan.addEvent('payment_initiated', {
       'payment.method': 'credit_card',
       'payment.card_type': 'visa'
@@ -356,8 +430,12 @@ export class VirtualUser {
       'initiated'
     );
 
-    // Simulate payment validation (3-5 seconds)
-    await this.sleep(3000 + Math.random() * 2000);
+    // Simulate clicking "Process Payment" button
+    await this.sleep(1000 + Math.random() * 500);
+    this.simulateClick('button.no-id.inline.flex.items.center.justify.center.rounded.md', 'Process Payment');
+    
+    // Simulate payment validation (1-2 seconds after form submission)
+    await this.sleep(1000 + Math.random() * 1000);
     
     // Stage 2: Payment processing
     this.updateActivity('processing_payment');
@@ -389,7 +467,7 @@ export class VirtualUser {
         2500
       );
       
-      console.log(`💰 User ${this.userId} payment successful, posting order to /api/orders`);
+      console.log(`💰 User ${this.customerProfile.fullName} payment successful, posting order to /api/orders`);
       this.updateActivity('creating_order');
       const orderResponse = await this.fetchWithTracing('/api/orders', 'POST', ctx);
       
@@ -410,15 +488,17 @@ export class VirtualUser {
             customerEmail: customerData.email,
             customerPhone: customerData.phone,
             orderType: transactionData.orderType,
-            notes: 'Virtual user order'
+            notes: transactionData.orderType === 'delivery' ? 'Please call when arriving' : 'Will pick up at store'
           },
           300
         );
       }
       
-      console.log(`📦 User ${this.userId} order successfully posted to API`);
+      console.log(`📦 ${this.customerProfile.fullName} order successfully posted to API`);
       this.updateActivity('order_confirmed');
+      return true; // Payment succeeded
     } else {
+      this.updateActivity('payment_declined');
       checkoutSpan.addEvent('payment_failed', {
         'error.code': 'payment_declined',
         'error.message': 'Card declined'
@@ -432,16 +512,50 @@ export class VirtualUser {
         2500
       );
       
-      console.log(`💸 User ${this.userId} payment failed - card declined`);
-      throw new Error('Payment failed');
+      console.log(`💸 ${this.customerProfile.fullName} payment failed - card declined`);
+      
+      // Don't throw error - just log the failure and continue
+      // This prevents 404 errors from propagating up
+      this.updateActivity('retrying_payment');
+      
+      // Simulate user deciding not to retry
+      await this.sleep(2000 + Math.random() * 2000);
+      this.updateActivity('checkout_abandoned');
+      
+      // Return false to indicate payment failed
+      return false;
     }
   }
 
   private async viewProductDetails(parentSpan: Span): Promise<void> {
     const product = this.products[Math.floor(Math.random() * this.products.length)];
     
+    // Simulate clicking on product title for detailed view (matches CardTitle)
+    const detailLinkSelector = `h3.no-id.text.lg.font.semibold.leading.none.tracking.tight`;
+    this.simulateClick(detailLinkSelector, `View ${product.name} Details`);
+    await this.sleep(400 + Math.random() * 300);
+    
     // Log user interaction for viewing product details
     this.performanceLogger.logUserInteraction('view_details', `product-details-${product.id}`, 0);
+    
+    // Simulate interacting with different parts of the product details page
+    if (Math.random() > 0.4) {
+      // Simulate clicking on product images
+      this.simulateClick(`img.no-id.w.full.h.full.object.cover`, 'Product Image');
+      await this.sleep(600 + Math.random() * 400);
+    }
+    
+    if (Math.random() > 0.6) {
+      // Simulate scrolling through description or ingredients
+      this.performanceLogger.logUserInteraction('scroll', `p.no-id.text.muted.foreground.mb.4`, 0);
+      await this.sleep(1000 + Math.random() * 800);
+    }
+    
+    if (Math.random() > 0.7) {
+      // Simulate clicking on nutritional info or reviews tab
+      this.simulateClick(`div.no-id.rounded.lg.border.bg.card.text.card.foreground.shadow.sm`, 'Product Details Section');
+      await this.sleep(800 + Math.random() * 600);
+    }
     
     parentSpan.addEvent('product_details_viewed', {
       'product.id': product.id,
@@ -450,9 +564,9 @@ export class VirtualUser {
 
     // Don't call /api/products/:id since virtual users use fake IDs
     // Just simulate viewing without API call to avoid 404s
-    console.log(`👀 User ${this.userId} viewing product details: ${product.name}`);
-    // Simulate reading product details, ingredients, reviews (3-8 seconds)
-    await this.sleep(3000 + Math.random() * 5000);
+    console.log(`👀 ${this.customerProfile.fullName} viewing product details: ${product.name}`);
+    // Simulate reading product details, ingredients, reviews (2-4 seconds remaining)
+    await this.sleep(2000 + Math.random() * 2000);
   }
 
   private async makeReservation(parentSpan: Span): Promise<void> {
@@ -462,33 +576,73 @@ export class VirtualUser {
     // Log user interaction for starting reservation
     this.performanceLogger.logUserInteraction('start_reservation', 'reservation-form', 0);
     
-    // Simulate reservation form filling (more realistic: 5-10 seconds)
+    // Simulate reservation form filling with individual field interactions
     this.updateActivity('filling_reservation_form');
-    await this.sleep(5000 + Math.random() * 5000);
+    
+    // Simulate clicking and filling reservation form fields
+    this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'Date Field');
+    await this.sleep(300 + Math.random() * 200);
+    this.performanceLogger.logUserInteraction('input', 'input#reservation-date', 400);
+    
+    await this.sleep(800 + Math.random() * 400);
+    this.simulateClick('select.no-id.flex.h.10.w.full.rounded.md.border', 'Time Field');
+    await this.sleep(200 + Math.random() * 100);
+    this.performanceLogger.logUserInteraction('input', 'select#reservation-time', 300);
+    
+    await this.sleep(600 + Math.random() * 300);
+    this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'Guest Count Field');
+    await this.sleep(200 + Math.random() * 100);
+    this.performanceLogger.logUserInteraction('input', 'input#guest-count', 200);
+    
+    await this.sleep(900 + Math.random() * 500);
+    this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'Name Field');
+    await this.sleep(300 + Math.random() * 200);
+    this.performanceLogger.logUserInteraction('input', 'input#customer-name', 600);
+    
+    await this.sleep(700 + Math.random() * 300);
+    this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'Email Field');
+    await this.sleep(300 + Math.random() * 200);
+    this.performanceLogger.logUserInteraction('input', 'input#customer-email', 800);
+    
+    await this.sleep(600 + Math.random() * 300);
+    this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'Phone Field');
+    await this.sleep(300 + Math.random() * 200);
+    this.performanceLogger.logUserInteraction('input', 'input#customer-phone', 500);
+    
+    await this.sleep(800 + Math.random() * 400);
+    this.simulateClick('textarea.no-id.flex.min.h.24.w.full.rounded.md.border', 'Special Requests Field');
+    await this.sleep(200 + Math.random() * 100);
+    this.performanceLogger.logUserInteraction('input', 'textarea#special-requests', 600);
     
     const ctx = trace.setSpan(context.active(), parentSpan);
     
     const reservationId = `virtual-reservation-${this.userId}-${Date.now()}`;
     
     try {
+      // Simulate clicking "Submit Reservation" button
+      await this.sleep(1000 + Math.random() * 500);
+      this.simulateClick('button.no-id.inline.flex.items.center.justify.center.rounded.md', 'Submit Reservation');
+      
       this.updateActivity('submitting_reservation');
       const reservationResponse = await this.fetchWithTracing('/api/reservations', 'POST', ctx);
       
       // Log data operation for reservation creation
       if (reservationResponse && !reservationResponse.failed) {
         this.updateActivity('reservation_confirmed');
+        // Get the same data that was sent to the API
+        const reservationBody = this.getRequestBody('/api/reservations') as any;
         this.performanceLogger.logDataOperation(
           'CREATE',
           'reservation',
           reservationId,
           {
-            date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-            time: '19:00',
-            guests: Math.floor(Math.random() * 6) + 2,
-            customerName: `Virtual User ${this.userId}`,
-            customerEmail: `${this.userId}@example.com`,
-            customerPhone: '555-0123',
-            specialRequests: 'Virtual user reservation'
+            date: reservationBody.date,
+            time: reservationBody.time,
+            guests: reservationBody.guests,
+            customerName: reservationBody.name,
+            customerEmail: reservationBody.email,
+            customerPhone: reservationBody.phone,
+            specialRequests: reservationBody.specialRequests
           },
           200
         );
@@ -520,7 +674,7 @@ export class VirtualUser {
 
     try {
       const requestBody = method === 'POST' ? this.getRequestBody(url) : undefined;
-      console.log(`🌐 User ${this.userId} making ${method} request to ${url}`, requestBody ? { body: requestBody } : '');
+      console.log(`🌐 ${this.customerProfile.fullName} making ${method} request to ${url}`, requestBody ? { body: requestBody } : '');
       
       // Make actual HTTP request to real endpoints
       const response = await fetch(`http://localhost:3001${url}`, {
@@ -538,7 +692,7 @@ export class VirtualUser {
       const statusCode = response.status;
       const responseText = await response.text();
       
-      console.log(`📡 User ${this.userId} received ${statusCode} response from ${url} (${responseText.length} bytes)`);
+      console.log(`📡 ${this.customerProfile.fullName} received ${statusCode} response from ${url} (${responseText.length} bytes)`);
       
       fetchSpan.setAttributes({
         'http.status_code': statusCode,
@@ -546,7 +700,7 @@ export class VirtualUser {
       });
 
       if (!response.ok) {
-        console.log(`⚠️ User ${this.userId} API error: ${statusCode} ${response.statusText} for ${url} - continuing session`);
+        console.log(`⚠️ ${this.customerProfile.fullName} API error: ${statusCode} ${response.statusText} for ${url} - continuing session`);
         fetchSpan.setStatus({ code: SpanStatusCode.ERROR, message: `HTTP ${statusCode}` });
         // Don't throw error - let user session continue
         return { 
@@ -561,7 +715,7 @@ export class VirtualUser {
         data: responseText ? JSON.parse(responseText) : {} 
       };
     } catch (error) {
-      console.log(`🚫 User ${this.userId} network error for ${url}: ${error.message} - continuing session`);
+      console.log(`🚫 ${this.customerProfile.fullName} network error for ${url}: ${error.message} - continuing session`);
       fetchSpan.recordException(error as Error);
       fetchSpan.setStatus({ code: SpanStatusCode.ERROR });
       // Don't throw error - let user session continue
@@ -577,7 +731,8 @@ export class VirtualUser {
 
   private getRequestBody(url: string): any {
     if (url === '/api/orders') {
-      // Order data for checkout
+      // Order data for checkout using realistic customer data
+      const orderType = generateOrderType();
       return {
         items: Array.from(this.cart.entries()).map(([productId, quantity]) => ({
           productId,
@@ -588,21 +743,31 @@ export class VirtualUser {
           const product = this.products.find(p => p.id === productId);
           return total + (product?.price || 0) * quantity;
         }, 0),
-        customerName: `Virtual User ${this.userId}`,
-        customerEmail: `${this.userId}@example.com`,
-        customerPhone: '555-0123',
-        orderType: 'delivery'
+        customerName: this.customerProfile.fullName,
+        customerEmail: this.customerProfile.email,
+        customerPhone: this.customerProfile.phone,
+        orderType: orderType,
+        deliveryAddress: orderType === 'delivery' ? {
+          street: this.customerProfile.address.street,
+          city: this.customerProfile.address.city,
+          state: this.customerProfile.address.state,
+          zipCode: this.customerProfile.address.zipCode
+        } : undefined
       };
     } else if (url === '/api/reservations') {
-      // Reservation data - match server's expected fields
+      // Reservation data using realistic customer data
+      const futureDate = new Date(Date.now() + (Math.floor(Math.random() * 14) + 1) * 24 * 60 * 60 * 1000); // 1-14 days ahead
+      const times = ['17:00', '17:30', '18:00', '18:30', '19:00', '19:30', '20:00', '20:30', '21:00'];
+      const specialRequest = generateSpecialRequest();
+      
       return {
-        date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // YYYY-MM-DD format
-        time: '19:00',
-        guests: Math.floor(Math.random() * 6) + 2, // Server expects 'guests', not 'partySize'
-        name: `Virtual User ${this.userId}`,
-        email: `${this.userId}@example.com`,
-        phone: '555-0123',
-        specialRequests: 'Virtual user reservation'
+        date: futureDate.toISOString().split('T')[0], // YYYY-MM-DD format
+        time: times[Math.floor(Math.random() * times.length)],
+        guests: generatePartySize(),
+        name: this.customerProfile.fullName,
+        email: this.customerProfile.email,
+        phone: this.customerProfile.phone,
+        specialRequests: specialRequest
       };
     }
     
@@ -640,6 +805,43 @@ export class VirtualUser {
         return 'booking_table';
       default:
         return step.action.replace('_', ' ');
+    }
+  }
+
+  private simulateClick(elementSelector: string, elementText?: string): void {
+    // Extract tag, id, and class from selector to match real user format exactly
+    // Real users generate: tagName#id.class1.class2 (spaces in className replaced with dots)
+    let realUserFormat = elementSelector;
+    
+    // Parse selector like "button#add-prod-1.add-to-cart-btn" or "button.no-id.flex.items.center"
+    const selectorMatch = elementSelector.match(/^([a-z]+)(?:#([^.]+))?(?:\.(.+))?$/);
+    if (selectorMatch) {
+      const [, tag, id, classes] = selectorMatch;
+      const idPart = id || 'no-id';
+      // Keep classes as-is since they're already in the correct format (dots separated)
+      const classPart = classes || 'no-class';
+      realUserFormat = `${tag}#${idPart}.${classPart}`;
+    }
+    
+    // Simulate a realistic click event matching real user format exactly
+    this.performanceLogger.logUserInteraction('click', realUserFormat, 0);
+    console.log(`🖱️ ${this.customerProfile.fullName} clicked: ${realUserFormat}${elementText ? ` (${elementText})` : ''}`);
+  }
+
+  private getNavigationLinkSelector(path: string): string {
+    // Generate realistic navigation link selectors based on actual Navigation component
+    // Real navigation uses Link + Button components with classes like "flex items-center space-x-2"
+    switch (path) {
+      case '/':
+        return 'button.no-id.flex.items.center.space.x.2'; // Home button
+      case '/menu':
+        return 'button.no-id.flex.items.center.space.x.2'; // Menu button  
+      case '/reservations':
+        return 'button.no-id.flex.items.center.space.x.2'; // Reservations button
+      case '/config':
+        return 'button.no-id.flex.items.center.space.x.2'; // Config button
+      default:
+        return 'button.no-id.flex.items.center.space.x.2';
     }
   }
 

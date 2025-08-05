@@ -12,7 +12,7 @@ class PerformanceLogger {
   private static instance: PerformanceLogger;
   private config: PerformanceConfig;
   private sessionId: string;
-  private logFile = '/tmp/restaurant-performance.log';
+  private logFile = '/tmp/codeuser/restaurant-performance.log';
   private logBuffer: string[] = [];
 
   private constructor() {
@@ -602,10 +602,10 @@ class PerformanceLogger {
       }
     });
 
-    // Also log as user interaction for backwards compatibility
+    // Also log as user interaction for backwards compatibility with product ID
     this.logUserInteraction(
       'cart-action',
-      `${action.toLowerCase()}-${product.name}-${product.category}`,
+      `${action.toLowerCase()}-${product.id}-${product.name}-${product.category}`,
       duration
     );
   }

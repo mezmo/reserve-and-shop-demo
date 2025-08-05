@@ -50,7 +50,7 @@ const Menu = () => {
             key={category}
             variant={selectedCategory === category ? "default" : "outline"}
             onClick={() => {
-              const endTracking = trackUserInteraction('click', `category-filter-${category}`);
+              const endTracking = trackUserInteraction('click', `category-filter-${category.toLowerCase().replace(/\s+/g, '-')}`);
               setSelectedCategory(category);
               endTracking();
             }}
@@ -98,7 +98,7 @@ const Menu = () => {
                           size="icon"
                           variant="outline"
                           onClick={() => {
-                            const endTracking = trackUserInteraction('click', `remove-from-cart-${product.name}`);
+                            const endTracking = trackUserInteraction('click', `remove-from-cart-${product.id}-${product.name}`);
                             removeFromCart({
                               id: product.id,
                               name: product.name,
@@ -119,7 +119,7 @@ const Menu = () => {
                     <Button
                       size="icon"
                       onClick={() => {
-                        const endTracking = trackUserInteraction('click', `add-to-cart-${product.name}`);
+                        const endTracking = trackUserInteraction('click', `add-to-cart-${product.id}-${product.name}`);
                         addToCart({
                           id: product.id,
                           name: product.name,
