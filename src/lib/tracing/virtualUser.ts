@@ -3,7 +3,8 @@ import { UserJourney, JourneyStep, getThinkTime, shouldExecuteStep } from './use
 import { SessionTracker } from './sessionTracker';
 import PerformanceLogger from '@/lib/performanceLogger';
 import { DataStore } from '@/stores/dataStore';
-import { generateCustomerProfile, generateSpecialRequest, formatCreditCardNumber, generateOrderType, generatePartySize, type CustomerProfile } from '@/lib/utils/fakeDataGenerator';
+import { generateCustomerProfile, generateSpecialRequest, formatCreditCardNumber, generateOrderType, generatePartySize, generateBrowserFingerprint, generateNetworkTiming, addTimingJitter, type CustomerProfile, type BrowserFingerprint, type NetworkTiming } from '@/lib/utils/fakeDataGenerator';
+import { MetricsLogger } from '@/lib/logging/loggers/MetricsLogger';
 
 export class VirtualUser {
   private tracer = trace.getTracer('virtual-user', '1.0.0');
@@ -17,19 +18,60 @@ export class VirtualUser {
   private products: any[] = [];
   private aborted: boolean = false;
   private customerProfile: CustomerProfile;
+  private browserFingerprint: BrowserFingerprint;
+  private metricsLogger: MetricsLogger;
 
   constructor(userId: string, journey: UserJourney, trafficManager?: any) {
     this.userId = userId;
     this.journey = journey;
     this.trafficManager = trafficManager;
-    this.sessionTracker = SessionTracker.createStandaloneSession(userId, journey.name);
+    
+    // Generate realistic customer profile and browser fingerprint
+    this.customerProfile = generateCustomerProfile();
+    this.browserFingerprint = generateBrowserFingerprint();
+    
+    // Create session with realistic browser context
+    this.sessionTracker = SessionTracker.createStandaloneSession(userId, journey.name, this.browserFingerprint);
     this.performanceLogger = PerformanceLogger.getInstance();
     
-    // Generate realistic customer profile for this virtual user
-    this.customerProfile = generateCustomerProfile();
+    // Initialize metrics logger for trace-to-metrics correlation
+    try {
+      this.metricsLogger = MetricsLogger.createDefault(this.sessionTracker.getSessionId());
+      console.log(`📊 MetricsLogger initialized for user ${this.customerProfile.fullName}`);
+    } catch (error) {
+      console.warn(`⚠️ Failed to initialize MetricsLogger for user ${userId}:`, error);
+      // Create a minimal fallback metrics logger
+      this.metricsLogger = {
+        logCounter: (name: string, value: number, tags?: Record<string, string>) => {
+          console.log(`📊 Metric Counter: ${name} = ${value}`, tags);
+        },
+        logGauge: (name: string, value: number, unit?: string, tags?: Record<string, string>) => {
+          console.log(`📊 Metric Gauge: ${name} = ${value} ${unit || 'units'}`, tags);
+        },
+        logBusinessMetric: (name: string, value: number, currency?: string, tags?: Record<string, string>) => {
+          console.log(`📊 Business Metric: ${name} = ${value} ${currency || 'units'}`, tags);
+        },
+        logPerformanceMetric: (name: string, duration: number, tags?: Record<string, string>) => {
+          console.log(`📊 Performance Metric: ${name} = ${duration}ms`, tags);
+        }
+      } as any;
+    }
     
     // Initialize with sample products for cart operations
     this.initializeProducts();
+    
+    // Emit session start metrics
+    try {
+      this.metricsLogger.logCounter('user_sessions', 1, {
+        'user.journey': this.journey.name,
+        'browser.platform': this.browserFingerprint.platform,
+        'browser.language': this.browserFingerprint.language,
+        'trace.id': this.sessionTracker.getTraceId() || '',
+        'session.id': this.sessionTracker.getSessionId()
+      });
+    } catch (error) {
+      console.warn(`⚠️ Failed to log session start metrics for user ${userId}:`, error);
+    }
   }
 
   private initializeProducts() {
@@ -51,7 +93,7 @@ export class VirtualUser {
 
   async executeJourney(): Promise<void> {
     try {
-      console.log(`🎭 ${this.customerProfile.fullName} starting journey: ${this.journey.name}`);
+      console.log(`🎭 ${this.customerProfile.fullName} (${this.userId}) starting journey: ${this.journey.name} with ${this.journey.steps.length} steps`);
       this.updateActivity(`starting_${this.journey.name.toLowerCase().replace(/\s+/g, '_')}`);
       
       for (let i = 0; i < this.journey.steps.length && !this.aborted; i++) {
@@ -59,13 +101,14 @@ export class VirtualUser {
         this.currentStep = i;
         
         if (!shouldExecuteStep(step)) {
-          console.log(`⏭️ ${this.customerProfile.fullName} skipping step ${i}: ${step.action}`);
+          console.log(`⏭️ ${this.customerProfile.fullName} (${this.userId}) skipping step ${i + 1}: ${step.action}`);
           continue;
         }
 
-        console.log(`🔄 ${this.customerProfile.fullName} executing step ${i}: ${step.action}`);
+        console.log(`🔄 ${this.customerProfile.fullName} (${this.userId}) executing step ${i + 1}/${this.journey.steps.length}: ${step.action}`);
         this.updateActivity(this.getActivityForStep(step), i, this.journey.steps.length);
         await this.executeStep(step, i);
+        console.log(`  ✓ Step ${i + 1} completed: ${step.action}`);
         
         // Simulate think time between actions
         const thinkTime = getThinkTime(step);
@@ -74,7 +117,7 @@ export class VirtualUser {
         await this.sleep(thinkTime);
       }
 
-      console.log(`✅ ${this.customerProfile.fullName} completed journey: ${this.journey.name}`);
+      console.log(`✅ ${this.customerProfile.fullName} (${this.userId}) completed journey: ${this.journey.name}`);
       this.updateActivity('journey_completed');
     } catch (error) {
       console.error(`❌ ${this.customerProfile.fullName} journey failed:`, error);
@@ -186,9 +229,12 @@ export class VirtualUser {
   }
 
   private async browseProducts(parentSpan: Span): Promise<void> {
+    // Simulate scrolling to product section first
+    await this.simulateScrolling('down');
+    
     // Simulate clicking on product grid or menu section first
     this.simulateClick('div.no-id.grid.md.grid.cols.2.lg.grid.cols.3.gap.6', 'Product Grid');
-    await this.sleep(300 + Math.random() * 200);
+    await this.sleep(addTimingJitter(300, 0.4));
     
     // Log user interaction for browsing
     this.performanceLogger.logUserInteraction('browse', 'product-catalog', 0);
@@ -199,19 +245,18 @@ export class VirtualUser {
     for (let i = 0; i < browseCount; i++) {
       const product = this.products[Math.floor(Math.random() * this.products.length)];
       
+      // Occasionally scroll to see more products
+      if (i > 0 && Math.random() > 0.7) {
+        await this.simulateScrolling('down');
+      }
+      
       // Simulate clicking on product card (matches Card component from Menu.tsx)
       const productCardSelector = `div.no-id.overflow.hidden.hover.shadow.warm.transition.all.duration.300`;
       this.simulateClick(productCardSelector, product.name);
-      await this.sleep(200 + Math.random() * 150);
+      await this.sleep(addTimingJitter(200, 0.3));
       
       // Log user interaction for each product view
       this.performanceLogger.logUserInteraction('view', `product-${product.id}`, 0);
-      
-      // Simulate hovering over price or other elements
-      if (Math.random() > 0.5) {
-        this.performanceLogger.logUserInteraction('hover', `span.no-id.text.2xl.font.bold.text.primary`, 0);
-        await this.sleep(400 + Math.random() * 300);
-      }
       
       parentSpan.addEvent('product_viewed', {
         'product.id': product.id,
@@ -219,8 +264,23 @@ export class VirtualUser {
         'product.price': product.price
       });
 
-      // Simulate reading product description and price (2-5 seconds per product)
-      await this.sleep(2000 + Math.random() * 3000);
+      // Emit correlated metrics for product views
+      this.metricsLogger.logCounter('product_views', 1, {
+        'product.id': product.id,
+        'product.category': product.category,
+        'user.journey': this.journey.name,
+        'trace.id': this.sessionTracker.getTraceId() || '',
+        'session.id': this.sessionTracker.getSessionId()
+      });
+      
+      const engagementTime = addTimingJitter(2500, 0.6);
+      this.metricsLogger.logGauge('product_engagement_time', engagementTime, 'milliseconds', {
+        'product.id': product.id,
+        'trace.id': this.sessionTracker.getTraceId() || ''
+      });
+
+      // Simulate reading product description and price with more realistic timing
+      await this.sleep(engagementTime);
     }
   }
 
@@ -263,6 +323,24 @@ export class VirtualUser {
       'product.name': product.name,
       'quantity': quantity,
       'cart.total_items': totalItems
+    });
+
+    // Emit correlated metrics for cart operations
+    this.metricsLogger.logCounter('cart_add_item', quantity, {
+      'product.id': product.id,
+      'product.category': product.category,
+      'user.journey': this.journey.name,
+      'trace.id': this.sessionTracker.getTraceId() || '',
+      'session.id': this.sessionTracker.getSessionId()
+    });
+    
+    this.metricsLogger.logGauge('cart_total_value', cartTotal, 'USD', {
+      'trace.id': this.sessionTracker.getTraceId() || '',
+      'session.id': this.sessionTracker.getSessionId()
+    });
+    
+    this.metricsLogger.logGauge('cart_item_count', totalItems, 'items', {
+      'trace.id': this.sessionTracker.getTraceId() || ''
     });
 
     this.sessionTracker.recordInteraction('add_to_cart', { productId: product.id, quantity });
@@ -398,25 +476,21 @@ export class VirtualUser {
     // Stage 1: Payment initiated
     this.updateActivity('entering_payment_details');
     
-    // Simulate clicking and filling payment form fields (realistic form structure)
-    this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'Card Number Field');
-    await this.sleep(200 + Math.random() * 100);
-    this.performanceLogger.logUserInteraction('input', 'input.no-id.flex.h.10.w.full.rounded.md.border', 500);
+    // Simulate realistic form filling with focus/blur events
+    await this.simulateFormFocus('input.no-id.flex.h.10.w.full.rounded.md.border', 'Card Number Field');
+    this.performanceLogger.logUserInteraction('input', 'card-number-field', addTimingJitter(500, 0.3));
     
-    await this.sleep(800 + Math.random() * 400);
-    this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'Expiry Date Field');
-    await this.sleep(200 + Math.random() * 100);
-    this.performanceLogger.logUserInteraction('input', 'input#expiry-date', 300);
+    await this.sleep(addTimingJitter(800, 0.5));
+    await this.simulateFormFocus('input.no-id.flex.h.10.w.full.rounded.md.border', 'Expiry Date Field');
+    this.performanceLogger.logUserInteraction('input', 'expiry-date-field', addTimingJitter(300, 0.3));
     
-    await this.sleep(600 + Math.random() * 300);
-    this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'CVV Field');
-    await this.sleep(200 + Math.random() * 100);
-    this.performanceLogger.logUserInteraction('input', 'input#cvv', 200);
+    await this.sleep(addTimingJitter(600, 0.4));
+    await this.simulateFormFocus('input.no-id.flex.h.10.w.full.rounded.md.border', 'CVV Field');
+    this.performanceLogger.logUserInteraction('input', 'cvv-field', addTimingJitter(200, 0.3));
     
-    await this.sleep(700 + Math.random() * 400);
-    this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'Cardholder Name Field');
-    await this.sleep(200 + Math.random() * 100);
-    this.performanceLogger.logUserInteraction('input', 'input.no-id.flex.h.10.w.full.rounded.md.border', 800);
+    await this.sleep(addTimingJitter(700, 0.5));
+    await this.simulateFormFocus('input.no-id.flex.h.10.w.full.rounded.md.border', 'Cardholder Name Field');
+    this.performanceLogger.logUserInteraction('input', 'cardholder-name-field', addTimingJitter(800, 0.4));
     
     checkoutSpan.addEvent('payment_initiated', {
       'payment.method': 'credit_card',
@@ -452,8 +526,8 @@ export class VirtualUser {
     // Simulate payment processing (4-6 seconds)
     await this.sleep(4000 + Math.random() * 2000);
 
-    // Stage 3: Payment success/failure (90% success rate)
-    const success = Math.random() > 0.1;
+    // Stage 3: Payment success/failure with realistic error rates
+    const success = this.simulatePaymentResult();
     
     if (success) {
       this.updateActivity('payment_successful');
@@ -464,12 +538,30 @@ export class VirtualUser {
         customerData,
         transactionData,
         'success',
-        2500
+        addTimingJitter(2500, 0.3)
       );
+
+      // Emit business metrics for successful payment
+      this.metricsLogger.logBusinessMetric('payment_success', totalAmount, 'USD', {
+        'payment.method': 'credit_card',
+        'payment.card_type': this.customerProfile.creditCard.type,
+        'order.type': transactionData.orderType,
+        'user.journey': this.journey.name,
+        'trace.id': this.sessionTracker.getTraceId() || '',
+        'session.id': this.sessionTracker.getSessionId()
+      });
+      
+      this.metricsLogger.logCounter('payment_attempts', 1, {
+        'payment.result': 'success',
+        'payment.method': 'credit_card',
+        'trace.id': this.sessionTracker.getTraceId() || ''
+      });
       
       console.log(`💰 User ${this.customerProfile.fullName} payment successful, posting order to /api/orders`);
       this.updateActivity('creating_order');
-      const orderResponse = await this.fetchWithTracing('/api/orders', 'POST', ctx);
+      
+      // Occasionally simulate API retries even on success
+      const orderResponse = await this.fetchWithRetries('/api/orders', 'POST', ctx, 1);
       
       // Log data operation for order creation
       if (orderResponse && !orderResponse.failed) {
@@ -511,18 +603,86 @@ export class VirtualUser {
         'failed',
         2500
       );
+
+      // Emit failure metrics
+      this.metricsLogger.logCounter('payment_attempts', 1, {
+        'payment.result': 'failed',
+        'payment.method': 'credit_card',
+        'payment.card_type': this.customerProfile.creditCard.type,
+        'failure.reason': 'card_declined',
+        'trace.id': this.sessionTracker.getTraceId() || '',
+        'session.id': this.sessionTracker.getSessionId()
+      });
+      
+      this.metricsLogger.logBusinessMetric('payment_failed_amount', totalAmount, 'USD', {
+        'user.journey': this.journey.name,
+        'trace.id': this.sessionTracker.getTraceId() || ''
+      });
       
       console.log(`💸 ${this.customerProfile.fullName} payment failed - card declined`);
       
-      // Don't throw error - just log the failure and continue
-      // This prevents 404 errors from propagating up
-      this.updateActivity('retrying_payment');
+      // Simulate realistic retry behavior
+      const shouldRetry = Math.random() > 0.4; // 60% of users retry after failure
       
-      // Simulate user deciding not to retry
-      await this.sleep(2000 + Math.random() * 2000);
+      if (shouldRetry) {
+        console.log(`🔄 ${this.customerProfile.fullName} attempting payment retry`);
+        this.updateActivity('retrying_payment');
+        checkoutSpan.addEvent('payment_retry_attempt');
+        
+        // Simulate user fixing payment details
+        await this.sleep(addTimingJitter(3000, 0.5));
+        await this.simulateFormFocus('input.no-id.flex.h.10.w.full.rounded.md.border', 'Card Number Field');
+        await this.sleep(addTimingJitter(2000, 0.4));
+        
+        // Second attempt (higher success rate: 70%)
+        const retrySuccess = Math.random() > 0.3;
+        
+        if (retrySuccess) {
+          this.updateActivity('payment_successful');
+          checkoutSpan.addEvent('payment_success_after_retry');
+          
+          this.performanceLogger.logPaymentAttempt(
+            paymentData,
+            customerData,
+            { ...transactionData, retryAttempt: 1 },
+            'success',
+            addTimingJitter(2800, 0.3)
+          );
+          
+          console.log(`💰 ${this.customerProfile.fullName} payment successful on retry`);
+          this.updateActivity('creating_order');
+          const orderResponse = await this.fetchWithRetries('/api/orders', 'POST', ctx, 1);
+          
+          // Handle order creation similar to first attempt
+          if (orderResponse && !orderResponse.failed) {
+            this.performanceLogger.logDataOperation('CREATE', 'order', orderId, {
+              items: Array.from(this.cart.entries()).map(([productId, quantity]) => ({
+                productId, quantity, 
+                price: this.products.find(p => p.id === productId)?.price || 0
+              })),
+              totalAmount,
+              customerName: customerData.name,
+              retryAttempt: 1
+            });
+            this.updateActivity('order_confirmed');
+            return true;
+          }
+        } else {
+          checkoutSpan.addEvent('payment_failed_after_retry');
+          this.performanceLogger.logPaymentAttempt(
+            paymentData, customerData, 
+            { ...transactionData, retryAttempt: 1 }, 
+            'failed', 
+            addTimingJitter(2500, 0.3)
+          );
+        }
+      }
+      
+      // Final abandonment
+      await this.sleep(addTimingJitter(2000, 0.5));
       this.updateActivity('checkout_abandoned');
+      checkoutSpan.addEvent('checkout_abandoned');
       
-      // Return false to indicate payment failed
       return false;
     }
   }
@@ -659,6 +819,10 @@ export class VirtualUser {
   }
 
   private async fetchWithTracing(url: string, method: string, ctx: Context): Promise<any> {
+    // Generate realistic network timing before request
+    const networkTiming = generateNetworkTiming();
+    const startTime = performance.now();
+    
     const fetchSpan = this.tracer.startSpan(
       `http_${method.toLowerCase()}`,
       {
@@ -666,7 +830,12 @@ export class VirtualUser {
           'http.method': method,
           'http.url': `http://localhost:3001${url}`,
           'http.target': url,
-          'http.user_agent': 'virtual-user-agent'
+          'http.user_agent': this.browserFingerprint.userAgent,
+          // Add realistic network timing attributes
+          'network.domain_lookup_duration': networkTiming.domainLookupEnd - networkTiming.domainLookupStart,
+          'network.connect_duration': networkTiming.connectEnd - networkTiming.connectStart,
+          'network.request_start': networkTiming.requestStart,
+          'network.response_start': networkTiming.responseStart
         }
       },
       ctx
@@ -676,12 +845,17 @@ export class VirtualUser {
       const requestBody = method === 'POST' ? this.getRequestBody(url) : undefined;
       console.log(`🌐 ${this.customerProfile.fullName} making ${method} request to ${url}`, requestBody ? { body: requestBody } : '');
       
+      // Simulate realistic network delays
+      const networkDelay = addTimingJitter(networkTiming.responseStart - networkTiming.fetchStart, 0.4);
+      await this.sleep(Math.max(10, networkDelay));
+      
       // Make actual HTTP request to real endpoints
       const response = await fetch(`http://localhost:3001${url}`, {
         method,
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'virtual-user-agent',
+          'User-Agent': this.browserFingerprint.userAgent,
+          'Accept-Language': this.browserFingerprint.language,
           'X-Virtual-User': this.userId,
           'X-Request-Source': 'virtual-traffic-simulator'
         },
@@ -691,12 +865,40 @@ export class VirtualUser {
       
       const statusCode = response.status;
       const responseText = await response.text();
+      const endTime = performance.now();
+      const totalDuration = endTime - startTime;
       
       console.log(`📡 ${this.customerProfile.fullName} received ${statusCode} response from ${url} (${responseText.length} bytes)`);
       
       fetchSpan.setAttributes({
         'http.status_code': statusCode,
-        'http.response_content_length': responseText.length
+        'http.response_content_length': responseText.length,
+        // Add realistic transfer timing attributes
+        'network.transfer_size': networkTiming.transferSize,
+        'network.encoded_body_size': networkTiming.encodedBodySize,
+        'network.decoded_body_size': networkTiming.decodedBodySize,
+        'network.total_duration': totalDuration,
+        'network.response_time': addTimingJitter(networkTiming.responseEnd - networkTiming.responseStart, 0.2)
+      });
+
+      // Emit performance metrics correlated with trace
+      this.metricsLogger.logPerformanceMetric('http_request_duration', totalDuration, {
+        'http.method': method,
+        'http.url': url,
+        'http.status_code': statusCode.toString(),
+        'trace.id': this.sessionTracker.getTraceId() || '',
+        'span.id': fetchSpan.spanContext().spanId
+      });
+      
+      this.metricsLogger.logCounter('http_requests', 1, {
+        'http.method': method,
+        'http.status_class': `${Math.floor(statusCode / 100)}xx`,
+        'trace.id': this.sessionTracker.getTraceId() || ''
+      });
+      
+      this.metricsLogger.logGauge('response_size_bytes', responseText.length, 'bytes', {
+        'http.url': url,
+        'trace.id': this.sessionTracker.getTraceId() || ''
       });
 
       if (!response.ok) {
@@ -779,6 +981,58 @@ export class VirtualUser {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  private simulatePaymentResult(): boolean {
+    // More realistic payment failure rates based on card type and amount
+    const { creditCard } = this.customerProfile;
+    const totalAmount = Array.from(this.cart.entries()).reduce((total, [productId, qty]) => {
+      const product = this.products.find(p => p.id === productId);
+      return total + (product?.price || 0) * qty;
+    }, 0);
+
+    // Higher failure rates for higher amounts
+    let baseSuccessRate = 0.95; // 95% base success rate
+    if (totalAmount > 100) baseSuccessRate -= 0.05; // 90% for orders > $100
+    if (totalAmount > 200) baseSuccessRate -= 0.05; // 85% for orders > $200
+
+    // Different failure rates by card type (realistic banking scenarios)
+    if (creditCard.type === 'amex') baseSuccessRate -= 0.02; // AMEX slightly higher decline
+    if (creditCard.type === 'discover') baseSuccessRate -= 0.01; // Discover slightly higher decline
+
+    return Math.random() < baseSuccessRate;
+  }
+
+  private async fetchWithRetries(url: string, method: string, ctx: Context, maxRetries = 2): Promise<any> {
+    let attempt = 0;
+    let lastError = null;
+
+    while (attempt <= maxRetries) {
+      try {
+        const result = await this.fetchWithTracing(url, method, ctx);
+        
+        // Simulate occasional network errors that require retry
+        if (attempt === 0 && Math.random() < 0.05) { // 5% chance of network error on first attempt
+          console.log(`🔄 ${this.customerProfile.fullName} simulating network error on attempt ${attempt + 1}`);
+          throw new Error('Network timeout - simulated');
+        }
+        
+        return result;
+      } catch (error) {
+        lastError = error;
+        attempt++;
+        
+        if (attempt <= maxRetries) {
+          const retryDelay = addTimingJitter(1000 * attempt, 0.5); // Exponential backoff with jitter
+          console.log(`🔄 ${this.customerProfile.fullName} retrying ${url} in ${retryDelay}ms (attempt ${attempt})`);
+          await this.sleep(retryDelay);
+        }
+      }
+    }
+
+    // All retries failed
+    console.log(`🚫 ${this.customerProfile.fullName} all retries failed for ${url}`);
+    return { status: 500, data: { error: lastError?.message || 'Network error' }, failed: true };
+  }
+
   private updateActivity(activity: string, stepIndex?: number, totalSteps?: number): void {
     if (this.trafficManager && this.trafficManager.updateUserActivity) {
       this.trafficManager.updateUserActivity(this.userId, activity, stepIndex, totalSteps);
@@ -823,9 +1077,56 @@ export class VirtualUser {
       realUserFormat = `${tag}#${idPart}.${classPart}`;
     }
     
+    // Simulate realistic pre-click interactions
+    if (Math.random() > 0.6) { // 40% chance of hover before click
+      this.simulateHover(realUserFormat, elementText);
+    }
+    
     // Simulate a realistic click event matching real user format exactly
     this.performanceLogger.logUserInteraction('click', realUserFormat, 0);
+    this.sessionTracker.recordInteraction('click', { element: realUserFormat, text: elementText });
     console.log(`🖱️ ${this.customerProfile.fullName} clicked: ${realUserFormat}${elementText ? ` (${elementText})` : ''}`);
+  }
+
+  private simulateHover(elementSelector: string, elementText?: string): void {
+    // Simulate hover with realistic timing jitter
+    const hoverDuration = addTimingJitter(800, 0.5); // Base 800ms hover
+    this.performanceLogger.logUserInteraction('hover', elementSelector, hoverDuration);
+    this.sessionTracker.recordInteraction('hover', { element: elementSelector, text: elementText, duration: hoverDuration });
+    console.log(`🎯 ${this.customerProfile.fullName} hovered: ${elementSelector} for ${hoverDuration}ms`);
+  }
+
+  private async simulateFormFocus(elementSelector: string, fieldName: string): Promise<void> {
+    // Simulate form field focus with realistic behavior
+    const focusDuration = addTimingJitter(200, 0.3);
+    this.performanceLogger.logUserInteraction('focus', elementSelector, focusDuration);
+    this.sessionTracker.recordInteraction('focus', { element: elementSelector, field: fieldName });
+    console.log(`📝 ${this.customerProfile.fullName} focused: ${fieldName}`);
+    
+    // Simulate typing delay after focus
+    await this.sleep(focusDuration);
+    
+    // Add blur event when done with field
+    setTimeout(() => {
+      this.performanceLogger.logUserInteraction('blur', elementSelector, 0);
+      this.sessionTracker.recordInteraction('blur', { element: elementSelector, field: fieldName });
+    }, addTimingJitter(3000, 0.6));
+  }
+
+  private async simulateScrolling(direction: 'down' | 'up' = 'down'): Promise<void> {
+    // Simulate realistic scrolling behavior
+    const scrollAmount = Math.floor(Math.random() * 500) + 200; // 200-700px scroll
+    const scrollDuration = addTimingJitter(1200, 0.4);
+    
+    this.performanceLogger.logUserInteraction('scroll', `window.${direction}`, scrollDuration);
+    this.sessionTracker.recordInteraction('scroll', { 
+      direction, 
+      amount: scrollAmount, 
+      duration: scrollDuration 
+    });
+    
+    console.log(`📜 ${this.customerProfile.fullName} scrolled ${direction} ${scrollAmount}px in ${scrollDuration}ms`);
+    await this.sleep(scrollDuration);
   }
 
   private getNavigationLinkSelector(path: string): string {
@@ -873,6 +1174,21 @@ export class VirtualUser {
       current: this.currentStep,
       total,
       percentage
+    };
+  }
+
+  // Getter method for TrafficManager
+  getJourneyName(): string {
+    return this.journey.name;
+  }
+
+  // Debug method to get current status
+  getStatus(): { userId: string; journey: string; step: number; activity: string } {
+    return {
+      userId: this.userId,
+      journey: this.journey.name,
+      step: this.currentStep,
+      activity: this.trafficManager?.activeUsers?.get(this.userId)?.currentActivity || 'unknown'
     };
   }
 }

@@ -405,6 +405,7 @@ export class TrafficManager {
       console.log(`🎭 Spawned virtual user ${userId} with journey: ${journey.name} (${currentUsers + 1}/${this.config.targetConcurrentUsers} active)`);
 
       // Start the user journey
+      console.log(`🚀 Starting journey execution for user ${userId}`);
       this.executeUserJourney(userId, activeUser);
 
     } catch (error) {
@@ -426,7 +427,9 @@ export class TrafficManager {
 
       // Execute the full journey
       activeUser.currentActivity = 'browsing';
+      console.log(`🎬 User ${userId} starting executeJourney()`);
       await activeUser.user.executeJourney();
+      console.log(`✅ User ${userId} completed executeJourney()`);
       
       // Check if it was a purchasing journey
       const journeyName = activeUser.user.getJourneyName?.() || '';

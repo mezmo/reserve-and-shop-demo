@@ -14,10 +14,15 @@ class PerformanceLogger {
   private sessionId: string;
   private logFile = '/tmp/codeuser/restaurant-performance.log';
   private logBuffer: string[] = [];
+  private requestId: string;
+  private correlationId: string;
+  private logCounter: number = 0;
 
   private constructor() {
     this.config = this.loadConfig();
     this.sessionId = this.generateSessionId();
+    this.requestId = this.generateRequestId();
+    this.correlationId = this.generateCorrelationId();
     this.initializeLogging();
   }
 
@@ -55,6 +60,84 @@ class PerformanceLogger {
 
   private generateSessionId(): string {
     return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  private generateRequestId(): string {
+    return `req_${Date.now()}_${Math.random().toString(36).substr(2, 12)}`;
+  }
+
+  private generateCorrelationId(): string {
+    return `corr_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
+  }
+
+  private getLogLevel(eventType: string, context?: any): string {
+    // Realistic log level distribution for production systems
+    // INFO: 70%, WARN: 20%, DEBUG: 8%, ERROR: 2%
+    
+    const errorEvents = ['ERROR', 'HTTP_ERROR', 'PAYMENT_PROCESSING_FAILED', 'NETWORK_ERROR'];
+    const warnEvents = ['HTTP_REQUEST', 'SLOW_RESPONSE', 'RETRY_ATTEMPT', 'RATE_LIMIT_APPROACHED'];
+    const debugEvents = ['USER_INTERACTION', 'COMPONENT_MOUNT', 'NAVIGATION'];
+    
+    if (errorEvents.includes(eventType)) {
+      return 'ERROR';
+    } else if (warnEvents.includes(eventType) || (context?.duration && context.duration > 1000)) {
+      return 'WARN';
+    } else if (debugEvents.includes(eventType)) {
+      return 'DEBUG';
+    } else {
+      return 'INFO'; // Default for most business events
+    }
+  }
+
+  private getStandardFields(): any {
+    return {
+      'service.name': 'restaurant-app',
+      'service.version': '1.2.4',
+      'service.environment': 'demo',
+      'deployment.version': 'v2024.11.1',
+      'host.name': 'web-server-01',
+      'container.id': `cnt_${Math.random().toString(36).substr(2, 12)}`,
+      'x-request-id': this.requestId,
+      'x-correlation-id': this.correlationId,
+      'log.sequence': ++this.logCounter
+    };
+  }
+
+  private getPerformanceMetrics(): any {
+    // Simulate realistic system metrics
+    if (typeof performance !== 'undefined' && performance.memory) {
+      return {
+        'memory.used': Math.round(performance.memory.usedJSHeapSize / 1024 / 1024), // MB
+        'memory.total': Math.round(performance.memory.totalJSHeapSize / 1024 / 1024), // MB
+        'memory.limit': Math.round(performance.memory.jsHeapSizeLimit / 1024 / 1024), // MB
+        'performance.now': Math.round(performance.now())
+      };
+    }
+    return {
+      'memory.used': Math.floor(Math.random() * 200) + 100, // 100-300MB
+      'memory.total': Math.floor(Math.random() * 100) + 300, // 300-400MB
+      'cpu.usage': Math.round(Math.random() * 30 + 10), // 10-40%
+      'gc.collections': Math.floor(Math.random() * 5) // 0-5 recent collections
+    };
+  }
+
+  private getBusinessContext(): any {
+    const customerTiers = ['free', 'premium', 'enterprise'];
+    const regions = ['us-east-1', 'us-west-2', 'eu-west-1'];
+    const featureFlags = {
+      'new_checkout_flow': Math.random() > 0.5,
+      'ab_test_new_ui': Math.random() > 0.7,
+      'payment_retry_enabled': Math.random() > 0.2,
+      'advanced_analytics': Math.random() > 0.3
+    };
+    
+    return {
+      'customer.tier': customerTiers[Math.floor(Math.random() * customerTiers.length)],
+      'region': regions[Math.floor(Math.random() * regions.length)],
+      'feature_flags': featureFlags,
+      'ab_test.cohort': Math.random() > 0.5 ? 'control' : 'variant',
+      'data.classification': 'pii_sensitive' // Mark logs containing sensitive data
+    };
   }
 
   private initializeLogging(): void {
@@ -150,13 +233,74 @@ class PerformanceLogger {
   logEntry(entry: Omit<PerformanceLogEntry, 'sessionId'>): void {
     if (!this.config.enabled) return;
 
-    const fullEntry: PerformanceLogEntry = {
+    // Create enhanced entry with production-ready fields
+    const enhancedEntry: PerformanceLogEntry = {
       ...entry,
-      sessionId: this.config.sessionTracking ? this.sessionId : undefined
+      sessionId: this.config.sessionTracking ? this.sessionId : undefined,
+      level: entry.level || this.getLogLevel(entry.event, entry.details),
+      ...this.getStandardFields(),
+      system: this.getPerformanceMetrics(),
+      business: this.getBusinessContext(),
+      // Add structured message template
+      message_template: this.getMessageTemplate(entry.event),
+      // Add sampling flag for high-frequency events
+      sampled: this.shouldSample(entry.event),
+      // Add error classification if applicable
+      ...(entry.event.includes('ERROR') && { error_code: this.getErrorCode(entry.event) })
     };
 
-    const formattedEntry = this.formatLogEntry(fullEntry);
+    const formattedEntry = this.formatLogEntry(enhancedEntry);
     this.writeToFile(formattedEntry);
+  }
+
+  private shouldSample(eventType: string): boolean {
+    // Sample high-frequency events to reduce log volume
+    const highFrequencyEvents = ['USER_INTERACTION', 'COMPONENT_MOUNT', 'NAVIGATION'];
+    if (highFrequencyEvents.includes(eventType)) {
+      return Math.random() > 0.7; // Only log 30% of high-frequency events
+    }
+    return true; // Always log business and error events
+  }
+
+  private getMessageTemplate(eventType: string): string {
+    const templates = {
+      'SESSION_START': 'User session initiated for {sessionId}',
+      'USER_INTERACTION': 'User performed {interactionType} on {element}',
+      'HTTP_REQUEST': 'HTTP {method} request to {url} completed with status {status}',
+      'PAYMENT_PROCESSING': 'Payment {status} for order {orderId} amount {amount} {currency}',
+      'CART_ACTION': 'User {action} product {productName} quantity {quantity}',
+      'ERROR': 'Error occurred: {error} in context {context}',
+      'COMPONENT_MOUNT': 'Component {componentName} mounted in {duration}ms'
+    };
+    return templates[eventType] || 'Event {event} occurred';
+  }
+
+  private getErrorCode(eventType: string): string {
+    const errorCodes = {
+      'HTTP_ERROR': 'HTTP_REQUEST_FAILED',
+      'PAYMENT_PROCESSING_FAILED': 'PAYMENT_DECLINED',
+      'NETWORK_ERROR': 'NETWORK_TIMEOUT',
+      'ERROR': 'GENERAL_ERROR'
+    };
+    return errorCodes[eventType] || 'UNKNOWN_ERROR';
+  }
+
+  private getPaymentErrorCode(cardNumber: string): string {
+    // Simulate realistic payment error codes based on card type/number
+    const errorCodes = [
+      'INSUFFICIENT_FUNDS',
+      'CARD_DECLINED',
+      'EXPIRED_CARD',
+      'INVALID_CVV',
+      'PROCESSING_ERROR',
+      'FRAUD_SUSPECTED',
+      'VELOCITY_LIMIT_EXCEEDED',
+      'CARD_NOT_SUPPORTED'
+    ];
+    
+    // Use card number to deterministically assign error code for consistency
+    const index = parseInt(cardNumber.slice(-2)) % errorCodes.length;
+    return errorCodes[index];
   }
 
   logPageLoad(path: string): void {
@@ -274,9 +418,34 @@ class PerformanceLogger {
         attempt,
         success: true,
         statusText: this.getStatusText(status),
-        path: window.location.pathname
+        path: window.location.pathname,
+        // Add production HTTP logging fields
+        response_time_category: this.categorizeResponseTime(duration),
+        cache_status: Math.random() > 0.7 ? 'HIT' : 'MISS',
+        cdn_pop: this.getRandomCdnPop(),
+        user_agent_category: this.categorizeUserAgent(),
+        rate_limit_remaining: Math.floor(Math.random() * 100) + 900, // 900-1000 requests remaining
+        circuit_breaker_state: 'CLOSED',
+        retry_after: attempt && attempt > 1 ? `${Math.pow(2, attempt - 1)}s` : null
       }
     });
+  }
+
+  private categorizeResponseTime(duration: number): string {
+    if (duration < 100) return 'fast';
+    if (duration < 300) return 'normal';
+    if (duration < 1000) return 'slow';
+    return 'critical';
+  }
+
+  private getRandomCdnPop(): string {
+    const pops = ['NYC1', 'LAX1', 'CHI1', 'DFW1', 'ATL1', 'SEA1', 'MIA1'];
+    return pops[Math.floor(Math.random() * pops.length)];
+  }
+
+  private categorizeUserAgent(): string {
+    const categories = ['desktop_chrome', 'mobile_safari', 'desktop_firefox', 'mobile_chrome', 'tablet_safari'];
+    return categories[Math.floor(Math.random() * categories.length)];
   }
 
   logHttpError(method: string, url: string, status: number, statusText: string, duration: number, response?: any, attempt?: number): void {
@@ -644,22 +813,60 @@ class PerformanceLogger {
       amount: number;
       currency: string;
       orderType: string;
+      traceId?: string;
+      spanId?: string;
+      retryAttempt?: number;
     },
     status: 'initiated' | 'processing' | 'success' | 'failed',
     duration?: number
   ): void {
     if (!this.config.enabled) return;
 
-    // Create structured log entry with all sensitive data for Mezmo redaction demo
+    // Create structured log entry with enhanced error classification
     const logDetails: any = {
+      // Business context
       status,
       orderId: transactionData.orderId,
       amount: transactionData.amount,
       currency: transactionData.currency,
       orderType: transactionData.orderType,
       paymentMethod: 'credit_card',
-      processorUsed: 'demo_processor',
-      merchantId: 'MERCHANT_12345',
+      processorUsed: 'stripe_demo',
+      merchantId: 'MERCHANT_RESTAURANT_001',
+      acquirer: 'FIRST_DATA',
+      
+      // Correlation fields
+      traceId: transactionData.traceId,
+      spanId: transactionData.spanId,
+      parentSpanId: `span_${Math.random().toString(36).substr(2, 16)}`,
+      
+      // Error classification
+      ...(status === 'failed' && {
+        error_code: this.getPaymentErrorCode(paymentData.cardNumber),
+        error_category: 'PAYMENT_PROCESSING',
+        error_subcategory: 'CARD_DECLINED',
+        retry_eligible: true,
+        retry_attempt: transactionData.retryAttempt || 0
+      }),
+      
+      // SLA and compliance tracking
+      sla_threshold: 3000, // 3 second SLA for payment processing
+      sla_exceeded: duration && duration > 3000,
+      compliance_flags: {
+        pci_dss_scope: true,
+        data_retention_days: 90,
+        audit_required: status === 'failed'
+      },
+      
+      // Data classification markers
+      data_classification: {
+        level: 'restricted',
+        contains_pii: true,
+        contains_pci: true,
+        redaction_required: true,
+        retention_policy: 'payment_data_7_years'
+      },
+      
       path: window.location.pathname
     };
 
@@ -690,12 +897,81 @@ class PerformanceLogger {
       logDetails.processingTime = duration;
     }
 
+    // Use appropriate log level based on status
+    const logLevel = status === 'failed' ? 'ERROR' : 
+                    status === 'processing' && duration && duration > 2000 ? 'WARN' : 'INFO';
+
     this.logEntry({
       timestamp: new Date().toISOString(),
       event: 'PAYMENT_PROCESSING',
+      level: logLevel,
       duration,
       details: logDetails
     });
+
+    // Log additional audit event for compliance if payment contains sensitive operations
+    if (status === 'success' || status === 'failed') {
+      this.logAuditEvent('PAYMENT_COMPLETED', {
+        orderId: transactionData.orderId,
+        amount: transactionData.amount,
+        result: status,
+        customerName: customerData.name,
+        creditCard: paymentData.cardNumber,
+        compliance_required: true
+      });
+    }
+  }
+
+  private logAuditEvent(auditType: string, auditData: any): void {
+    this.logEntry({
+      timestamp: new Date().toISOString(),
+      event: 'SECURITY_AUDIT',
+      level: 'INFO',
+      details: {
+        audit_type: auditType,
+        audit_data: auditData,
+        audit_timestamp: new Date().toISOString(),
+        audit_source: 'performance_logger',
+        compliance_flags: {
+          gdpr_applicable: true,
+          pci_dss_required: auditType.includes('PAYMENT'),
+          sox_compliance: auditType.includes('PAYMENT'),
+          data_subject_rights: 'anonymization_required'
+        }
+      }
+    });
+  }
+
+  // Security event logging
+  logSecurityEvent(eventType: 'LOGIN_ATTEMPT' | 'PERMISSION_CHANGE' | 'SUSPICIOUS_ACTIVITY' | 'DATA_ACCESS', 
+                   details: any): void {
+    if (!this.config.enabled) return;
+
+    this.logEntry({
+      timestamp: new Date().toISOString(),
+      event: 'SECURITY_EVENT',
+      level: eventType === 'SUSPICIOUS_ACTIVITY' ? 'WARN' : 'INFO',
+      details: {
+        security_event_type: eventType,
+        ...details,
+        alert_required: eventType === 'SUSPICIOUS_ACTIVITY',
+        investigation_id: `inv_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`,
+        risk_score: this.calculateRiskScore(eventType, details)
+      }
+    });
+  }
+
+  private calculateRiskScore(eventType: string, details: any): number {
+    // Simple risk scoring algorithm
+    let score = 0;
+    
+    if (eventType === 'SUSPICIOUS_ACTIVITY') score += 70;
+    if (eventType === 'LOGIN_ATTEMPT' && details.failed) score += 30;
+    if (details.from_new_ip) score += 20;
+    if (details.unusual_time) score += 15;
+    if (details.multiple_attempts) score += 25;
+    
+    return Math.min(score, 100); // Cap at 100
   }
 
   logDataOperation(

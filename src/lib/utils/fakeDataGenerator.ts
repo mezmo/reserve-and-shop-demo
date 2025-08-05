@@ -283,3 +283,130 @@ export function generatePartySize(): number {
   
   return 2; // Fallback
 }
+
+// Realistic browser fingerprinting data
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/120.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+];
+
+const VIEWPORT_SIZES = [
+  { width: 1920, height: 1080 }, // Full HD - 25%
+  { width: 1366, height: 768 },  // Laptop - 20%
+  { width: 1536, height: 864 },  // Laptop scaled - 15%
+  { width: 1440, height: 900 },  // MacBook - 12%
+  { width: 1280, height: 720 },  // HD - 10%
+  { width: 2560, height: 1440 }, // 2K - 8%
+  { width: 1920, height: 1200 }, // WUXGA - 5%
+  { width: 3840, height: 2160 }  // 4K - 5%
+];
+
+const LANGUAGES = [
+  'en-US', 'en-GB', 'es-US', 'fr-FR', 'de-DE', 'it-IT', 'pt-BR', 'ja-JP', 'ko-KR', 'zh-CN'
+];
+
+export interface BrowserFingerprint {
+  userAgent: string;
+  language: string;
+  viewport: { width: number; height: number };
+  timezone: string;
+  platform: string;
+  cookieEnabled: boolean;
+  doNotTrack: string;
+}
+
+/**
+ * Generates realistic browser fingerprint for virtual users
+ */
+export function generateBrowserFingerprint(): BrowserFingerprint {
+  const userAgent = randomChoice(USER_AGENTS);
+  const viewport = randomChoice(VIEWPORT_SIZES);
+  const language = randomChoice(LANGUAGES);
+  
+  // Extract platform from user agent
+  let platform = 'Win32';
+  if (userAgent.includes('Macintosh')) platform = 'MacIntel';
+  else if (userAgent.includes('Linux')) platform = 'Linux x86_64';
+  else if (userAgent.includes('Windows')) platform = 'Win32';
+  
+  // Random timezone (mostly US timezones for restaurant app)
+  const timezones = [
+    'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+    'America/Phoenix', 'America/Anchorage', 'Pacific/Honolulu', 'Europe/London',
+    'Europe/Paris', 'Asia/Tokyo'
+  ];
+  
+  return {
+    userAgent,
+    language,
+    viewport,
+    timezone: randomChoice(timezones),
+    platform,
+    cookieEnabled: Math.random() > 0.05, // 95% have cookies enabled
+    doNotTrack: Math.random() > 0.7 ? '1' : '0' // 30% enable DNT
+  };
+}
+
+export interface NetworkTiming {
+  connectStart: number;
+  connectEnd: number;
+  domainLookupStart: number;
+  domainLookupEnd: number;
+  fetchStart: number;
+  requestStart: number;
+  responseStart: number;
+  responseEnd: number;
+  transferSize: number;
+  encodedBodySize: number;
+  decodedBodySize: number;
+}
+
+/**
+ * Generates realistic network timing data for virtual users
+ * Simulates real browser Navigation Timing API values
+ */
+export function generateNetworkTiming(requestSize = 1024, responseSize = 8192): NetworkTiming {
+  const fetchStart = 0;
+  const domainLookupStart = fetchStart + randomInt(1, 15);
+  const domainLookupEnd = domainLookupStart + randomInt(5, 45);
+  const connectStart = domainLookupEnd + randomInt(1, 5);
+  const connectEnd = connectStart + randomInt(15, 120);
+  const requestStart = connectEnd + randomInt(1, 10);
+  const responseStart = requestStart + randomInt(20, 180);
+  const responseEnd = responseStart + randomInt(10, 200);
+  
+  // Add realistic size variations
+  const transferSize = responseSize + randomInt(100, 500);
+  const encodedBodySize = responseSize;
+  const decodedBodySize = encodedBodySize + randomInt(0, 512);
+  
+  return {
+    connectStart,
+    connectEnd,
+    domainLookupStart,
+    domainLookupEnd,
+    fetchStart,
+    requestStart,
+    responseStart,
+    responseEnd,
+    transferSize,
+    encodedBodySize,
+    decodedBodySize
+  };
+}
+
+/**
+ * Adds realistic timing jitter to any duration
+ * Simulates natural variations in user actions and network requests
+ */
+export function addTimingJitter(baseDuration: number, variationPercent = 0.3): number {
+  const variation = baseDuration * variationPercent;
+  const jitter = (Math.random() - 0.5) * 2 * variation;
+  return Math.max(50, Math.round(baseDuration + jitter)); // Minimum 50ms
+}

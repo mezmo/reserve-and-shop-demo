@@ -79,6 +79,77 @@ export function createPerformanceManager(config?: {
   });
 }
 
+// Initialize formatters in the FormatRegistry
+export function initializeFormatters() {
+  const registry = FormatRegistry.getInstance();
+  
+  // Check if already initialized
+  if (registry.getFormatter('json')) {
+    return registry; // Already initialized
+  }
+  
+  console.log('🔧 Initializing FormatRegistry with core formatters...');
+  
+  try {
+    const { JSONFormatter } = require('./formatters/JSONFormatter');
+    const { StringFormatter } = require('./formatters/StringFormatter');
+    const { CLFFormatter } = require('./formatters/CLFFormatter');
+    const { CSVFormatter } = require('./formatters/CSVFormatter');
+    const { XMLFormatter } = require('./formatters/XMLFormatter');
+    const { CustomFormatter } = require('./formatters/CustomFormatter');
+    
+    registry.register('json', new JSONFormatter());
+    registry.register('string', new StringFormatter());
+    registry.register('clf', new CLFFormatter());
+    registry.register('csv', new CSVFormatter());
+    registry.register('xml', new XMLFormatter());
+    registry.register('custom', new CustomFormatter());
+    
+    console.log('✅ FormatRegistry initialized successfully with 6 formatters');
+  } catch (error) {
+    console.error('❌ Failed to initialize formatters:', error);
+    
+    // Create minimal fallback formatters
+    const { BaseFormatter } = require('./formatters/BaseFormatter');
+    const BasicJSONFormatter = class extends BaseFormatter {
+      format(data: any): string {
+        try {
+          return JSON.stringify(data);
+        } catch {
+          return JSON.stringify({ error: 'Failed to serialize log data', timestamp: data.timestamp });
+        }
+      }
+      getDisplayName() { return 'Basic JSON'; }
+      getFileExtension() { return '.log'; }
+      supportsLoggerType() { return true; }
+      getConfigOptions() { return []; }
+      getPerformanceCharacteristics() {
+        return { cpuUsage: 'low', memoryUsage: 'low', parseability: 'good', compression: 'good' };
+      }
+    };
+    
+    const BasicStringFormatter = class extends BaseFormatter {
+      format(data: any): string {
+        return `${data.timestamp} - ${data.level || 'INFO'} - ${data.message || 'No message'}`;
+      }
+      getDisplayName() { return 'Basic String'; }
+      getFileExtension() { return '.log'; }
+      supportsLoggerType() { return true; }
+      getConfigOptions() { return []; }
+      getPerformanceCharacteristics() {
+        return { cpuUsage: 'low', memoryUsage: 'low', parseability: 'excellent', compression: 'good' };
+      }
+    };
+    
+    registry.register('json', new BasicJSONFormatter());
+    registry.register('string', new BasicStringFormatter());
+    
+    console.log('✅ FormatRegistry initialized with fallback formatters');
+  }
+  
+  return registry;
+}
+
 // Convenience function to get format registry
 export function getFormatRegistry() {
   return FormatRegistry.getInstance();

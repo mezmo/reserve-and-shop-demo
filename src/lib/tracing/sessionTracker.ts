@@ -163,17 +163,29 @@ export class SessionTracker {
     }
   }
 
-  // For stress testing: create a standalone session
-  static createStandaloneSession(userId: string, journeyName: string): SessionTracker {
+  // For stress testing: create a standalone session with realistic browser context
+  static createStandaloneSession(userId: string, journeyName: string, browserFingerprint?: any): SessionTracker {
     const tracker = new SessionTracker();
-    tracker.sessionId = `stress-session-${userId}-${Date.now()}`;
+    // Use standard session ID format to match real users
+    tracker.sessionId = tracker.generateSessionId();
     
-    if (tracker.sessionSpan) {
+    // Apply realistic browser fingerprint if provided
+    if (tracker.sessionSpan && browserFingerprint) {
       tracker.sessionSpan.setAttributes({
-        'user.type': 'virtual',
-        'user.id': userId,
-        'user.journey': journeyName,
-        'test.type': 'stress_test'
+        'user.journey.type': journeyName,
+        'browser.user_agent': browserFingerprint.userAgent,
+        'browser.language': browserFingerprint.language,
+        'browser.viewport.width': browserFingerprint.viewport.width,
+        'browser.viewport.height': browserFingerprint.viewport.height,
+        'browser.platform': browserFingerprint.platform,
+        'browser.cookie_enabled': browserFingerprint.cookieEnabled,
+        'browser.do_not_track': browserFingerprint.doNotTrack,
+        'browser.timezone': browserFingerprint.timezone
+      });
+    } else if (tracker.sessionSpan) {
+      // Fallback to just journey type
+      tracker.sessionSpan.setAttributes({
+        'user.journey.type': journeyName
       });
     }
     

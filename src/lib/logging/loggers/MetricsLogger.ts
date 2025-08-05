@@ -211,6 +211,14 @@ export class MetricsLogger extends BaseLogger {
 
   // Static factory method for creating metrics logger with common defaults
   static createDefault(sessionId: string): MetricsLogger {
+    // Initialize formatters before creating logger
+    try {
+      const { initializeFormatters } = require('../index');
+      initializeFormatters();
+    } catch (error) {
+      console.warn('Could not initialize formatters, using basic fallback:', error);
+    }
+    
     return new MetricsLogger({
       type: 'metrics',
       level: 'INFO',
