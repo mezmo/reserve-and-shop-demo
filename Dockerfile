@@ -69,7 +69,7 @@ RUN chown -R codeuser:codeuser /app
 USER codeuser
 
 # Expose the ports
-EXPOSE 8080 3001
+EXPOSE 8080 3001 4317 4318
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

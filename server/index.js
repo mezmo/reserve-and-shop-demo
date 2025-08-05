@@ -821,7 +821,12 @@ const generateOTELConfig = ({
           endpoint: '0.0.0.0:4317'
         },
         http: {
-          endpoint: '0.0.0.0:4318'
+          endpoint: '0.0.0.0:4318',
+          cors: {
+            allowed_origins: ['http://localhost:8080', 'http://localhost:3000'],
+            allowed_headers: ['*'],
+            max_age: 7200
+          }
         }
       }
     };

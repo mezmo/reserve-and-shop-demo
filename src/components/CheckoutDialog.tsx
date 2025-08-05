@@ -13,9 +13,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
+import { useSessionTracker } from '@/hooks/useSessionTracker';
 import { DataStore } from '@/stores/dataStore';
 import { Order, OrderItem, Product } from '@/types';
 import PerformanceLogger from '@/lib/performanceLogger';
+import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { 
   formatCardNumber, 
   formatExpiryDate, 
@@ -55,6 +57,7 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
   const [cardHolderName, setCardHolderName] = useState('');
   
   const { toast } = useToast();
+  const sessionTracker = useSessionTracker();
 
   const calculateTotal = () => {
     return Object.entries(cart).reduce((total, [productId, qty]) => {
@@ -129,11 +132,28 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
       totalAmount: calculateTotal()
     });
 
+    // Start checkout tracing span
+    const orderId = `order-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const totalAmount = calculateTotal();
+    const itemCount = Object.values(cart).reduce((sum, qty) => sum + qty, 0);
+    
+    let checkoutSpan = null;
+    if (sessionTracker) {
+      checkoutSpan = sessionTracker.startCheckout(orderId, totalAmount, itemCount);
+    }
+
     try {
-      // Create order ID for tracking
-      const orderId = `order-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      
       // Log payment initiation with sensitive data (for demo redaction)
+      if (checkoutSpan) {
+        checkoutSpan.addEvent('payment_initiated', {
+          'payment.method': 'credit_card',
+          'payment.card_type': getCardType(cardNumber),
+          'customer.name': customerName,
+          'order.type': orderType,
+          'order.amount': totalAmount
+        });
+      }
+
       performanceLogger.logPaymentAttempt(
         {
           cardNumber,
@@ -148,15 +168,21 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
         },
         {
           orderId,
-          amount: calculateTotal(),
+          amount: totalAmount,
           currency: 'USD',
-          orderType
+          orderType,
+          traceId: checkoutSpan?.spanContext().traceId,
+          spanId: checkoutSpan?.spanContext().spanId
         },
         'initiated'
       );
       console.log('🔧 CheckoutDialog: Logged payment initiated for', orderId);
 
       // Log payment processing start
+      if (checkoutSpan) {
+        checkoutSpan.addEvent('payment_processing');
+      }
+
       performanceLogger.logPaymentAttempt(
         {
           cardNumber,
@@ -171,9 +197,11 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
         },
         {
           orderId,
-          amount: calculateTotal(),
+          amount: totalAmount,
           currency: 'USD',
-          orderType
+          orderType,
+          traceId: checkoutSpan?.spanContext().traceId,
+          spanId: checkoutSpan?.spanContext().spanId
         },
         'processing'
       );
@@ -200,7 +228,7 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
         customerEmail,
         customerPhone,
         items: orderItems,
-        totalAmount: calculateTotal(),
+        totalAmount,
         status: 'pending',
         type: orderType,
         createdAt: new Date().toISOString(),
@@ -212,6 +240,14 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
 
       // Log successful payment
       const endTime = Date.now();
+      if (checkoutSpan) {
+        checkoutSpan.addEvent('payment_success', {
+          'order.created': true,
+          'payment.duration_ms': endTime - startTime
+        });
+        checkoutSpan.setStatus({ code: SpanStatusCode.OK });
+      }
+
       performanceLogger.logPaymentAttempt(
         {
           cardNumber,
@@ -226,9 +262,11 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
         },
         {
           orderId,
-          amount: calculateTotal(),
+          amount: totalAmount,
           currency: 'USD',
-          orderType
+          orderType,
+          traceId: checkoutSpan?.spanContext().traceId,
+          spanId: checkoutSpan?.spanContext().spanId
         },
         'success',
         endTime - startTime
@@ -246,6 +284,18 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
     } catch (error) {
       // Log failed payment
       const endTime = Date.now();
+      if (checkoutSpan) {
+        checkoutSpan.recordException(error as Error);
+        checkoutSpan.addEvent('payment_failed', {
+          'error.message': (error as Error).message,
+          'payment.duration_ms': endTime - startTime
+        });
+        checkoutSpan.setStatus({ 
+          code: SpanStatusCode.ERROR,
+          message: (error as Error).message
+        });
+      }
+
       performanceLogger.logPaymentAttempt(
         {
           cardNumber,
@@ -260,9 +310,11 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
         },
         {
           orderId: orderId || 'unknown',
-          amount: calculateTotal(),
+          amount: totalAmount,
           currency: 'USD',
-          orderType
+          orderType,
+          traceId: checkoutSpan?.spanContext().traceId,
+          spanId: checkoutSpan?.spanContext().spanId
         },
         'failed',
         endTime - startTime
@@ -274,6 +326,9 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
         variant: "destructive"
       });
     } finally {
+      if (checkoutSpan) {
+        checkoutSpan.end();
+      }
       setIsLoading(false);
     }
   };

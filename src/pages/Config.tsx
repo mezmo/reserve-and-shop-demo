@@ -584,11 +584,16 @@ const Config = () => {
   const sampleOrdersStartTime = useRef<number>(0);
   const sampleOrdersCounts = useRef({ created: 0, successful: 0, failed: 0 });
 
-  const handleStartSampleOrders = () => {
+  const handleStartSampleOrders = async () => {
     setSampleOrdersRunning(true);
     setSampleOrdersProgress(0);
     sampleOrdersStartTime.current = Date.now();
     sampleOrdersCounts.current = { created: 0, successful: 0, failed: 0 };
+
+    // Check if tracing is enabled
+    const tracingEnabled = localStorage.getItem('otel-config') && 
+                          JSON.parse(localStorage.getItem('otel-config') || '{}').enabled &&
+                          JSON.parse(localStorage.getItem('otel-config') || '{}').pipelines?.traces?.enabled;
 
     const generateOrder = async () => {
       if (sampleOrdersCounts.current.created >= sampleOrdersCount) {
@@ -610,9 +615,36 @@ const Config = () => {
           createdAt: new Date().toISOString()
         };
 
+        let orderSpan = null;
+        
+        if (tracingEnabled) {
+          // Create tracing for sample order generation
+          const { trace } = await import('@opentelemetry/api');
+          const tracer = trace.getTracer('sample-order-generator', '1.0.0');
+          
+          orderSpan = tracer.startSpan('sample_order_generation', {
+            attributes: {
+              'order.id': order.id,
+              'order.type': order.type,
+              'customer.name': customer.name,
+              'order.total_amount': order.totalAmount,
+              'generator.type': 'automated',
+              'generator.batch_id': `batch-${sampleOrdersStartTime.current}`
+            }
+          });
+        }
+
         // Get performance logger for payment logging
         const performanceLogger = PerformanceLogger.getInstance();
         const paymentStartTime = Date.now();
+
+        // Add tracing event
+        if (orderSpan) {
+          orderSpan.addEvent('payment_initiated', {
+            'payment.method': 'credit_card',
+            'payment.card_type': paymentInfo.cardNumber.startsWith('4') ? 'visa' : 'mastercard'
+          });
+        }
 
         // Log payment initiation (like CheckoutDialog does)
         performanceLogger.logPaymentAttempt(
@@ -622,13 +654,22 @@ const Config = () => {
             orderId: order.id,
             amount: order.totalAmount,
             currency: 'USD',
-            orderType: order.type
+            orderType: order.type,
+            traceId: orderSpan?.spanContext().traceId,
+            spanId: orderSpan?.spanContext().spanId
           },
           'initiated'
         );
 
         // Simulate payment processing time
-        await new Promise(resolve => setTimeout(resolve, Math.random() * 500 + 100));
+        const processingTime = Math.random() * 1500 + 500;
+        await new Promise(resolve => setTimeout(resolve, processingTime));
+
+        if (orderSpan) {
+          orderSpan.addEvent('payment_processing', {
+            'processing.duration_ms': processingTime
+          });
+        }
 
         // Log payment processing
         performanceLogger.logPaymentAttempt(
@@ -638,19 +679,35 @@ const Config = () => {
             orderId: order.id,
             amount: order.totalAmount,
             currency: 'USD',
-            orderType: order.type
+            orderType: order.type,
+            traceId: orderSpan?.spanContext().traceId,
+            spanId: orderSpan?.spanContext().spanId
           },
           'processing'
         );
 
         // Simulate additional processing time
-        await new Promise(resolve => setTimeout(resolve, Math.random() * 300 + 50));
+        const additionalProcessingTime = Math.random() * 300 + 50;
+        await new Promise(resolve => setTimeout(resolve, additionalProcessingTime));
 
         // Randomly simulate payment failures (10% chance)
         const paymentEndTime = Date.now();
         const paymentFailed = Math.random() < 0.1;
 
         if (paymentFailed) {
+          if (orderSpan) {
+            const { SpanStatusCode } = await import('@opentelemetry/api');
+            orderSpan.addEvent('payment_failed', {
+              'error.code': 'payment_declined',
+              'error.message': 'Card declined',
+              'payment.total_duration_ms': paymentEndTime - paymentStartTime
+            });
+            orderSpan.setStatus({ 
+              code: SpanStatusCode.ERROR,
+              message: 'Payment failed'
+            });
+          }
+
           // Log failed payment
           performanceLogger.logPaymentAttempt(
             paymentInfo,
@@ -659,7 +716,9 @@ const Config = () => {
               orderId: order.id,
               amount: order.totalAmount,
               currency: 'USD',
-              orderType: order.type
+              orderType: order.type,
+              traceId: orderSpan?.spanContext().traceId,
+              spanId: orderSpan?.spanContext().spanId
             },
             'failed',
             paymentEndTime - paymentStartTime
@@ -667,6 +726,15 @@ const Config = () => {
 
           sampleOrdersCounts.current.failed++;
         } else {
+          if (orderSpan) {
+            const { SpanStatusCode } = await import('@opentelemetry/api');
+            orderSpan.addEvent('payment_success', {
+              'order.created': true,
+              'payment.total_duration_ms': paymentEndTime - paymentStartTime
+            });
+            orderSpan.setStatus({ code: SpanStatusCode.OK });
+          }
+
           // Log successful payment
           performanceLogger.logPaymentAttempt(
             paymentInfo,
@@ -675,7 +743,9 @@ const Config = () => {
               orderId: order.id,
               amount: order.totalAmount,
               currency: 'USD',
-              orderType: order.type
+              orderType: order.type,
+              traceId: orderSpan?.spanContext().traceId,
+              spanId: orderSpan?.spanContext().spanId
             },
             'success',
             paymentEndTime - paymentStartTime
@@ -698,7 +768,26 @@ const Config = () => {
           failed: sampleOrdersCounts.current.failed,
         });
 
+        // End tracing span
+        if (orderSpan) {
+          orderSpan.end();
+        }
+
       } catch (error) {
+        // Handle tracing for unexpected errors
+        if (orderSpan) {
+          orderSpan.recordException(error as Error);
+          orderSpan.addEvent('order_generation_failed', {
+            'error.message': (error as Error).message
+          });
+          const { SpanStatusCode } = await import('@opentelemetry/api');
+          orderSpan.setStatus({ 
+            code: SpanStatusCode.ERROR,
+            message: (error as Error).message
+          });
+          orderSpan.end();
+        }
+
         sampleOrdersCounts.current.failed++;
         sampleOrdersCounts.current.created++;
         setSampleOrdersProgress((sampleOrdersCounts.current.created / sampleOrdersCount) * 100);
@@ -807,8 +896,13 @@ const Config = () => {
     stressTestRequestCounts.current.total++;
   };
 
-  const handleStartStressTest = () => {
+  const handleStartStressTest = async () => {
     if (stressTestRunning) return;
+    
+    // Check if tracing is enabled for behavioral simulation
+    const tracingEnabled = localStorage.getItem('otel-config') && 
+                          JSON.parse(localStorage.getItem('otel-config') || '{}').enabled &&
+                          JSON.parse(localStorage.getItem('otel-config') || '{}').pipelines?.traces?.enabled;
     
     // Reset counters
     stressTestRequestCounts.current = { total: 0, success: 0, error: 0, responseTimes: [] };
@@ -824,49 +918,108 @@ const Config = () => {
     setStressTestProgress(0);
     stressTestStartTime.current = Date.now();
     
-    
-    const intervalMs = 1000 / stressTestRPS; // Convert RPS to interval
-    
-    stressTestIntervalRef.current = setInterval(async () => {
-      const elapsed = (Date.now() - stressTestStartTime.current) / 1000;
-      const progress = Math.min((elapsed / stressTestDuration) * 100, 100);
-      const timeRemaining = Math.max(stressTestDuration - elapsed, 0);
+    if (tracingEnabled) {
+      // Use virtual users with realistic behavior
+      const { VirtualUser } = await import('@/lib/tracing/virtualUser');
+      const { selectWeightedJourney, USER_JOURNEYS } = await import('@/lib/tracing/userJourneys');
       
-      setStressTestProgress(progress);
+      console.log('🎭 Starting stress test with virtual users and tracing enabled');
       
-      // Update real-time stats
-      const avgResponseTime = stressTestRequestCounts.current.responseTimes.length > 0
-        ? stressTestRequestCounts.current.responseTimes.reduce((a, b) => a + b, 0) / stressTestRequestCounts.current.responseTimes.length
-        : 0;
-      
-      setStressTestStats({
-        totalRequests: stressTestRequestCounts.current.total,
-        successCount: stressTestRequestCounts.current.success,
-        errorCount: stressTestRequestCounts.current.error,
-        avgResponseTime: Math.round(avgResponseTime),
-        timeRemaining: Math.round(timeRemaining)
-      });
-      
-      if (elapsed >= stressTestDuration) {
-        handleStopStressTest();
-        return;
-      }
-      
-      // Make concurrent requests
-      const promises = [];
+      // Create virtual users
+      const virtualUsers: any[] = [];
       for (let i = 0; i < stressTestConcurrent; i++) {
-        const endpoint = getRandomEndpoint(stressTestErrorRate);
-        promises.push(makeStressTestRequest(endpoint));
+        const journey = selectWeightedJourney(USER_JOURNEYS);
+        const user = new VirtualUser(`stress-user-${i}`, journey);
+        virtualUsers.push(user);
       }
       
-      // Fire and forget - don't await to maintain rate
-      Promise.allSettled(promises);
+      // Execute with staggered starts (RPS control)
+      const staggerDelay = (1000 / stressTestRPS) / stressTestConcurrent;
+      let activeUsers = 0;
       
-    }, intervalMs);
+      stressTestIntervalRef.current = setInterval(async () => {
+        const elapsed = (Date.now() - stressTestStartTime.current) / 1000;
+        const progress = Math.min((elapsed / stressTestDuration) * 100, 100);
+        const timeRemaining = Math.max(stressTestDuration - elapsed, 0);
+        
+        setStressTestProgress(progress);
+        setStressTestStats(prev => ({
+          ...prev,
+          totalRequests: activeUsers,
+          timeRemaining: Math.round(timeRemaining)
+        }));
+        
+        if (elapsed >= stressTestDuration) {
+          // Stop all virtual users
+          virtualUsers.forEach(user => user.abort());
+          handleStopStressTest();
+          return;
+        }
+        
+        // Start new virtual user journeys
+        if (activeUsers < virtualUsers.length && elapsed < stressTestDuration - 5) {
+          const user = virtualUsers[activeUsers % virtualUsers.length];
+          activeUsers++;
+          
+          user.executeJourney()
+            .then(() => {
+              stressTestRequestCounts.current.success++;
+              stressTestRequestCounts.current.total++;
+            })
+            .catch(() => {
+              stressTestRequestCounts.current.error++;
+              stressTestRequestCounts.current.total++;
+            });
+        }
+      }, 1000); // Check every second
+      
+    } else {
+      // Fallback to original stress test logic
+      const intervalMs = 1000 / stressTestRPS; // Convert RPS to interval
+      
+      stressTestIntervalRef.current = setInterval(async () => {
+        const elapsed = (Date.now() - stressTestStartTime.current) / 1000;
+        const progress = Math.min((elapsed / stressTestDuration) * 100, 100);
+        const timeRemaining = Math.max(stressTestDuration - elapsed, 0);
+        
+        setStressTestProgress(progress);
+        
+        // Update real-time stats
+        const avgResponseTime = stressTestRequestCounts.current.responseTimes.length > 0
+          ? stressTestRequestCounts.current.responseTimes.reduce((a, b) => a + b, 0) / stressTestRequestCounts.current.responseTimes.length
+          : 0;
+        
+        setStressTestStats({
+          totalRequests: stressTestRequestCounts.current.total,
+          successCount: stressTestRequestCounts.current.success,
+          errorCount: stressTestRequestCounts.current.error,
+          avgResponseTime: Math.round(avgResponseTime),
+          timeRemaining: Math.round(timeRemaining)
+        });
+        
+        if (elapsed >= stressTestDuration) {
+          handleStopStressTest();
+          return;
+        }
+        
+        // Make concurrent requests
+        const promises = [];
+        for (let i = 0; i < stressTestConcurrent; i++) {
+          const endpoint = getRandomEndpoint(stressTestErrorRate);
+          promises.push(makeStressTestRequest(endpoint));
+        }
+        
+        // Fire and forget - don't await to maintain rate
+        Promise.allSettled(promises);
+        
+      }, intervalMs);
+    }
     
     toast({
       title: "Stress Test Started",
-      description: `Running for ${stressTestDuration}s at ${stressTestRPS} RPS with ${stressTestConcurrent} concurrent requests.`
+      description: tracingEnabled 
+        ? `Starting ${stressTestConcurrent} virtual users with realistic behavior journeys for ${stressTestDuration}s.`
+        : `Running for ${stressTestDuration}s at ${stressTestRPS} RPS with ${stressTestConcurrent} concurrent requests.`
     });
   };
 
@@ -1093,7 +1246,7 @@ const Config = () => {
         const config = JSON.parse(savedOtelConfig);
         
         // Load basic configuration
-        setOtelEnabled(config.enabled !== false);
+        setOtelEnabled(config.enabled === true);
         setOtelServiceName(config.serviceName || 'restaurant-app');
         setOtelTags(config.tags || 'restaurant-app,otel');
         setOtelDebugLevel(config.debugLevel || 'info');
@@ -1438,15 +1591,49 @@ const Config = () => {
     }
   };
 
-  const handleOtelToggle = (enabled: boolean) => {
+  const handleOtelToggle = async (enabled: boolean) => {
     setOtelEnabled(enabled);
+    
+    // Immediately save the enabled state change
+    const config = {
+      enabled: enabled,
+      serviceName: otelServiceName,
+      tags: otelTags,
+      debugLevel: otelDebugLevel,
+      pipelines: {
+        logs: {
+          enabled: otelPipelines.logs.enabled,
+          ingestionKey: otelPipelines.logs.ingestionKey,
+          pipelineId: otelPipelines.logs.pipelineId,
+          host: otelPipelines.logs.host,
+          endpoint: otelPipelines.logs.endpoint
+        },
+        metrics: {
+          enabled: otelPipelines.metrics.enabled,
+          ingestionKey: otelPipelines.metrics.ingestionKey,
+          pipelineId: otelPipelines.metrics.pipelineId,
+          host: otelPipelines.metrics.host,
+          endpoint: otelPipelines.metrics.endpoint
+        },
+        traces: {
+          enabled: otelPipelines.traces.enabled,
+          ingestionKey: otelPipelines.traces.ingestionKey,
+          pipelineId: otelPipelines.traces.pipelineId,
+          host: otelPipelines.traces.host,
+          endpoint: otelPipelines.traces.endpoint
+        }
+      },
+      lastUpdated: new Date().toISOString()
+    };
+    
+    localStorage.setItem('otel-config', JSON.stringify(config));
+    console.log('OTEL config saved with enabled:', enabled);
+    
     if (enabled && otelIngestionKey) {
-      // Auto-save when enabling with valid key
-      setTimeout(() => saveOtelConfig(), 100);
+      // Start collector if we have ingestion key
       handleStartOtelCollector();
     } else if (!enabled) {
-      // Save configuration when disabling
-      setTimeout(() => saveOtelConfig(), 100);
+      // Stop collector when disabling
       handleStopOtelCollector();
     }
   };
@@ -1722,10 +1909,17 @@ const Config = () => {
         if (response.ok) {
           setOtelStatus(status.status);
           
-          // Sync UI enabled state with actual process status
-          const isProcessRunning = status.status === 'connected';
-          if (otelEnabled !== isProcessRunning) {
-            setOtelEnabled(isProcessRunning);
+          // Sync UI state with saved configuration (not process status)
+          try {
+            const savedConfig = localStorage.getItem('otel-config');
+            if (savedConfig) {
+              const config = JSON.parse(savedConfig);
+              if (otelEnabled !== config.enabled) {
+                setOtelEnabled(config.enabled === true);
+              }
+            }
+          } catch (error) {
+            console.error('Error syncing OTEL config:', error);
           }
           
           if (status.status === 'connected' && !otelLastSync) {

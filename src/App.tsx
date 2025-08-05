@@ -2,9 +2,12 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { CartProvider } from "@/hooks/useCart";
 import { usePerformance } from "@/hooks/usePerformance";
+import { useSessionTracker } from "@/hooks/useSessionTracker";
+import { initializeTracing } from "@/lib/tracing/config";
+import { useEffect, useRef } from "react";
 import Home from "./pages/Home";
 import Menu from "./pages/Menu";
 import Reservations from "./pages/Reservations";
@@ -42,6 +45,20 @@ const queryClient = new QueryClient({
 const AppContent = () => {
   // Initialize performance tracking
   usePerformance();
+  
+  // Initialize session tracking for tracing
+  const sessionTracker = useSessionTracker();
+  const location = useLocation();
+  const previousPathRef = useRef<string>('');
+
+  // Track navigation changes
+  useEffect(() => {
+    if (sessionTracker) {
+      const previousPath = previousPathRef.current;
+      sessionTracker.startNavigation(location.pathname, previousPath);
+      previousPathRef.current = location.pathname;
+    }
+  }, [location.pathname, sessionTracker]);
 
   return (
     <>
@@ -58,18 +75,28 @@ const AppContent = () => {
   );
 };
 
-const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <CartProvider>
-          <AppContent />
-        </CartProvider>
-      </BrowserRouter>
-    </TooltipProvider>
-  </QueryClientProvider>
-);
+const App = () => {
+  // Initialize tracing once on app startup
+  useEffect(() => {
+    const tracerProvider = initializeTracing();
+    if (tracerProvider) {
+      console.log('OpenTelemetry tracing initialized');
+    }
+  }, []);
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <BrowserRouter>
+          <CartProvider>
+            <AppContent />
+          </CartProvider>
+        </BrowserRouter>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+};
 
 export default App;
