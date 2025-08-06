@@ -6,6 +6,7 @@ import yaml from 'js-yaml';
 import { loggingMiddleware, errorLoggingMiddleware, logBusinessEvent, logPerformanceTiming } from './middleware/logging-middleware.js';
 import { updateLogFormat, getLogFormats } from './logging/winston-config.js';
 import { appLogger, serverLogger, updateLogLevel, getLogLevels } from './logging/winston-config.js';
+import { startFailure, stopFailure, getFailureStatus, isFailureActive } from './services/failureSimulator.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -16,6 +17,17 @@ app.use(express.json());
 
 // Structured logging middleware (replaces basic console logging)
 app.use(loggingMiddleware);
+
+// Memory pressure delay middleware (for failure simulation)
+app.use((req, res, next) => {
+  if (global.memoryPressureDelay && global.memoryPressureDelay > 0) {
+    setTimeout(() => {
+      next();
+    }, global.memoryPressureDelay);
+  } else {
+    next();
+  }
+});
 
 // In-memory data store (simulating a database)
 let data = {
@@ -70,6 +82,38 @@ let data = {
 
 // Products
 app.get('/api/products', (req, res) => {
+  // Check for system failure or service-specific failures
+  if (global.systemFailure || global.productServiceDown) {
+    appLogger.error('Product service request failed - service unavailable', {
+      requestId: req.requestId,
+      service: 'products',
+      failureType: global.systemFailure ? 'system_failure' : 'service_failure',
+      endpoint: '/api/products'
+    });
+    
+    return res.status(503).json({ 
+      error: 'Product service temporarily unavailable',
+      code: 'SERVICE_UNAVAILABLE',
+      service: 'products'
+    });
+  }
+  
+  // Check for service degradation
+  if (global.productServiceDegraded) {
+    appLogger.warn('Product service degraded - slow response', {
+      requestId: req.requestId,
+      service: 'products',
+      responseDelay: 5000,
+      endpoint: '/api/products'
+    });
+    
+    // Return response with delay
+    setTimeout(() => {
+      res.json(data.products);
+    }, 5000);
+    return;
+  }
+  
   res.json(data.products);
 });
 
@@ -124,8 +168,45 @@ app.get('/api/orders/:id', (req, res) => {
   res.json(order);
 });
 
-app.post('/api/orders', (req, res) => {
+app.post('/api/orders', async (req, res) => {
   const startTime = Date.now();
+  
+  // Check for system-wide failures first
+  if (global.systemFailure || global.orderServiceDown) {
+    appLogger.error('Order service request failed - service unavailable', {
+      requestId: req.requestId,
+      service: 'orders',
+      failureType: global.systemFailure ? 'system_failure' : 'service_failure',
+      endpoint: '/api/orders'
+    });
+    
+    return res.status(503).json({
+      error: 'Order service temporarily unavailable',
+      code: 'SERVICE_UNAVAILABLE',
+      service: 'orders'
+    });
+  }
+  
+  // Check for database connection pool exhaustion
+  if (isFailureActive('db_pool')) {
+    appLogger.error('Order creation failed - database connection pool exhausted', {
+      requestId: req.requestId,
+      poolSize: 3,
+      activeConnections: 3,
+      queueLength: Math.floor(Math.random() * 20) + 10,
+      waitTime: 30000,
+      errorCode: 'DB_POOL_EXHAUSTED'
+    });
+    
+    // Simulate waiting for connection (5 second timeout)
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    
+    return res.status(503).json({
+      error: 'Service temporarily unavailable - database connection timeout',
+      code: 'DB_POOL_EXHAUSTED',
+      details: 'Database connection pool is exhausted, please try again later'
+    });
+  }
   
   // Validate required fields
   const { customerName, customerEmail, items } = req.body;
@@ -140,19 +221,87 @@ app.post('/api/orders', (req, res) => {
     });
   }
 
+  // Check for data corruption in products
+  for (const item of items) {
+    const product = data.products.find(p => p.id === item.productId);
+    if (product) {
+      if (typeof product.price !== 'number' || product.price < 0 || !product.name) {
+        appLogger.error('Order creation failed - corrupted product data', {
+          requestId: req.requestId,
+          productId: product.id,
+          corruptedFields: {
+            price: typeof product.price !== 'number' ? 'invalid_type' : product.price < 0 ? 'negative' : 'valid',
+            name: !product.name ? 'missing' : 'valid'
+          },
+          validationError: 'CORRUPTED_PRODUCT_DATA'
+        });
+        
+        return res.status(422).json({
+          error: 'Data integrity error - corrupted product information',
+          code: 'CORRUPTED_PRODUCT_DATA',
+          productId: product.id,
+          details: `Product data is corrupted: price=${product.price}, name="${product.name}"`
+        });
+      }
+    }
+  }
+
   const order = {
     id: `order-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     ...req.body,
     createdAt: new Date().toISOString(),
-    status: 'pending'
+    status: 'payment_pending'
   };
-  
-  data.orders.push(order);
   
   // Calculate order total for business metrics
   const total = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   
-  // Log business event
+  // Check for payment gateway failure
+  if (isFailureActive('payment')) {
+    const paymentStartTime = Date.now();
+    
+    // Simulate payment attempt with timeout
+    await new Promise(resolve => setTimeout(resolve, 8000));
+    
+    // Log payment failure
+    logBusinessEvent('payment_failed', 'error', {
+      orderId: order.id,
+      amount: total,
+      errorCode: 'GATEWAY_TIMEOUT',
+      gatewayResponse: null,
+      attemptDuration: Date.now() - paymentStartTime
+    }, req);
+    
+    appLogger.error('Payment processing failed - gateway timeout', {
+      requestId: req.requestId,
+      orderId: order.id,
+      error: 'Connection timeout after 8000ms',
+      gateway: 'stripe',
+      customerId: customerEmail,
+      amount: total,
+      currency: 'USD'
+    });
+    
+    // Save order in failed payment state
+    order.status = 'payment_failed';
+    order.paymentError = 'Payment gateway timeout';
+    order.paymentErrorCode = 'GATEWAY_TIMEOUT';
+    data.orders.push(order);
+    
+    return res.status(502).json({
+      error: 'Payment processing failed - gateway timeout',
+      code: 'PAYMENT_GATEWAY_ERROR',
+      orderId: order.id,
+      retryable: true,
+      details: 'Payment gateway is currently unavailable'
+    });
+  }
+  
+  // Normal order processing
+  order.status = 'confirmed';
+  data.orders.push(order);
+  
+  // Log successful business event
   logBusinessEvent('order_created', 'create', {
     orderId: order.id,
     customerEmail: customerEmail,
@@ -189,8 +338,45 @@ app.get('/api/reservations/:id', (req, res) => {
   res.json(reservation);
 });
 
-app.post('/api/reservations', (req, res) => {
+app.post('/api/reservations', async (req, res) => {
   const startTime = Date.now();
+  
+  // Check for system-wide failures first
+  if (global.systemFailure || global.reservationServiceDown) {
+    appLogger.error('Reservation service request failed - service unavailable', {
+      requestId: req.requestId,
+      service: 'reservations',
+      failureType: global.systemFailure ? 'system_failure' : 'service_failure',
+      endpoint: '/api/reservations'
+    });
+    
+    return res.status(503).json({
+      error: 'Reservation service temporarily unavailable',
+      code: 'SERVICE_UNAVAILABLE',
+      service: 'reservations'
+    });
+  }
+  
+  // Check for database connection pool exhaustion
+  if (isFailureActive('db_pool')) {
+    appLogger.error('Reservation creation failed - database connection pool exhausted', {
+      requestId: req.requestId,
+      poolSize: 3,
+      activeConnections: 3,
+      queueLength: Math.floor(Math.random() * 15) + 8,
+      waitTime: 30000,
+      errorCode: 'DB_POOL_EXHAUSTED'
+    });
+    
+    // Simulate waiting for connection (4 second timeout)
+    await new Promise(resolve => setTimeout(resolve, 4000));
+    
+    return res.status(503).json({
+      error: 'Service temporarily unavailable - database connection timeout',
+      code: 'DB_POOL_EXHAUSTED',
+      details: 'Unable to process reservation - database connection pool exhausted'
+    });
+  }
   
   // Validate required fields
   const { name, email, date, time, guests } = req.body;
@@ -1464,6 +1650,120 @@ app.post('/api/log-beacon', (req, res) => {
   } catch (error) {
     appLogger.error('Error processing log beacon', { error: error.message });
     res.status(500).json({ error: 'Failed to process log beacon' });
+  }
+});
+
+// Failure Simulation API Endpoints
+app.post('/api/simulate/failure', (req, res) => {
+  try {
+    const { scenario, duration } = req.body;
+    
+    if (!scenario) {
+      return res.status(400).json({ error: 'Scenario is required' });
+    }
+    
+    if (!duration || duration < 10 || duration > 300) {
+      return res.status(400).json({ 
+        error: 'Duration must be between 10 and 300 seconds' 
+      });
+    }
+    
+    const validScenarios = ['connection_pool', 'payment_gateway', 'memory_leak', 'cascading_failure', 'data_corruption'];
+    if (!validScenarios.includes(scenario)) {
+      return res.status(400).json({ 
+        error: 'Invalid scenario',
+        validScenarios 
+      });
+    }
+    
+    // Log the failure simulation request
+    appLogger.warn('Failure simulation requested', {
+      requestId: req.requestId,
+      scenario,
+      duration,
+      ip: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+    
+    const result = startFailure(scenario, duration, data);
+    
+    if (result.success) {
+      logBusinessEvent('failure_simulation_started', 'start', {
+        scenario,
+        duration,
+        simulatedFailure: true
+      }, req);
+      
+      res.json({
+        success: true,
+        message: 'Failure simulation started',
+        ...result
+      });
+    } else {
+      res.status(409).json(result);
+    }
+    
+  } catch (error) {
+    appLogger.error('Error starting failure simulation', {
+      requestId: req.requestId,
+      error: error.message,
+      stack: error.stack
+    });
+    res.status(500).json({ 
+      error: 'Failed to start failure simulation',
+      details: error.message
+    });
+  }
+});
+
+app.get('/api/simulate/status', (req, res) => {
+  try {
+    const status = getFailureStatus();
+    res.json(status);
+  } catch (error) {
+    appLogger.error('Error getting failure status', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    res.status(500).json({ error: 'Failed to get failure status' });
+  }
+});
+
+app.post('/api/simulate/stop', (req, res) => {
+  try {
+    const result = stopFailure(data);
+    
+    if (result.success) {
+      logBusinessEvent('failure_simulation_stopped', 'stop', {
+        scenario: result.scenario,
+        runTime: result.runTime,
+        simulatedFailure: true
+      }, req);
+      
+      appLogger.info('Failure simulation stopped manually', {
+        requestId: req.requestId,
+        scenario: result.scenario,
+        runTime: result.runTime
+      });
+      
+      res.json({
+        success: true,
+        message: 'Failure simulation stopped',
+        ...result
+      });
+    } else {
+      res.status(409).json(result);
+    }
+    
+  } catch (error) {
+    appLogger.error('Error stopping failure simulation', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    res.status(500).json({ 
+      error: 'Failed to stop failure simulation',
+      details: error.message 
+    });
   }
 });
 

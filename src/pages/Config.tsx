@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Progress } from '@/components/ui/progress';
 import { DataStore } from '@/stores/dataStore';
 import PerformanceLogger from '@/lib/performanceLogger';
-import { Download, Upload, RefreshCw, Settings, AlertTriangle, Activity, FileText, Monitor, Zap, Play, Square, Cloud, CloudOff, CheckCircle, XCircle, Eye, EyeOff, Info, ShoppingCart } from 'lucide-react';
+import { Download, Upload, RefreshCw, Settings, AlertTriangle, Activity, FileText, Monitor, Zap, Play, Square, Cloud, CloudOff, CheckCircle, XCircle, Eye, EyeOff, Info, ShoppingCart, Skull, StopCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { usePerformance } from '@/hooks/usePerformance';
 import { useTestError, useTestRandomError, useTestTimeout, useTestPerformance, useHealthCheck } from '@/services/apiService';
@@ -138,6 +138,63 @@ const Config = () => {
   
   const { toast } = useToast();
   const { getConfig, updateConfig, getSessionId, getStoredLogs, clearStoredLogs, flushLogs } = usePerformance();
+  
+  // Failure simulation state
+  const [failureScenario, setFailureScenario] = useState('');
+  const [failureDuration, setFailureDuration] = useState(60);
+  const [failureActive, setFailureActive] = useState(false);
+  const [failureStatus, setFailureStatus] = useState(null);
+  const [showFailureDialog, setShowFailureDialog] = useState(false);
+  
+  // Failure scenario definitions
+  const failureScenarios = [
+    {
+      id: 'connection_pool',
+      name: 'Database Connection Pool Exhaustion',
+      description: 'Exhausts database connection pool causing timeouts',
+      impact: 'Orders and reservations will fail with 503 errors',
+      icon: '🗄️',
+      severity: 'high',
+      defaultDuration: 60
+    },
+    {
+      id: 'payment_gateway',
+      name: 'Payment Gateway Failure',
+      description: 'Simulates payment provider outage and timeouts',
+      impact: 'All checkout attempts will fail with payment errors',
+      icon: '💳',
+      severity: 'high',
+      defaultDuration: 45
+    },
+    {
+      id: 'memory_leak',
+      name: 'Memory Leak',
+      description: 'Gradually consumes memory causing performance degradation',
+      impact: 'All API calls will slow down progressively, may crash if not stopped',
+      icon: '🧠',
+      severity: 'critical',
+      defaultDuration: 120
+    },
+    {
+      id: 'cascading_failure',
+      name: 'Cascading Service Failure',
+      description: 'Progressive failure starting with products, spreading to all services',
+      impact: 'Menu → Orders → Reservations will fail in sequence over 25 seconds',
+      icon: '⛓️',
+      severity: 'critical',
+      defaultDuration: 30
+    },
+    {
+      id: 'data_corruption',
+      name: 'Data Corruption',
+      description: 'Corrupts product and order data causing validation failures',
+      impact: 'Orders will fail validation, incorrect prices displayed in UI',
+      icon: '💀',
+      severity: 'high',
+      defaultDuration: 90
+    }
+  ];
+  
   const performanceConfig = getConfig();
   
   // New structured logging configuration state
@@ -1926,6 +1983,137 @@ const Config = () => {
     }
   };
 
+  // Failure Simulation Functions
+  const pollFailureStatus = async () => {
+    try {
+      const response = await fetch('/api/simulate/status');
+      if (response.ok) {
+        const status = await response.json();
+        setFailureStatus(status);
+        setFailureActive(status.active);
+      }
+    } catch (error) {
+      console.warn('Could not check failure status:', error);
+    }
+  };
+
+  const triggerFailure = async () => {
+    if (!failureScenario) {
+      toast({
+        title: "No Scenario Selected",
+        description: "Please select a failure scenario first.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    // Check current status before starting
+    await pollFailureStatus();
+    if (failureActive || failureStatus?.active) {
+      toast({
+        title: "Simulation Already Active",
+        description: "Please stop the current simulation before starting a new one.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const selectedScenario = failureScenarios.find(s => s.id === failureScenario);
+    
+    try {
+      const response = await fetch('/api/simulate/failure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scenario: failureScenario,
+          duration: failureDuration
+        })
+      });
+
+      const result = await response.json();
+      
+      if (response.ok) {
+        setFailureActive(true);
+        setShowFailureDialog(false);
+        
+        toast({
+          title: "🚨 Failure Simulation Started",
+          description: `${selectedScenario?.name} will run for ${failureDuration} seconds`,
+          variant: "destructive"
+        });
+        
+        // Start polling status
+        pollFailureStatus();
+        const pollInterval = setInterval(pollFailureStatus, 2000);
+        
+        // Stop polling when failure ends
+        setTimeout(() => {
+          clearInterval(pollInterval);
+          setFailureActive(false);
+          setFailureStatus(null);
+        }, failureDuration * 1000 + 5000);
+        
+      } else {
+        toast({
+          title: "Failed to Start Simulation",
+          description: result.error || 'Unknown error occurred',
+          variant: "destructive"
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Simulation Error",
+        description: error.message,
+        variant: "destructive"
+      });
+    }
+  };
+
+  const stopFailure = async () => {
+    try {
+      const response = await fetch('/api/simulate/stop', {
+        method: 'POST'
+      });
+
+      const result = await response.json();
+      
+      if (response.ok) {
+        setFailureActive(false);
+        setFailureStatus(null);
+        
+        // Poll status after a short delay to ensure backend is updated
+        setTimeout(() => {
+          pollFailureStatus();
+        }, 1000);
+        
+        toast({
+          title: "✅ Failure Simulation Stopped",
+          description: `${result.scenario} simulation stopped after ${Math.round(result.runTime / 1000)} seconds`,
+        });
+      } else {
+        toast({
+          title: "Failed to Stop Simulation",
+          description: result.error || 'Unknown error occurred',
+          variant: "destructive"
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Stop Error", 
+        description: error.message,
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleScenarioChange = (scenarioId) => {
+    setFailureScenario(scenarioId);
+    const scenario = failureScenarios.find(s => s.id === scenarioId);
+    if (scenario) {
+      setFailureDuration(scenario.defaultDuration);
+    }
+  };
+
   // Poll agent status periodically
   useEffect(() => {
     const pollStatus = async () => {
@@ -2013,6 +2201,19 @@ const Config = () => {
       if (otelInterval) clearInterval(otelInterval);
     };
   }, [otelLastSync]);
+
+  // Poll failure simulation status on mount and periodically
+  useEffect(() => {
+    // Check status immediately on mount
+    pollFailureStatus();
+    
+    // Poll every 5 seconds when UI is loaded
+    const failureStatusInterval = setInterval(pollFailureStatus, 5000);
+    
+    return () => {
+      clearInterval(failureStatusInterval);
+    };
+  }, []);
 
   // Initialize traffic manager and poll stats
   useEffect(() => {
@@ -3608,6 +3809,209 @@ const Config = () => {
                   <div>• Generates PAYMENT_PROCESSING logs (initiated → processing → success/failed)</div>
                   <div>• Generates DATA_OPERATION logs for successful orders</div>
                   <div>• Only successful payments are saved to DataStore</div>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* System Failure Simulation */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2 text-red-600">
+              <Skull className="h-5 w-5" />
+              <span>🚨 System Failure Simulation</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-6">
+              <div className="bg-red-50 border border-red-200 p-4 rounded-lg">
+                <div className="flex items-center space-x-2 mb-2">
+                  <AlertTriangle className="h-4 w-4 text-red-600" />
+                  <span className="font-medium text-red-800">⚠️ DANGER ZONE</span>
+                </div>
+                <p className="text-sm text-red-700">
+                  This will cause REAL system failures that affect the actual application functionality.
+                  Orders, reservations, and other features will genuinely fail during simulation.
+                  Use only for demonstrating Mezmo's alert and anomaly detection capabilities.
+                </p>
+              </div>
+
+              {failureActive && failureStatus && (
+                <div className="bg-red-100 border border-red-300 p-4 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center space-x-2">
+                      <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+                      <span className="font-medium text-red-800">FAILURE SIMULATION ACTIVE</span>
+                    </div>
+                    <Button
+                      onClick={stopFailure}
+                      variant="destructive"
+                      size="sm"
+                    >
+                      <StopCircle className="mr-2 h-4 w-4" />
+                      Stop
+                    </Button>
+                  </div>
+                  <div className="space-y-2 text-sm text-red-700">
+                    <div>Scenario: {failureScenarios.find(s => s.id === failureStatus.scenario)?.name}</div>
+                    <div>Progress: {failureStatus.progress}%</div>
+                    <div>Remaining: {Math.ceil(failureStatus.remaining / 1000)}s</div>
+                    {failureStatus.details?.cascadeStage > 0 && (
+                      <div>Cascade Stage: {failureStatus.details.cascadeStage}/5</div>
+                    )}
+                    {failureStatus.details?.memoryLeakArrays > 0 && (
+                      <div>Memory Arrays: {failureStatus.details.memoryLeakArrays}</div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Select Failure Scenario</Label>
+                  <Select
+                    value={failureScenario}
+                    onValueChange={handleScenarioChange}
+                    disabled={failureActive}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Choose a failure scenario" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {failureScenarios.map((scenario) => (
+                        <SelectItem key={scenario.id} value={scenario.id}>
+                          <div className="flex items-center space-x-2">
+                            <span>{scenario.icon}</span>
+                            <span>{scenario.name}</span>
+                            <span className={`text-xs px-2 py-1 rounded ${
+                              scenario.severity === 'critical' ? 'bg-red-100 text-red-800' : 'bg-orange-100 text-orange-800'
+                            }`}>
+                              {scenario.severity}
+                            </span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {failureScenario && (
+                  <div className="bg-gray-50 border border-gray-200 p-4 rounded-lg">
+                    <div className="space-y-2">
+                      <h4 className="font-medium">{failureScenarios.find(s => s.id === failureScenario)?.name}</h4>
+                      <p className="text-sm text-gray-600">
+                        {failureScenarios.find(s => s.id === failureScenario)?.description}
+                      </p>
+                      <div className="bg-red-50 border border-red-200 p-3 rounded">
+                        <p className="text-sm text-red-800">
+                          <strong>Impact:</strong> {failureScenarios.find(s => s.id === failureScenario)?.impact}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <Label>Duration (seconds)</Label>
+                  <Input
+                    type="number"
+                    value={failureDuration}
+                    onChange={(e) => setFailureDuration(Math.max(10, Math.min(300, parseInt(e.target.value) || 60)))}
+                    min="10"
+                    max="300"
+                    disabled={failureActive}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Duration between 10-300 seconds. Failure will automatically stop after this time.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <AlertDialog open={showFailureDialog} onOpenChange={setShowFailureDialog}>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      variant="destructive"
+                      disabled={!failureScenario || failureActive}
+                      className="bg-red-600 hover:bg-red-700"
+                    >
+                      <Skull className="mr-2 h-4 w-4" />
+                      Trigger System Failure
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle className="text-red-600">⚠️ Confirm System Failure</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        You are about to trigger a real system failure that will affect the actual application:
+                        <br /><br />
+                        <strong>{failureScenarios.find(s => s.id === failureScenario)?.name}</strong>
+                        <br />
+                        Duration: {failureDuration} seconds
+                        <br /><br />
+                        <span className="text-red-600">
+                          This will cause REAL failures that users and tests will experience.
+                          Are you sure you want to continue?
+                        </span>
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={triggerFailure}
+                        className="bg-red-600 hover:bg-red-700"
+                      >
+                        Yes, Trigger Failure
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
+
+              {/* Information */}
+              <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
+                <div className="flex items-center space-x-2 mb-2">
+                  <Info className="h-4 w-4 text-blue-600" />
+                  <span className="font-medium text-blue-800">How Failure Simulation Works</span>
+                </div>
+                <div className="space-y-1 text-sm text-blue-700">
+                  <div>• <strong>Real Impact:</strong> Actually affects running application functionality</div>
+                  <div>• <strong>Logs Generated:</strong> All failures logged to `/tmp/codeuser/restaurant-performance.log`</div>
+                  <div>• <strong>Tracing:</strong> Error spans created with real stack traces</div>
+                  <div>• <strong>Metrics:</strong> Performance degradation visible in metrics</div>
+                  <div>• <strong>Auto-Stop:</strong> Failures automatically stop after duration</div>
+                  <div>• <strong>Manual Stop:</strong> Can be stopped immediately using the Stop button</div>
+                  <div>• <strong>Data Safety:</strong> No permanent data damage - corrupted data is restored</div>
+                </div>
+              </div>
+
+              {/* Scenario Details */}
+              <div className="space-y-3">
+                <h4 className="font-medium">Available Scenarios:</h4>
+                <div className="grid gap-3">
+                  {failureScenarios.map((scenario) => (
+                    <div key={scenario.id} className="bg-gray-50 border border-gray-200 p-3 rounded-lg">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2 mb-1">
+                            <span className="text-lg">{scenario.icon}</span>
+                            <span className="font-medium">{scenario.name}</span>
+                            <span className={`text-xs px-2 py-1 rounded ${
+                              scenario.severity === 'critical' ? 'bg-red-100 text-red-800' : 'bg-orange-100 text-orange-800'
+                            }`}>
+                              {scenario.severity}
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-600 mb-1">{scenario.description}</p>
+                          <p className="text-xs text-red-600">Impact: {scenario.impact}</p>
+                        </div>
+                        <div className="text-right text-xs text-gray-500">
+                          Default: {scenario.defaultDuration}s
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
