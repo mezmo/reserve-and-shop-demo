@@ -70,6 +70,7 @@ const Config = () => {
   const [mezmoHost, setMezmoHost] = useState('logs.mezmo.com');
   const [mezmoTags, setMezmoTags] = useState('restaurant-app,demo');
   const [mezmoStatus, setMezmoStatus] = useState('disconnected'); // connected, disconnected, error
+  const [mezmoPid, setMezmoPid] = useState<number | null>(null);
   const [mezmoLastSync, setMezmoLastSync] = useState<string | null>(null);
   const [mezmoStats, setMezmoStats] = useState({
     logsSent: 0,
@@ -111,6 +112,7 @@ const Config = () => {
     }
   });
   const [otelStatus, setOtelStatus] = useState('disconnected');
+  const [otelPid, setOtelPid] = useState<number | null>(null);
   const [otelLastSync, setOtelLastSync] = useState<string | null>(null);
   const [otelStats, setOtelStats] = useState({
     logsSent: 0,
@@ -1191,84 +1193,173 @@ const Config = () => {
 
   // Load Mezmo configuration on mount
   useEffect(() => {
-    try {
-      const savedMezmoConfig = localStorage.getItem('mezmo-config');
-      if (savedMezmoConfig) {
-        const config = JSON.parse(savedMezmoConfig);
-        setMezmoEnabled(config.enabled || false);
-        setMezmoIngestionKey(config.ingestionKey || '');
-        setMezmoHost(config.host || 'logs.mezmo.com');
-        setMezmoTags(config.tags || 'restaurant-app,demo');
+    // First check if the service is actually running
+    const checkServiceStatus = async () => {
+      try {
+        const statusResponse = await fetch('/api/mezmo/status');
+        const status = await statusResponse.json();
+        
+        if (statusResponse.ok) {
+          // Set toggle based on actual running status
+          const isRunning = status.status === 'connected' && status.pid !== null;
+          setMezmoEnabled(isRunning);
+          setMezmoPid(status.pid);
+          setMezmoStatus(status.status);
+          
+          // Load configuration data from localStorage (but not the enabled state)
+          const savedMezmoConfig = localStorage.getItem('mezmo-config');
+          if (savedMezmoConfig) {
+            const config = JSON.parse(savedMezmoConfig);
+            setMezmoIngestionKey(config.ingestionKey || '');
+            setMezmoHost(config.host || 'logs.mezmo.com');
+            setMezmoTags(config.tags || 'restaurant-app,demo');
+          }
+        }
+      } catch (error) {
+        console.error('Error checking Mezmo service status:', error);
+        // Fallback to localStorage if status check fails
+        try {
+          const savedMezmoConfig = localStorage.getItem('mezmo-config');
+          if (savedMezmoConfig) {
+            const config = JSON.parse(savedMezmoConfig);
+            setMezmoIngestionKey(config.ingestionKey || '');
+            setMezmoHost(config.host || 'logs.mezmo.com');
+            setMezmoTags(config.tags || 'restaurant-app,demo');
+            // Don't set enabled state from localStorage
+          }
+        } catch (storageError) {
+          console.error('Error loading Mezmo configuration:', storageError);
+        }
       }
-    } catch (error) {
-      console.error('Error loading Mezmo configuration:', error);
-    }
+    };
+    
+    checkServiceStatus();
   }, []);
 
   // Load OTEL configuration on mount
   useEffect(() => {
-    try {
-      const savedOtelConfig = localStorage.getItem('otel-config');
-      if (savedOtelConfig) {
-        const config = JSON.parse(savedOtelConfig);
+    // First check if the service is actually running
+    const checkServiceStatus = async () => {
+      try {
+        const statusResponse = await fetch('/api/otel/status');
+        const status = await statusResponse.json();
         
-        // Load basic configuration
-        setOtelEnabled(config.enabled === true);
-        setOtelServiceName(config.serviceName || 'restaurant-app');
-        setOtelTags(config.tags || 'restaurant-app,otel');
-        setOtelDebugLevel(config.debugLevel || 'info');
-        
-        // Handle both old single-pipeline and new multi-pipeline formats
-        if (config.pipelines) {
-          // New multi-pipeline format
-          setOtelPipelines(prev => ({
-            logs: {
-              ...prev.logs,
-              enabled: config.pipelines.logs?.enabled !== false,
-              ingestionKey: config.pipelines.logs?.ingestionKey || '',
-              pipelineId: config.pipelines.logs?.pipelineId || '',
-              host: config.pipelines.logs?.host || 'logs.mezmo.com',
-              endpoint: config.pipelines.logs?.endpoint || ''
-            },
-            metrics: {
-              ...prev.metrics,
-              enabled: config.pipelines.metrics?.enabled !== false,
-              ingestionKey: config.pipelines.metrics?.ingestionKey || '',
-              pipelineId: config.pipelines.metrics?.pipelineId || '',
-              host: config.pipelines.metrics?.host || 'logs.mezmo.com',
-              endpoint: config.pipelines.metrics?.endpoint || ''
-            },
-            traces: {
-              ...prev.traces,
-              enabled: config.pipelines.traces?.enabled || false,
-              ingestionKey: config.pipelines.traces?.ingestionKey || '',
-              pipelineId: config.pipelines.traces?.pipelineId || '',
-              host: config.pipelines.traces?.host || 'logs.mezmo.com',
-              endpoint: config.pipelines.traces?.endpoint || ''
-            }
-          }));
-        } else {
-          // Legacy single-pipeline format - migrate to logs pipeline
-          const ingestionKey = config.ingestionKey || '';
-          const pipelineId = config.pipelineId || '';
-          const host = config.host || 'logs.mezmo.com';
+        if (statusResponse.ok) {
+          // Set toggle based on actual running status
+          const isRunning = status.status === 'connected' && status.pid !== null;
+          setOtelEnabled(isRunning);
+          setOtelPid(status.pid);
+          setOtelStatus(status.status);
           
-          setOtelPipelines(prev => ({
-            ...prev,
-            logs: {
-              ...prev.logs,
-              enabled: config.enabled !== false,
-              ingestionKey,
-              pipelineId,
-              host,
-              endpoint: pipelineId ? `https://pipeline.mezmo.com/v1/${pipelineId}` : ''
+          // Load configuration data from localStorage (but not the enabled state)
+          const savedOtelConfig = localStorage.getItem('otel-config');
+          if (savedOtelConfig) {
+            const config = JSON.parse(savedOtelConfig);
+            
+            // Load basic configuration
+            setOtelServiceName(config.serviceName || 'restaurant-app');
+            setOtelTags(config.tags || 'restaurant-app,otel');
+            setOtelDebugLevel(config.debugLevel || 'info');
+            
+            // Handle both old single-pipeline and new multi-pipeline formats
+            if (config.pipelines) {
+              // New multi-pipeline format
+              setOtelPipelines(prev => ({
+                logs: {
+                  ...prev.logs,
+                  enabled: config.pipelines.logs?.enabled !== false,
+                  ingestionKey: config.pipelines.logs?.ingestionKey || '',
+                  pipelineId: config.pipelines.logs?.pipelineId || '',
+                  host: config.pipelines.logs?.host || 'logs.mezmo.com',
+                  endpoint: config.pipelines.logs?.endpoint || ''
+                },
+                metrics: {
+                  ...prev.metrics,
+                  enabled: config.pipelines.metrics?.enabled !== false,
+                  ingestionKey: config.pipelines.metrics?.ingestionKey || '',
+                  pipelineId: config.pipelines.metrics?.pipelineId || '',
+                  host: config.pipelines.metrics?.host || 'logs.mezmo.com',
+                  endpoint: config.pipelines.metrics?.endpoint || ''
+                },
+                traces: {
+                  ...prev.traces,
+                  enabled: config.pipelines.traces?.enabled || false,
+                  ingestionKey: config.pipelines.traces?.ingestionKey || '',
+                  pipelineId: config.pipelines.traces?.pipelineId || '',
+                  host: config.pipelines.traces?.host || 'logs.mezmo.com',
+                  endpoint: config.pipelines.traces?.endpoint || ''
+                }
+              }));
+            } else {
+              // Legacy single-pipeline format - migrate to logs pipeline
+              const ingestionKey = config.ingestionKey || '';
+              const pipelineId = config.pipelineId || '';
+              const host = config.host || 'logs.mezmo.com';
+              
+              setOtelPipelines(prev => ({
+                ...prev,
+                logs: {
+                  ...prev.logs,
+                  enabled: config.enabled !== false,
+                  ingestionKey,
+                  pipelineId,
+                  host,
+                  endpoint: pipelineId ? `https://pipeline.mezmo.com/v1/${pipelineId}` : ''
+                }
+              }));
             }
-          }));
+          }
+        }
+      } catch (error) {
+        console.error('Error checking OTEL service status:', error);
+        // Fallback to localStorage if status check fails
+        try {
+          const savedOtelConfig = localStorage.getItem('otel-config');
+          if (savedOtelConfig) {
+            const config = JSON.parse(savedOtelConfig);
+            
+            // Load basic configuration (but not enabled state)
+            setOtelServiceName(config.serviceName || 'restaurant-app');
+            setOtelTags(config.tags || 'restaurant-app,otel');
+            setOtelDebugLevel(config.debugLevel || 'info');
+            
+            // Load pipeline configurations
+            if (config.pipelines) {
+              setOtelPipelines(prev => ({
+                logs: {
+                  ...prev.logs,
+                  enabled: config.pipelines.logs?.enabled !== false,
+                  ingestionKey: config.pipelines.logs?.ingestionKey || '',
+                  pipelineId: config.pipelines.logs?.pipelineId || '',
+                  host: config.pipelines.logs?.host || 'logs.mezmo.com',
+                  endpoint: config.pipelines.logs?.endpoint || ''
+                },
+                metrics: {
+                  ...prev.metrics,
+                  enabled: config.pipelines.metrics?.enabled !== false,
+                  ingestionKey: config.pipelines.metrics?.ingestionKey || '',
+                  pipelineId: config.pipelines.metrics?.pipelineId || '',
+                  host: config.pipelines.metrics?.host || 'logs.mezmo.com',
+                  endpoint: config.pipelines.metrics?.endpoint || ''
+                },
+                traces: {
+                  ...prev.traces,
+                  enabled: config.pipelines.traces?.enabled || false,
+                  ingestionKey: config.pipelines.traces?.ingestionKey || '',
+                  pipelineId: config.pipelines.traces?.pipelineId || '',
+                  host: config.pipelines.traces?.host || 'logs.mezmo.com',
+                  endpoint: config.pipelines.traces?.endpoint || ''
+                }
+              }));
+            }
+          }
+        } catch (storageError) {
+          console.error('Error loading OTEL configuration:', storageError);
         }
       }
-    } catch (error) {
-      console.error('Error loading OTEL configuration:', error);
-    }
+    };
+    
+    checkServiceStatus();
   }, []);
 
   // Mezmo configuration management
@@ -1844,6 +1935,12 @@ const Config = () => {
         
         if (response.ok) {
           setMezmoStatus(status.status);
+          setMezmoPid(status.pid);
+          
+          // Update toggle state based on actual service status
+          const isRunning = status.status === 'connected' && status.pid !== null;
+          setMezmoEnabled(isRunning);
+          
           if (status.status === 'connected' && !mezmoLastSync) {
             setMezmoLastSync(new Date().toISOString());
           }
@@ -1854,17 +1951,14 @@ const Config = () => {
       }
     };
 
-    // Poll every 10 seconds when enabled
-    let interval;
-    if (mezmoEnabled) {
-      pollStatus(); // Check immediately
-      interval = setInterval(pollStatus, 10000);
-    }
+    // Poll every 10 seconds
+    pollStatus(); // Check immediately
+    const interval = setInterval(pollStatus, 10000);
 
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [mezmoEnabled, mezmoLastSync]);
+  }, [mezmoLastSync]);
 
   // Poll OTEL Collector status periodically
   useEffect(() => {
@@ -1875,19 +1969,11 @@ const Config = () => {
         
         if (response.ok) {
           setOtelStatus(status.status);
+          setOtelPid(status.pid);
           
-          // Sync UI state with saved configuration (not process status)
-          try {
-            const savedConfig = localStorage.getItem('otel-config');
-            if (savedConfig) {
-              const config = JSON.parse(savedConfig);
-              if (otelEnabled !== config.enabled) {
-                setOtelEnabled(config.enabled === true);
-              }
-            }
-          } catch (error) {
-            console.error('Error syncing OTEL config:', error);
-          }
+          // Update toggle state based on actual service status
+          const isRunning = status.status === 'connected' && status.pid !== null;
+          setOtelEnabled(isRunning);
           
           if (status.status === 'connected' && !otelLastSync) {
             setOtelLastSync(new Date().toISOString());
@@ -1920,14 +2006,13 @@ const Config = () => {
 
     // Poll every 10 seconds to check actual process status
     // This ensures UI stays in sync with actual running state
-    let otelInterval;
     pollOtelStatus(); // Check immediately on mount/change
-    otelInterval = setInterval(pollOtelStatus, 10000);
+    const otelInterval = setInterval(pollOtelStatus, 10000);
 
     return () => {
       if (otelInterval) clearInterval(otelInterval);
     };
-  }, [otelEnabled, otelLastSync]);
+  }, [otelLastSync]);
 
   // Initialize traffic manager and poll stats
   useEffect(() => {
@@ -2226,7 +2311,7 @@ const Config = () => {
                     <div className="space-y-1 text-sm">
                       <p className="font-medium text-blue-900">Configuration Guide</p>
                       <div className="text-blue-800 space-y-1">
-                        <p><strong>Log Level:</strong> Controls verbosity - DEBUG (most detailed) > INFO (standard) > WARN (warnings only) > ERROR (errors only)</p>
+                        <p><strong>Log Level:</strong> Controls verbosity - DEBUG (most detailed) {'>'} INFO (standard) {'>'} WARN (warnings only) {'>'} ERROR (errors only)</p>
                         <p><strong>Format:</strong> Output structure - JSON for machine parsing, CLF for web servers, String for human reading</p>
                       </div>
                     </div>
@@ -2479,6 +2564,11 @@ const Config = () => {
                   <span className="font-medium">
                     Agent Status: {mezmoStatus.charAt(0).toUpperCase() + mezmoStatus.slice(1)}
                   </span>
+                  {mezmoPid && (
+                    <span className="text-sm text-muted-foreground ml-2">
+                      (PID: {mezmoPid})
+                    </span>
+                  )}
                 </div>
                 
                 {mezmoLastSync && (
@@ -2772,7 +2862,6 @@ const Config = () => {
                   This allows you to send logs, metrics, and traces to different Mezmo destinations for better organization.
                 </div>
               </div>
-            )}
 
             {/* Status Display */}
             <div className="space-y-4">
@@ -2786,6 +2875,11 @@ const Config = () => {
                   <span className="font-medium">
                     Collector Status: {otelStatus.charAt(0).toUpperCase() + otelStatus.slice(1)}
                   </span>
+                  {otelPid && (
+                    <span className="text-sm text-muted-foreground ml-2">
+                      (PID: {otelPid})
+                    </span>
+                  )}
                 </div>
                 
                 {otelLastSync && (
