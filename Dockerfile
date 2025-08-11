@@ -1,9 +1,9 @@
 # Multi-stage build for better optimization
 FROM node:20-slim AS base
 
-# Install Python and other system dependencies including wget for LogDNA agent
+# Install Python and other system dependencies including wget for LogDNA agent and jq for JSON parsing
 RUN apt-get update && \
-    apt-get install -y python3 python3-pip curl wget ca-certificates procps sudo && \
+    apt-get install -y python3 python3-pip curl wget ca-certificates procps sudo jq && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI
@@ -48,6 +48,15 @@ RUN npm config set update-notifier false && \
 
 # Copy the rest of the application code
 COPY . .
+
+# Optional: Copy agents configuration file if provided during build
+ARG AGENTS_CONFIG_FILE
+RUN if [ -n "${AGENTS_CONFIG_FILE}" ] && [ -f "${AGENTS_CONFIG_FILE}" ]; then \
+      echo "✅ Agents configuration file included in build"; \
+      cp "${AGENTS_CONFIG_FILE}" /app/agents-config.json; \
+    else \
+      echo "ℹ️  No agents configuration file provided - agents can be configured via web UI"; \
+    fi
 
 # Set up startup script
 COPY startup.sh /usr/local/bin/startup.sh

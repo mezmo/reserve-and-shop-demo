@@ -13,6 +13,7 @@ import Home from "./pages/Home";
 import Menu from "./pages/Menu";
 import Reservations from "./pages/Reservations";
 import Config from "./pages/Config";
+import Agents from "./pages/Agents";
 import NotFound from "./pages/NotFound";
 import Navigation from "./components/Navigation";
 
@@ -69,6 +70,7 @@ const AppContent = () => {
         <Route path="/menu" element={<Menu />} />
         <Route path="/reservations" element={<Reservations />} />
         <Route path="/config" element={<Config />} />
+        <Route path="/agents" element={<Agents />} />
         {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
         <Route path="*" element={<NotFound />} />
       </Routes>

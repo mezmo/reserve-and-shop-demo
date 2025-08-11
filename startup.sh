@@ -72,6 +72,62 @@ echo "   Application errors: /tmp/codeuser/errors.log"
 echo "   Performance timing: /tmp/codeuser/performance.log"
 echo "   General app logs: /tmp/codeuser/app.log"
 
+# Load agent configuration from file if available
+load_agents_config() {
+    local config_file="/app/agents-config.json"
+    
+    if [ -f "$config_file" ]; then
+        echo "🔍 Found agents configuration file, loading settings..."
+        
+        # Use jq to parse JSON if available, otherwise basic parsing
+        if command -v jq >/dev/null 2>&1; then
+            # Get default config name
+            local default_config=$(jq -r '.defaultConfig // "development"' "$config_file")
+            echo "📋 Default configuration: $default_config"
+            
+            # Extract Mezmo configuration
+            local mezmo_enabled=$(jq -r ".configurations.$default_config.mezmo.enabled // false" "$config_file")
+            local mezmo_key=$(jq -r ".configurations.$default_config.mezmo.ingestionKey // \"\"" "$config_file")
+            local mezmo_host=$(jq -r ".configurations.$default_config.mezmo.host // \"logs.mezmo.com\"" "$config_file")
+            local mezmo_tags=$(jq -r ".configurations.$default_config.mezmo.tags // \"restaurant-app,demo\"" "$config_file")
+            
+            # Extract OTEL configuration
+            local otel_enabled=$(jq -r ".configurations.$default_config.otel.enabled // false" "$config_file")
+            local otel_service=$(jq -r ".configurations.$default_config.otel.serviceName // \"restaurant-app\"" "$config_file")
+            local otel_tags=$(jq -r ".configurations.$default_config.otel.tags // \"restaurant-app,otel\"" "$config_file")
+            
+            # Configure agents if keys are provided
+            if [ "$mezmo_enabled" = "true" ] && [ -n "$mezmo_key" ] && [ "$mezmo_key" != "null" ] && [ "$mezmo_key" != "" ]; then
+                echo "🔧 Configuring Mezmo agent from file..."
+                
+                # Create LogDNA environment file
+                cat > /etc/logdna/logdna.env << EOF
+LOGDNA_INGESTION_KEY=$mezmo_key
+LOGDNA_HOST=$mezmo_host
+LOGDNA_TAGS=$mezmo_tags
+LOGDNA_LOGDIR=/tmp/codeuser
+LOGDNA_INCLUDE=*.log
+EOF
+                echo "✅ Mezmo agent pre-configured with key ${mezmo_key:0:8}..."
+            fi
+            
+            if [ "$otel_enabled" = "true" ]; then
+                echo "🔧 OTEL Collector configuration found in file (will be applied when enabled via API)"
+            fi
+            
+        else
+            echo "⚠️  jq not available for JSON parsing, skipping detailed config loading"
+            echo "💡 Agents can still be configured via the web interface"
+        fi
+    else
+        echo "ℹ️  No agents configuration file found (/app/agents-config.json)"
+        echo "💡 Agents can be configured via the web interface at /agents"
+    fi
+}
+
+# Load configuration
+load_agents_config
+
 # LogDNA agent management functions
 start_logdna_agent() {
     local config_file="/etc/logdna/config.yaml"

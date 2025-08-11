@@ -1767,6 +1767,123 @@ app.post('/api/simulate/stop', (req, res) => {
   }
 });
 
+// Agent Configuration Management Endpoints
+
+// Get all available configurations from file
+app.get('/api/agents/configurations', (req, res) => {
+  try {
+    const configPath = '/app/agents-config.json';
+    
+    if (fs.existsSync(configPath)) {
+      const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      res.json({
+        configurations: configData.configurations || {},
+        defaultConfig: configData.defaultConfig || null,
+        hasFileConfig: true
+      });
+    } else {
+      res.json({
+        configurations: {},
+        defaultConfig: null,
+        hasFileConfig: false
+      });
+    }
+  } catch (error) {
+    console.error('Error reading agents configuration:', error);
+    res.status(500).json({ 
+      error: 'Failed to read agent configurations',
+      hasFileConfig: false 
+    });
+  }
+});
+
+// Get the currently active configuration
+app.get('/api/agents/active-config', (req, res) => {
+  try {
+    // Read from localStorage equivalent (could be enhanced to use a database)
+    const mezmoConfig = {
+      enabled: false,
+      ingestionKey: '',
+      host: 'logs.mezmo.com',
+      tags: 'restaurant-app,demo'
+    };
+    
+    const otelConfig = {
+      enabled: false,
+      serviceName: 'restaurant-app',
+      tags: 'restaurant-app,otel',
+      pipelines: {
+        logs: { enabled: false, ingestionKey: '', pipelineId: '', host: 'logs.mezmo.com' },
+        metrics: { enabled: false, ingestionKey: '', pipelineId: '', host: 'logs.mezmo.com' },
+        traces: { enabled: false, ingestionKey: '', pipelineId: '', host: 'logs.mezmo.com' }
+      }
+    };
+    
+    res.json({
+      activeConfig: 'custom',
+      configuration: {
+        mezmo: mezmoConfig,
+        otel: otelConfig
+      }
+    });
+  } catch (error) {
+    console.error('Error getting active configuration:', error);
+    res.status(500).json({ error: 'Failed to get active configuration' });
+  }
+});
+
+// Apply a specific configuration from the file
+app.post('/api/agents/apply-config/:configName', (req, res) => {
+  try {
+    const { configName } = req.params;
+    const configPath = '/app/agents-config.json';
+    
+    if (!fs.existsSync(configPath)) {
+      return res.status(404).json({ error: 'No configuration file found' });
+    }
+    
+    const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    
+    if (!configData.configurations || !configData.configurations[configName]) {
+      return res.status(404).json({ error: `Configuration '${configName}' not found` });
+    }
+    
+    const config = configData.configurations[configName];
+    
+    // Here you would typically save the configuration to persistent storage
+    // For now, we'll just return success
+    
+    res.json({
+      message: `Configuration '${configName}' applied successfully`,
+      configuration: config
+    });
+  } catch (error) {
+    console.error('Error applying configuration:', error);
+    res.status(500).json({ error: 'Failed to apply configuration' });
+  }
+});
+
+// Save current configuration as a custom preset
+app.post('/api/agents/save-custom', (req, res) => {
+  try {
+    const { name, configuration } = req.body;
+    
+    if (!name || !configuration) {
+      return res.status(400).json({ error: 'Name and configuration are required' });
+    }
+    
+    // In a production environment, you'd save this to a database or file
+    // For now, we'll just return success
+    
+    res.json({
+      message: `Custom configuration '${name}' saved successfully`
+    });
+  } catch (error) {
+    console.error('Error saving custom configuration:', error);
+    res.status(500).json({ error: 'Failed to save custom configuration' });
+  }
+});
+
 // Structured error handling middleware
 app.use(errorLoggingMiddleware);
 

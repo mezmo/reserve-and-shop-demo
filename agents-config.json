@@ -1,0 +1,39 @@
+{
+  "defaultConfig": "development",
+  "configurations": {
+    "development": {
+      "displayName": "Development Environment",
+      "mezmo": {
+        "enabled": true,
+        "ingestionKey": "321e05ff8594babd2553ae4984a90da2",
+        "host": "logs.mezmo.com",
+        "tags": "restaurant-app,demo"
+      },
+      "otel": {
+        "enabled": true,
+        "serviceName": "restaurant-app",
+        "tags": "restaurant-app,otel",
+        "pipelines": {
+          "logs": {
+            "enabled": true,
+            "ingestionKey": "6MATByQG5Ff29Pch2YBxW0DKECVaRSnNMZq1Xzq04sw=",
+            "pipelineId": "12cfb094-6c7a-11f0-871b-a6a8e5244714",
+            "host": "logs.mezmo.com"
+          },
+          "metrics": {
+            "enabled": true,
+            "ingestionKey": "KXMw4DKaBqLQ2Kau8GwoMtJapdAvr2SPa6lYhZk974c=",
+            "pipelineId": "12cfb094-6c7a-11f0-871b-a6a8e5244714",
+            "host": "logs.mezmo.com"
+          },
+          "traces": {
+            "enabled": true,
+            "ingestionKey": "9Yrqi+8ZSds1buSWHIKian1M0CI6RxKfxNtfixtKrmM=",
+            "pipelineId": "12cfb094-6c7a-11f0-871b-a6a8e5244714",
+            "host": "logs.mezmo.com"
+          }
+        }
+      }
+    }
+  }
+}

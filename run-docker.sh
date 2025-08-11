@@ -4,10 +4,55 @@
 # 🐳 Restaurant App Docker Setup Guide
 # ========================================
 
+# Parse command line arguments
+AGENTS_CONFIG=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --agents-config)
+      AGENTS_CONFIG="$2"
+      shift 2
+      ;;
+    --help)
+      echo "Usage: $0 [--agents-config <path-to-config-file>]"
+      echo ""
+      echo "Options:"
+      echo "  --agents-config    Path to agents configuration file (JSON)"
+      echo "  --help            Show this help message"
+      echo ""
+      echo "Example:"
+      echo "  $0 --agents-config ./my-agents-config.json"
+      exit 0
+      ;;
+    *)
+      echo "Unknown parameter: $1"
+      echo "Use --help for usage information"
+      exit 1
+      ;;
+  esac
+done
+
 echo "🚀 Building Restaurant App Docker container..."
 
-# Build the Docker image (dependencies installed during build for faster startup)
-docker build -t restaurant-app .
+# Check if agents config file exists
+if [[ -n "$AGENTS_CONFIG" ]]; then
+  if [[ -f "$AGENTS_CONFIG" ]]; then
+    echo "📄 Using agents config file: $AGENTS_CONFIG"
+    # Copy config file to build context temporarily
+    cp "$AGENTS_CONFIG" ./agents-config.json.tmp
+    # Build with config file
+    docker build --build-arg AGENTS_CONFIG_FILE=agents-config.json.tmp -t restaurant-app .
+    # Clean up temporary file
+    rm -f ./agents-config.json.tmp
+  else
+    echo "❌ Agents config file not found: $AGENTS_CONFIG"
+    exit 1
+  fi
+else
+  echo "ℹ️  No agents config file specified (agents can be configured via web UI)"
+  # Build without config file
+  docker build -t restaurant-app .
+fi
 
 if [ $? -eq 0 ]; then
     echo ""
@@ -33,6 +78,9 @@ fi
 # ========================================
 # 📋 Alternative Docker Commands
 # ========================================
+#
+# Build with agents configuration:
+# ./run-docker.sh --agents-config ./my-agents-config.json
 #
 # Run in detached mode (background):
 # docker run -d -p 8080:8080 -p 3001:3001 -p 4317:4317 -p 4318:4318 --name restaurant-app restaurant-app

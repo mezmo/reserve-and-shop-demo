@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { Menu, X, Utensils, ShoppingBag, Calendar, Settings, LogIn, LogOut, ShoppingCart } from 'lucide-react';
+import { Menu, X, Utensils, ShoppingBag, Calendar, Settings, Cloud, LogIn, LogOut, ShoppingCart } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
 import { useCart } from '@/hooks/useCart';
@@ -29,6 +29,7 @@ const Navigation = () => {
     { path: '/menu', label: 'Menu', icon: ShoppingBag },
     { path: '/reservations', label: 'Reservations', icon: Calendar },
     { path: '/config', label: 'Config', icon: Settings },
+    { path: '/agents', label: 'Agents', icon: Cloud },
   ];
 
   const isActive = (path: string) => location.pathname === path;

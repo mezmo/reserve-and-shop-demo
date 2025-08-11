@@ -1,0 +1,107 @@
+{
+  "defaultConfig": "development",
+  "configurations": {
+    "development": {
+      "displayName": "Development Environment",
+      "mezmo": {
+        "enabled": false,
+        "ingestionKey": "",
+        "host": "logs.mezmo.com",
+        "tags": "restaurant-app,dev,demo"
+      },
+      "otel": {
+        "enabled": false,
+        "serviceName": "restaurant-app-dev",
+        "tags": "restaurant-app,otel,dev",
+        "pipelines": {
+          "logs": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "logs.mezmo.com"
+          },
+          "metrics": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "logs.mezmo.com"
+          },
+          "traces": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "logs.mezmo.com"
+          }
+        }
+      }
+    },
+    "staging": {
+      "displayName": "Staging Environment",
+      "mezmo": {
+        "enabled": false,
+        "ingestionKey": "",
+        "host": "logs.mezmo.com",
+        "tags": "restaurant-app,staging"
+      },
+      "otel": {
+        "enabled": false,
+        "serviceName": "restaurant-app-staging",
+        "tags": "restaurant-app,otel,staging",
+        "pipelines": {
+          "logs": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "logs.mezmo.com"
+          },
+          "metrics": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "logs.mezmo.com"
+          },
+          "traces": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "logs.mezmo.com"
+          }
+        }
+      }
+    },
+    "production": {
+      "displayName": "Production Environment",
+      "mezmo": {
+        "enabled": false,
+        "ingestionKey": "",
+        "host": "logs.mezmo.com",
+        "tags": "restaurant-app,production"
+      },
+      "otel": {
+        "enabled": false,
+        "serviceName": "restaurant-app-prod",
+        "tags": "restaurant-app,otel,production",
+        "pipelines": {
+          "logs": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "logs.mezmo.com"
+          },
+          "metrics": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "logs.mezmo.com"
+          },
+          "traces": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "logs.mezmo.com"
+          }
+        }
+      }
+    }
+  }
+}
