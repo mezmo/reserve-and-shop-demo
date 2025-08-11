@@ -1,0 +1,156 @@
+[
+  {
+    "timestamp": "2024-03-15T14:42:33.123Z",
+    "level": "error",
+    "message": "Database connection pool exhausted",
+    "service": "restaurant-app",
+    "loggerType": "error",
+    "errorCode": "DB_POOL_EXHAUSTED",
+    "severity": "critical",
+    "context": "order_processing",
+    "correlationId": "corr_db_error_123",
+    "stack": [
+      "Error: Connection pool exhausted",
+      "    at ConnectionPool.getConnection (/app/server/database/pool.js:45:23)",
+      "    at OrderService.createOrder (/app/server/services/orderService.js:78:15)",
+      "    at OrderController.createOrder (/app/server/controllers/orderController.js:32:18)",
+      "    at Layer.handle [as handle_request] (/app/node_modules/express/lib/router/layer.js:95:5)",
+      "    at next (/app/node_modules/express/lib/router/route.js:144:13)",
+      "    at Route.dispatch (/app/node_modules/express/lib/router/route.js:114:3)"
+    ],
+    "metadata": {
+      "poolSize": 10,
+      "activeConnections": 10,
+      "queuedRequests": 25,
+      "requestId": "req_db_pool_456",
+      "userId": "virtual_user_005",
+      "sessionId": "session_error_789"
+    }
+  },
+  {
+    "timestamp": "2024-03-15T14:43:15.456Z",
+    "level": "error",
+    "message": "Payment processing failed",
+    "service": "restaurant-app",
+    "loggerType": "error",
+    "errorCode": "PAYMENT_GATEWAY_ERROR",
+    "severity": "high",
+    "context": "payment_processing",
+    "correlationId": "corr_payment_error_456",
+    "stack": [
+      "PaymentError: Card declined by issuer",
+      "    at StripeGateway.processPayment (/app/server/services/paymentGateway.js:123:19)",
+      "    at PaymentService.processPayment (/app/server/services/paymentService.js:56:22)",
+      "    at OrderController.processPayment (/app/server/controllers/orderController.js:89:14)"
+    ],
+    "metadata": {
+      "orderId": "order_payment_failed_789",
+      "amount": 45.67,
+      "currency": "USD",
+      "paymentMethod": "credit_card",
+      "last4": "1234",
+      "gatewayResponse": {
+        "code": "card_declined",
+        "message": "Your card was declined.",
+        "decline_code": "insufficient_funds"
+      },
+      "requestId": "req_payment_error_789",
+      "userId": "virtual_user_006",
+      "sessionId": "session_payment_123"
+    }
+  },
+  {
+    "timestamp": "2024-03-15T14:44:28.789Z",
+    "level": "warn",
+    "message": "Inventory level critically low",
+    "service": "restaurant-app",
+    "loggerType": "error",
+    "errorCode": "LOW_INVENTORY_WARNING",
+    "severity": "medium",
+    "context": "inventory_management",
+    "correlationId": "corr_inventory_warn_789",
+    "metadata": {
+      "productId": "prod_chicken_caesar",
+      "productName": "Chicken Caesar Salad",
+      "currentStock": 2,
+      "minimumThreshold": 5,
+      "recommendedOrder": 20,
+      "supplier": "Fresh Foods Co",
+      "lastRestock": "2024-03-14T08:30:00.000Z",
+      "category": "salads",
+      "location": "main_kitchen"
+    }
+  },
+  {
+    "timestamp": "2024-03-15T14:45:12.345Z",
+    "level": "error",
+    "message": "Authentication service timeout",
+    "service": "restaurant-app",
+    "loggerType": "error",
+    "errorCode": "AUTH_SERVICE_TIMEOUT",
+    "severity": "high",
+    "context": "user_authentication",
+    "correlationId": "corr_auth_timeout_345",
+    "stack": [
+      "TimeoutError: Authentication service did not respond within 5000ms",
+      "    at AuthClient.authenticate (/app/server/services/authClient.js:67:21)",
+      "    at AuthMiddleware.validateToken (/app/server/middleware/auth.js:34:18)",
+      "    at Layer.handle [as handle_request] (/app/node_modules/express/lib/router/layer.js:95:5)"
+    ],
+    "metadata": {
+      "authServiceUrl": "https://auth.example.com/validate",
+      "timeout": 5000,
+      "attemptNumber": 3,
+      "userId": "virtual_user_007",
+      "sessionId": "session_auth_timeout_456",
+      "requestId": "req_auth_timeout_123",
+      "endpoint": "/api/user/profile"
+    }
+  },
+  {
+    "timestamp": "2024-03-15T14:46:45.678Z",
+    "level": "error",
+    "message": "File upload validation failed",
+    "service": "restaurant-app",
+    "loggerType": "error",
+    "errorCode": "FILE_VALIDATION_ERROR",
+    "severity": "medium",
+    "context": "file_upload",
+    "correlationId": "corr_upload_error_678",
+    "metadata": {
+      "fileName": "menu_image.exe",
+      "fileSize": 2547832,
+      "mimeType": "application/x-msdownload",
+      "allowedTypes": ["image/jpeg", "image/png", "image/webp"],
+      "maxSize": 5242880,
+      "validationErrors": [
+        "Invalid file type: application/x-msdownload",
+        "Suspicious file extension: .exe"
+      ],
+      "requestId": "req_upload_error_456",
+      "userId": "admin_user_001",
+      "sessionId": "session_admin_upload_789"
+    }
+  },
+  {
+    "timestamp": "2024-03-15T14:47:33.912Z",
+    "level": "error",
+    "message": "Rate limit exceeded",
+    "service": "restaurant-app",
+    "loggerType": "error",
+    "errorCode": "RATE_LIMIT_EXCEEDED",
+    "severity": "medium",
+    "context": "api_rate_limiting",
+    "correlationId": "corr_rate_limit_912",
+    "metadata": {
+      "clientIp": "192.168.1.100",
+      "endpoint": "/api/orders",
+      "currentRequests": 125,
+      "rateLimit": 100,
+      "timeWindow": "60s",
+      "resetTime": "2024-03-15T14:48:33.912Z",
+      "requestId": "req_rate_limit_789",
+      "userAgent": "RestClient/1.0"
+    }
+  }
+]

@@ -1,0 +1,59 @@
+# Malformed and Edge Case Log Examples
+
+## Incomplete JSON (Missing closing brace)
+{"timestamp": "2024-03-15T14:30:00.000Z", "level": "info", "message": "Incomplete JSON entry", "service": "restaurant-app"
+
+## Invalid JSON (Unescaped quotes)
+{"timestamp": "2024-03-15T14:30:01.000Z", "level": "error", "message": "Error with "quotes" in message", "service": "restaurant-app"}
+
+## Empty lines and whitespace
+
+
+	
+## Very long message (truncated after 200 chars for display)
+{"timestamp": "2024-03-15T14:30:02.000Z", "level": "info", "message": "This is an extremely long message that goes on and on and contains a lot of information that might cause parsing issues or buffer overflows in some systems and we need to test how our parsers handle this kind of extremely verbose logging which can happen in real applications when developers log entire object dumps or stack traces or other large amounts of data that should probably be truncated or handled more carefully", "service": "restaurant-app"}
+
+## Invalid timestamp formats
+{"timestamp": "not-a-date", "level": "error", "message": "Invalid timestamp", "service": "restaurant-app"}
+{"timestamp": "2024-13-45T25:61:99.999Z", "level": "error", "message": "Impossible date", "service": "restaurant-app"}
+
+## CLF with missing fields
+127.0.0.1 - - [15/Mar/2024:14:30:03 +0000] "GET /api/incomplete
+
+## CLF with invalid status codes
+127.0.0.1 - - [15/Mar/2024:14:30:04 +0000] "GET /api/test HTTP/1.1" abc 1234
+
+## CSV with unescaped quotes and commas
+"2024-03-15T14:30:05.000Z","error","Message with, comma and "quote" problems","metadata"
+
+## XML with invalid structure
+<log><timestamp>2024-03-15T14:30:06.000Z</timestamp><level>error</level><message>Unclosed tag<meta>invalid</log>
+
+## Binary data mixed with text
+2024-03-15 14:30:07 [ERROR] Binary data: ��������������������
+
+## Extremely nested JSON
+{"timestamp": "2024-03-15T14:30:08.000Z", "level": "debug", "nested": {"level1": {"level2": {"level3": {"level4": {"level5": {"deepData": "test"}}}}}}}
+
+## Non-UTF8 characters
+{"timestamp": "2024-03-15T14:30:09.000Z", "level": "info", "message": "Special chars: ���������", "service": "restaurant-app"}
+
+## String format with no recognizable timestamp
+[ERROR] Something went wrong but no timestamp present
+
+## JSON with circular reference indicators (from JSON.stringify with circular refs)
+{"timestamp": "2024-03-15T14:30:10.000Z", "level": "error", "message": "Circular ref", "circular": "[Circular]"}
+
+## Mixed format on same line
+2024-03-15 14:30:11 [INFO] {"message": "Mixed string and JSON", "level": "info"}
+
+## Zero-width and control characters (represented as escape sequences)
+{"timestamp": "2024-03-15T14:30:12.000Z", "level": "debug", "message": "Hidden\u200B\u200Ccharacters\u0000"}
+
+## Stack trace with unicode file paths
+Error: Test error
+    at /app/server/路径/with/unicode/文件.js:123:45
+    at Module.load (/app/node_modules/测试/module.js:67:23)
+
+## CLF with IPv6 addresses
+2001:0db8:85a3:0000:0000:8a2e:0370:7334 - - [15/Mar/2024:14:30:13 +0000] "GET /api/ipv6-test HTTP/1.1" 200 456

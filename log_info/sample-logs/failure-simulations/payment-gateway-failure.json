@@ -1,0 +1,98 @@
+[
+  {
+    "timestamp": "2024-03-15T14:50:00.123Z",
+    "level": "info",
+    "message": "Payment gateway failure simulation started",
+    "service": "restaurant-app",
+    "simulationType": "payment_gateway_down",
+    "simulationId": "sim_payment_001",
+    "duration": "5 minutes",
+    "affectedServices": ["payment_processing", "order_completion"],
+    "expectedImpact": "All payment processing will fail"
+  },
+  {
+    "timestamp": "2024-03-15T14:50:15.456Z",
+    "level": "error",
+    "message": "Payment processing failed due to gateway unavailable",
+    "service": "restaurant-app",
+    "errorCode": "PAYMENT_GATEWAY_UNAVAILABLE",
+    "severity": "critical",
+    "orderId": "order_payment_fail_001",
+    "amount": 29.99,
+    "currency": "USD",
+    "paymentMethod": "credit_card",
+    "simulationActive": true,
+    "error": {
+      "name": "PaymentGatewayError",
+      "message": "Payment gateway is currently unavailable",
+      "code": "SERVICE_UNAVAILABLE",
+      "httpStatus": 503
+    },
+    "retryAttempts": 3,
+    "nextRetry": "2024-03-15T14:51:15.456Z"
+  },
+  {
+    "timestamp": "2024-03-15T14:50:30.789Z",
+    "level": "error",
+    "message": "Order stuck in pending payment state",
+    "service": "restaurant-app",
+    "errorCode": "ORDER_PAYMENT_TIMEOUT",
+    "severity": "high",
+    "orderId": "order_payment_fail_002",
+    "customerEmail": "customer@example.com",
+    "orderStatus": "pending_payment",
+    "timeInPendingState": "00:15:30",
+    "simulationActive": true,
+    "businessImpact": {
+      "revenueAtRisk": 45.67,
+      "customerExperienceImpact": "high",
+      "inventoryReserved": true
+    }
+  },
+  {
+    "timestamp": "2024-03-15T14:51:45.234Z",
+    "level": "warn", 
+    "message": "Payment processing queue backing up",
+    "service": "restaurant-app",
+    "queueSize": 23,
+    "processingRate": "0 per minute",
+    "normalProcessingRate": "15 per minute",
+    "simulationActive": true,
+    "queueDetails": {
+      "pendingPayments": 23,
+      "averageWaitTime": "00:05:30",
+      "oldestPendingPayment": "00:07:45",
+      "maxQueueSize": 100
+    }
+  },
+  {
+    "timestamp": "2024-03-15T14:52:30.567Z",
+    "level": "error",
+    "message": "Customer notification failed due to payment status uncertainty",
+    "service": "restaurant-app",
+    "errorCode": "NOTIFICATION_PAYMENT_STATUS_UNKNOWN",
+    "severity": "medium",
+    "orderId": "order_payment_fail_003",
+    "customerEmail": "another@example.com",
+    "notificationType": "payment_confirmation",
+    "simulationActive": true,
+    "cascadingEffect": "Customer experience degradation"
+  },
+  {
+    "timestamp": "2024-03-15T14:55:00.890Z",
+    "level": "info",
+    "message": "Payment gateway failure simulation ended",
+    "service": "restaurant-app",
+    "simulationType": "payment_gateway_down", 
+    "simulationId": "sim_payment_001",
+    "actualDuration": "5 minutes",
+    "ordersAffected": 15,
+    "paymentsFailedCount": 15,
+    "revenueImpacted": 487.32,
+    "recoveryActions": [
+      "Processing queued payments",
+      "Sending delayed notifications",
+      "Updating order statuses"
+    ]
+  }
+]

@@ -1,0 +1,286 @@
+# Vector Configuration for Restaurant App Log Processing
+# Optimized for Mezmo backend processing with issue detection and data volume reduction
+
+[api]
+enabled = true
+address = "127.0.0.1:8686"
+
+# Global data directory
+data_dir = "/tmp/vector"
+
+# ============================================================================
+# SOURCES - Collect logs from various application components
+# ============================================================================
+
+[sources.restaurant_app_logs]
+type = "file"
+include = ["/tmp/codeuser/*.log"]
+exclude = ["**/.*"]
+start_at_beginning = true
+ignore_older_secs = 86400  # 24 hours
+fingerprint.strategy = "device_and_inode"
+read_from = "beginning"
+
+[sources.restaurant_app_logs.multiline]
+mode = "halt_before"
+condition_pattern = '^{"timestamp"'
+timeout_ms = 1000
+
+# Internal Vector metrics
+[sources.vector_metrics]
+type = "internal_metrics"
+scrape_interval_secs = 30
+
+# ============================================================================
+# TRANSFORMS - Process, filter, and enrich logs
+# ============================================================================
+
+# Stage 1: Parse and normalize different log formats
+[transforms.parse_and_normalize]
+type = "remap"
+inputs = ["restaurant_app_logs"]
+file = "/app/vector/vrl/parse_normalize.vrl"
+drop_on_error = false
+reroute_dropped = true
+
+# Stage 2: Issue detection and alerting
+[transforms.issue_detection]
+type = "remap"
+inputs = ["parse_and_normalize"]
+file = "/app/vector/vrl/issue_detection.vrl"
+drop_on_error = false
+
+# Stage 3: Data volume reduction - intelligent sampling
+[transforms.intelligent_sampling]
+type = "remap"
+inputs = ["issue_detection"]
+file = "/app/vector/vrl/intelligent_sampling.vrl"
+drop_on_error = false
+
+# Stage 4: PII redaction and data cleanup
+[transforms.data_cleanup]
+type = "remap"
+inputs = ["intelligent_sampling"]
+file = "/app/vector/vrl/data_cleanup.vrl"
+drop_on_error = false
+
+# Stage 5: Enrich with environment context
+[transforms.enrich_context]
+type = "remap"
+inputs = ["data_cleanup"]
+file = "/app/vector/vrl/enrich_context.vrl"
+
+# Log routing based on content and severity
+[transforms.route_logs]
+type = "route"
+inputs = ["enrich_context"]
+
+[transforms.route_logs.route]
+# Critical errors and alerts
+critical = '.log_level == "error" && (.alert_generated == true || .severity == "critical")'
+# Business events (high value)
+business = '.event_type != null && (.event_type == "order_created" || .event_type == "payment_processed" || .event_type == "reservation_created")'
+# Performance metrics
+performance = '.metric_type != null || .response_time != null || .duration != null'
+# Access logs
+access = '.method != null && .status_code != null'
+# Debug and development logs
+debug = '.log_level == "debug" || .environment == "development"'
+# Default route for everything else
+default = 'true'
+
+# Generate metrics from critical patterns
+[transforms.logs_to_metrics]
+type = "log_to_metric"
+inputs = ["issue_detection"]
+
+[[transforms.logs_to_metrics.metrics]]
+type = "counter"
+field = "error_count"
+name = "restaurant_app_errors_total"
+namespace = "restaurant_app"
+tags.error_type = "{{ error_code }}"
+tags.service = "{{ service }}"
+tags.environment = "{{ environment }}"
+
+[[transforms.logs_to_metrics.metrics]]
+type = "gauge" 
+field = "pool_utilization"
+name = "restaurant_app_db_pool_utilization"
+namespace = "restaurant_app"
+tags.service = "{{ service }}"
+
+[[transforms.logs_to_metrics.metrics]]
+type = "histogram"
+field = "response_time"
+name = "restaurant_app_response_time_ms"
+namespace = "restaurant_app"
+tags.method = "{{ method }}"
+tags.endpoint = "{{ url }}"
+
+# Deduplicate similar errors within time windows
+[transforms.deduplicate_errors]
+type = "reduce"
+inputs = ["route_logs.critical"]
+group_by = ["error_code", "service", "context"]
+merge_strategies.count = "sum"
+merge_strategies.first_occurrence = "retain"
+merge_strategies.last_occurrence = "discard"
+
+[transforms.deduplicate_errors.expire]
+after_ms = 300000  # 5 minutes
+
+# Sample debug logs aggressively  
+[transforms.sample_debug]
+type = "sample"
+inputs = ["route_logs.debug"]
+rate = 100  # Keep 1 out of every 100 debug logs
+key_field = "session_id"
+
+# ============================================================================
+# SINKS - Send processed logs to Mezmo and other destinations  
+# ============================================================================
+
+# Mezmo Critical Events Pipeline (High Priority)
+[sinks.mezmo_critical]
+type = "http"
+inputs = ["deduplicate_errors", "route_logs.business"]
+uri = "https://pipeline.mezmo.com/v1/YOUR_CRITICAL_PIPELINE_ID"
+method = "post"
+compression = "gzip"
+
+[sinks.mezmo_critical.headers]
+authorization = "YOUR_CRITICAL_INGESTION_KEY"
+content-type = "application/json"
+
+[sinks.mezmo_critical.encoding]
+codec = "json"
+
+[sinks.mezmo_critical.batch]
+max_events = 100
+timeout_secs = 10
+
+[sinks.mezmo_critical.request]
+timeout_secs = 30
+retry_attempts = 3
+retry_max_duration_secs = 300
+
+# Mezmo Performance Pipeline
+[sinks.mezmo_performance]
+type = "http"
+inputs = ["route_logs.performance"]
+uri = "https://pipeline.mezmo.com/v1/YOUR_PERFORMANCE_PIPELINE_ID"
+method = "post" 
+compression = "gzip"
+
+[sinks.mezmo_performance.headers]
+authorization = "YOUR_PERFORMANCE_INGESTION_KEY"
+content-type = "application/json"
+
+[sinks.mezmo_performance.encoding]
+codec = "json"
+
+[sinks.mezmo_performance.batch]
+max_events = 500
+timeout_secs = 30
+
+# Mezmo Access Logs Pipeline (High Volume, Lower Priority)
+[sinks.mezmo_access]
+type = "http"
+inputs = ["route_logs.access"]
+uri = "https://pipeline.mezmo.com/v1/YOUR_ACCESS_PIPELINE_ID"
+method = "post"
+compression = "gzip"
+
+[sinks.mezmo_access.headers]
+authorization = "YOUR_ACCESS_INGESTION_KEY"
+content-type = "application/json"
+
+[sinks.mezmo_access.encoding]
+codec = "json"
+
+[sinks.mezmo_access.batch]
+max_events = 1000
+timeout_secs = 60
+
+# Mezmo Debug Pipeline (Sampled)
+[sinks.mezmo_debug]
+type = "http"
+inputs = ["sample_debug"]
+uri = "https://pipeline.mezmo.com/v1/YOUR_DEBUG_PIPELINE_ID"
+method = "post"
+compression = "gzip"
+
+[sinks.mezmo_debug.headers]
+authorization = "YOUR_DEBUG_INGESTION_KEY"
+content-type = "application/json"
+
+[sinks.mezmo_debug.encoding]
+codec = "json"
+
+[sinks.mezmo_debug.batch]
+max_events = 200
+timeout_secs = 120
+
+# Default pipeline for uncategorized logs
+[sinks.mezmo_default]
+type = "http"
+inputs = ["route_logs.default"]
+uri = "https://pipeline.mezmo.com/v1/YOUR_DEFAULT_PIPELINE_ID"  
+method = "post"
+compression = "gzip"
+
+[sinks.mezmo_default.headers]
+authorization = "YOUR_DEFAULT_INGESTION_KEY"
+content-type = "application/json"
+
+[sinks.mezmo_default.encoding]
+codec = "json"
+
+[sinks.mezmo_default.batch]
+max_events = 300
+timeout_secs = 45
+
+# Local backup for critical logs
+[sinks.local_critical_backup]
+type = "file"
+inputs = ["deduplicate_errors"]
+path = "/tmp/vector/critical-events-%Y-%m-%d.log"
+compression = "gzip"
+
+[sinks.local_critical_backup.encoding]
+codec = "json"
+
+# Metrics output for monitoring Vector performance
+[sinks.vector_metrics]
+type = "prometheus_remote_write"
+inputs = ["vector_metrics", "logs_to_metrics"]
+endpoint = "http://localhost:9090/api/v1/write"
+default_namespace = "vector"
+
+[sinks.vector_metrics.auth]
+strategy = "basic"
+user = "vector"
+password = "vector_metrics_password"
+
+# Error handling - capture dropped events
+[sinks.error_analysis]
+type = "file"
+inputs = ["parse_and_normalize.dropped"]
+path = "/tmp/vector/parsing-errors-%Y-%m-%d.log"
+
+[sinks.error_analysis.encoding]
+codec = "json"
+
+# Console output for development/debugging
+[sinks.console_debug]
+type = "console"
+inputs = ["issue_detection"]
+target = "stdout"
+
+[sinks.console_debug.encoding]
+codec = "json"
+
+# Only enable in development
+[sinks.console_debug.healthcheck]
+enabled = false

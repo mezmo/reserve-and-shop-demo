@@ -1,0 +1,364 @@
+# Data Cleanup and PII Redaction
+# Standardizes data, removes sensitive information, and optimizes for downstream processing
+
+# Skip processing if marked for dropping
+if .dropped_by_sampling == true {
+    # Keep minimal data for dropped events
+    temp_trace_id = .trace_id
+    temp_timestamp = .@timestamp
+    temp_drop_reason = .drop_reason
+    
+    # Clear all fields
+    . = {}
+    
+    # Keep only essential tracking info
+    .@timestamp = temp_timestamp
+    .trace_id = temp_trace_id
+    .dropped_by_sampling = true
+    .drop_reason = temp_drop_reason
+    
+    return
+}
+
+# PII Redaction and Sensitive Data Handling
+# ==========================================
+
+# Redact email addresses
+if exists(.email) {
+    .email = redact_email(.email)
+}
+if exists(.customer_email) {
+    .customer_email = redact_email(.customer_email)
+}
+if exists(.customerEmail) {
+    .customer_email = redact_email(.customerEmail)
+    del(.customerEmail)
+}
+
+# Redact credit card information
+if exists(.last4) && length(string!(.last4)) == 4 {
+    .payment_method_last4 = .last4
+    del(.last4)
+}
+if exists(.cardType) {
+    .payment_method_type = .cardType
+    del(.cardType)
+}
+
+# Redact full credit card numbers if accidentally logged
+if exists(.message) {
+    .message = replace(string!(.message), r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b', "****-****-****-XXXX")
+}
+
+# Redact phone numbers
+if exists(.phone) {
+    .phone = redact_phone(.phone)
+}
+
+# Redact addresses (keep city/state for analytics)
+if exists(.address) {
+    address_parts = parse_regex(string!(.address), r'^(.+),\s*(.+),\s*([A-Z]{2})\s+(\d{5}).*')
+    if address_parts != null {
+        .address_city = address_parts.captures[1]
+        .address_state = address_parts.captures[2]  
+        .address_zip = address_parts.captures[3]
+        del(.address)
+    } else {
+        del(.address)  # Remove if can't parse safely
+    }
+}
+if exists(.deliveryAddress) {
+    del(.deliveryAddress)  # Always remove delivery addresses
+}
+
+# Remove IP addresses in production
+if (.environment == "production" || .environment == "prod") && exists(.ip) {
+    # Keep subnet for analytics but mask host
+    ip_parts = split(string!(.ip), ".")
+    if length(ip_parts) == 4 {
+        .ip_subnet = ip_parts[0] + "." + ip_parts[1] + ".xxx.xxx"
+    }
+    del(.ip)
+}
+if exists(.client_ip) && (.environment == "production" || .environment == "prod") {
+    del(.client_ip)
+}
+
+# Redact user agent details (keep browser/OS info)
+if exists(.user_agent) || exists(.userAgent) {
+    ua = .user_agent ?? .userAgent
+    
+    # Extract browser and OS info safely
+    if contains(string!(ua), "Chrome") {
+        .browser_type = "Chrome"
+    } else if contains(string!(ua), "Firefox") {
+        .browser_type = "Firefox" 
+    } else if contains(string!(ua), "Safari") {
+        .browser_type = "Safari"
+    } else {
+        .browser_type = "Other"
+    }
+    
+    if contains(string!(ua), "Windows") {
+        .os_type = "Windows"
+    } else if contains(string!(ua), "Mac OS") {
+        .os_type = "macOS"
+    } else if contains(string!(ua), "Linux") {
+        .os_type = "Linux"
+    } else if contains(string!(ua), "iOS") {
+        .os_type = "iOS"
+    } else if contains(string!(ua), "Android") {
+        .os_type = "Android"
+    } else {
+        .os_type = "Other"
+    }
+    
+    del(.user_agent)
+    del(.userAgent)
+}
+
+# Data Standardization and Field Cleanup
+# =======================================
+
+# Standardize boolean fields
+if exists(.simulationActive) {
+    .simulation_active = bool!(.simulationActive)
+    del(.simulationActive)
+}
+
+# Standardize numeric fields  
+if exists(.amount) && .amount != null {
+    .amount = round(to_float(.amount), 2)
+}
+if exists(.response_time) && .response_time != null {
+    .response_time = to_int(.response_time)
+}
+if exists(.duration) && .duration != null {
+    .duration = to_int(.duration)
+}
+
+# Standardize status codes
+if exists(.status) && !exists(.status_code) {
+    .status_code = to_int(.status)
+    del(.status)
+}
+if exists(.statusCode) {
+    .status_code = to_int(.statusCode)
+    del(.statusCode)
+}
+
+# Clean up redundant timestamp fields
+if exists(.timestamp) && exists(.@timestamp) {
+    del(.timestamp)
+}
+
+# Standardize log level field
+if exists(.level) && !exists(.log_level) {
+    .log_level = downcase(string!(.level))
+    del(.level)
+}
+
+# Field Optimization for Storage
+# ===============================
+
+# Remove empty or null fields to save space
+fields_to_check = keys(.)
+for_each(fields_to_check) -> |key| {
+    value = get(., [key])
+    if value == null || value == "" || value == {} || value == [] {
+        del(., [key])
+    }
+}
+
+# Compress large text fields
+if exists(.message) && length(string!(.message)) > 1000 {
+    .message = slice(string!(.message), 0, 997) + "..."
+    .message_truncated = true
+}
+
+if exists(.stack) && is_array(.stack) && length(.stack) > 10 {
+    .stack = slice(.stack, 0, 10)
+    .stack_truncated = true
+}
+
+# Flatten nested objects for better searchability
+if exists(.eventData) && is_object(.eventData) {
+    event_data = .eventData
+    
+    # Flatten common business fields
+    if exists(event_data.items) && is_array(event_data.items) {
+        .order_item_count = length(event_data.items)
+        .order_items = map_values(event_data.items) -> |item| {
+            {
+                "id": item.id,
+                "name": item.name,
+                "quantity": item.quantity,
+                "price": item.price
+            }
+        }
+    }
+    
+    if exists(event_data.orderType) {
+        .order_type = event_data.orderType
+    }
+    
+    if exists(event_data.paymentMethod) {
+        .payment_method = event_data.paymentMethod
+    }
+    
+    if exists(event_data.transactionId) {
+        .transaction_id = event_data.transactionId
+    }
+    
+    # Keep original as compressed JSON for full context
+    .event_data_json = encode_json(event_data)
+    del(.eventData)
+}
+
+# Text Processing and Normalization
+# ==================================
+
+# Normalize URLs by removing query parameters for grouping
+if exists(.url) {
+    url_parts = split(string!(.url), "?")
+    .url_path = url_parts[0]
+    if length(url_parts) > 1 {
+        .has_query_params = true
+        # Keep only important query params
+        query_string = url_parts[1]
+        if contains(query_string, "session") || contains(query_string, "trace") {
+            .has_tracking_params = true
+        }
+    }
+}
+
+# Normalize error messages for better grouping
+if exists(.message) && .log_level == "error" {
+    error_msg = string!(.message)
+    
+    # Remove variable parts from error messages
+    error_msg = replace(error_msg, r'\b\d+\b', "N")  # Replace numbers
+    error_msg = replace(error_msg, r'\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b', "UUID")  # Replace UUIDs
+    error_msg = replace(error_msg, r'\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\b', "TIMESTAMP")  # Replace timestamps
+    
+    .error_message_normalized = error_msg
+}
+
+# Add computed fields for analytics
+# ==================================
+
+# Calculate business metrics
+if .event_type == "order_created" && exists(.amount) {
+    .revenue_impact = .amount
+    .business_metric_type = "revenue"
+}
+
+if .event_type == "user_registered" {
+    .growth_metric_type = "user_acquisition" 
+    .business_metric_type = "growth"
+}
+
+# Add performance classification
+if exists(.response_time) {
+    response_time_val = .response_time
+    if response_time_val <= 100 {
+        .performance_tier = "fast"
+    } else if response_time_val <= 500 {
+        .performance_tier = "normal"
+    } else if response_time_val <= 2000 {
+        .performance_tier = "slow"
+    } else {
+        .performance_tier = "very_slow"
+    }
+}
+
+# Add error classification
+if .log_level == "error" {
+    if exists(.status_code) && .status_code >= 400 && .status_code < 500 {
+        .error_type = "client_error"
+    } else if exists(.status_code) && .status_code >= 500 {
+        .error_type = "server_error"
+    } else if exists(.error_code) {
+        .error_type = "application_error"
+    } else {
+        .error_type = "unknown_error"
+    }
+}
+
+# Data Quality Validation
+# ========================
+
+.data_quality = {}
+
+# Check for required fields
+required_fields = ["@timestamp", "log_level", "service"]
+missing_fields = []
+
+for_each(required_fields) -> |field| {
+    if !exists(., [field]) {
+        missing_fields = push(missing_fields, field)
+    }
+}
+
+if length(missing_fields) > 0 {
+    .data_quality.missing_required_fields = missing_fields
+    .data_quality.quality_score = 0.5
+} else {
+    .data_quality.quality_score = 1.0
+}
+
+# Check for data consistency
+if exists(.user_id) && exists(.session_id) {
+    .data_quality.has_user_correlation = true
+}
+
+if exists(.trace_id) && exists(.request_id) {
+    .data_quality.has_request_correlation = true  
+}
+
+# Final field organization
+# ========================
+
+# Ensure consistent field ordering and types
+if exists(.@timestamp) && is_string(.@timestamp) {
+    .@timestamp = parse_timestamp!(string!(.@timestamp), "%Y-%m-%dT%H:%M:%S%.fZ")
+}
+
+# Set final data processing flags
+.data_cleaned = true
+.cleanup_version = "1.0"
+.processed_at = now()
+
+# Remove temporary processing fields
+del(.should_keep)
+del(.sample_reason) 
+del(.original_volume)
+
+# Helper functions (would be defined in Vector configuration)
+function redact_email(email_val) {
+    email_str = string!(email_val)
+    email_parts = split(email_str, "@")
+    if length(email_parts) == 2 {
+        local_part = email_parts[0]
+        domain_part = email_parts[1]
+        
+        # Keep first 2 chars of local part
+        if length(local_part) > 2 {
+            redacted_local = slice(local_part, 0, 2) + "****"
+        } else {
+            redacted_local = "****"
+        }
+        
+        return redacted_local + "@" + domain_part
+    }
+    return "****@****.com"
+}
+
+function redact_phone(phone_val) {
+    phone_str = string!(phone_val)
+    # Keep area code, mask the rest
+    if length(phone_str) >= 10 {
+        return slice(phone_str, 0, 3) + "-***-****"
+    }
+    return "***-***-****"
+}

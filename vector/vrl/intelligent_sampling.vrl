@@ -1,0 +1,320 @@
+# Intelligent Sampling for Data Volume Reduction
+# Implements smart sampling strategies based on log importance, frequency, and content
+
+# Initialize sampling decision
+.should_keep = true
+.sample_reason = "default"
+.original_volume = true
+.sampling_metadata = {}
+
+# Critical logs - always keep (no sampling)
+if .alert_generated == true ||
+   .severity == "critical" ||
+   .log_level == "error" ||
+   .log_level == "fatal" ||
+   .issue_category == "business" ||
+   .issue_category == "security" ||
+   (.status_code ?? .status ?? 0) >= 400 {
+    
+    .should_keep = true
+    .sample_reason = "critical_event"
+    .sampling_metadata.priority = "high"
+    .sampling_metadata.sample_rate = 1.0
+}
+
+# Business events - keep most but sample based on type
+else if .event_type != null {
+    # High-value business events - keep all
+    if .event_type == "order_created" ||
+       .event_type == "payment_processed" ||
+       .event_type == "reservation_created" ||
+       .event_type == "user_registered" {
+        
+        .should_keep = true
+        .sample_reason = "high_value_business_event"
+        .sampling_metadata.sample_rate = 1.0
+    }
+    
+    # Medium-value events - sample 80%
+    else if .event_type == "inventory_updated" ||
+            .event_type == "user_login" ||
+            .event_type == "product_viewed" {
+        
+        sample_hash = hash(string!(.session_id ?? .user_id ?? .trace_id ?? uuid_v4()))
+        .should_keep = mod(sample_hash, 10) < 8  # Keep 80%
+        .sample_reason = "medium_value_business_event"
+        .sampling_metadata.sample_rate = 0.8
+    }
+    
+    # Low-value events - sample 20%
+    else {
+        sample_hash = hash(string!(.session_id ?? .user_id ?? .trace_id ?? uuid_v4()))
+        .should_keep = mod(sample_hash, 10) < 2  # Keep 20%
+        .sample_reason = "low_value_business_event"
+        .sampling_metadata.sample_rate = 0.2
+    }
+}
+
+# Performance logs - intelligent sampling based on response time
+else if .response_time != null || .duration != null {
+    response_time_val = .response_time ?? .duration ?? 0
+    
+    # Slow requests - keep all (performance issues)
+    if response_time_val > 2000 {
+        .should_keep = true
+        .sample_reason = "slow_performance"
+        .sampling_metadata.sample_rate = 1.0
+    }
+    
+    # Medium response times - sample 50%
+    else if response_time_val > 500 {
+        sample_hash = hash(string!(.request_id ?? .trace_id ?? uuid_v4()))
+        .should_keep = mod(sample_hash, 10) < 5  # Keep 50%
+        .sample_reason = "medium_performance"
+        .sampling_metadata.sample_rate = 0.5
+    }
+    
+    # Fast requests - sample 10%
+    else {
+        sample_hash = hash(string!(.request_id ?? .trace_id ?? uuid_v4()))
+        .should_keep = mod(sample_hash, 10) < 1  # Keep 10%
+        .sample_reason = "fast_performance"
+        .sampling_metadata.sample_rate = 0.1
+    }
+}
+
+# Access logs - sample based on status codes and patterns
+else if .method != null && .url != null {
+    # Error responses - keep all
+    if (.status_code ?? .status ?? 200) >= 400 {
+        .should_keep = true
+        .sample_reason = "http_error"
+        .sampling_metadata.sample_rate = 1.0
+    }
+    
+    # Health checks and monitoring - aggressive sampling (1%)
+    else if contains(string!(.url ?? ""), "/health") ||
+            contains(string!(.url ?? ""), "/metrics") ||
+            contains(string!(.url ?? ""), "/ping") ||
+            contains(string!(.url ?? ""), "/status") {
+        
+        sample_hash = hash(string!(.request_id ?? .trace_id ?? uuid_v4()))
+        .should_keep = mod(sample_hash, 100) < 1  # Keep 1%
+        .sample_reason = "health_check"
+        .sampling_metadata.sample_rate = 0.01
+    }
+    
+    # Static asset requests - sample 5%
+    else if contains(string!(.url ?? ""), ".css") ||
+            contains(string!(.url ?? ""), ".js") ||
+            contains(string!(.url ?? ""), ".png") ||
+            contains(string!(.url ?? ""), ".jpg") ||
+            contains(string!(.url ?? ""), ".gif") ||
+            contains(string!(.url ?? ""), "/assets/") {
+        
+        sample_hash = hash(string!(.request_id ?? .trace_id ?? uuid_v4()))
+        .should_keep = mod(sample_hash, 100) < 5  # Keep 5%
+        .sample_reason = "static_asset"
+        .sampling_metadata.sample_rate = 0.05
+    }
+    
+    # API endpoints - sample 30%
+    else if starts_with(string!(.url ?? ""), "/api/") {
+        sample_hash = hash(string!(.request_id ?? .trace_id ?? uuid_v4()))
+        .should_keep = mod(sample_hash, 10) < 3  # Keep 30%
+        .sample_reason = "api_request"
+        .sampling_metadata.sample_rate = 0.3
+    }
+    
+    # Other access logs - sample 20%
+    else {
+        sample_hash = hash(string!(.request_id ?? .trace_id ?? uuid_v4()))
+        .should_keep = mod(sample_hash, 10) < 2  # Keep 20%
+        .sample_reason = "general_access"
+        .sampling_metadata.sample_rate = 0.2
+    }
+}
+
+# Debug logs - environment-based sampling
+else if .log_level == "debug" {
+    # Development environment - keep 50%
+    if .environment == "development" || .environment == "dev" {
+        sample_hash = hash(string!(.session_id ?? .trace_id ?? uuid_v4()))
+        .should_keep = mod(sample_hash, 10) < 5  # Keep 50%
+        .sample_reason = "debug_development"
+        .sampling_metadata.sample_rate = 0.5
+    }
+    
+    # Staging environment - keep 20% 
+    else if .environment == "staging" || .environment == "stage" {
+        sample_hash = hash(string!(.session_id ?? .trace_id ?? uuid_v4()))
+        .should_keep = mod(sample_hash, 10) < 2  # Keep 20%
+        .sample_reason = "debug_staging" 
+        .sampling_metadata.sample_rate = 0.2
+    }
+    
+    # Production environment - keep 5%
+    else {
+        sample_hash = hash(string!(.session_id ?? .trace_id ?? uuid_v4()))
+        .should_keep = mod(sample_hash, 100) < 5  # Keep 5%
+        .sample_reason = "debug_production"
+        .sampling_metadata.sample_rate = 0.05
+    }
+}
+
+# Info logs - general sampling based on content
+else if .log_level == "info" {
+    # Application startup/shutdown - keep all
+    if contains(string!(.message ?? ""), "starting") ||
+       contains(string!(.message ?? ""), "started") ||
+       contains(string!(.message ?? ""), "stopping") ||
+       contains(string!(.message ?? ""), "shutdown") ||
+       contains(string!(.message ?? ""), "listening") {
+        
+        .should_keep = true
+        .sample_reason = "application_lifecycle"
+        .sampling_metadata.sample_rate = 1.0
+    }
+    
+    # Database connection events - keep 80%
+    else if contains(string!(.message ?? ""), "database") ||
+            contains(string!(.message ?? ""), "connection") {
+        
+        sample_hash = hash(string!(.session_id ?? .trace_id ?? uuid_v4()))
+        .should_keep = mod(sample_hash, 10) < 8  # Keep 80%
+        .sample_reason = "database_info"
+        .sampling_metadata.sample_rate = 0.8
+    }
+    
+    # General info logs - sample 25%
+    else {
+        sample_hash = hash(string!(.session_id ?? .trace_id ?? uuid_v4()))
+        .should_keep = mod(sample_hash, 10) < 2.5  # Keep 25%
+        .sample_reason = "general_info"
+        .sampling_metadata.sample_rate = 0.25
+    }
+}
+
+# Trace logs - aggressive sampling (2%)
+else if .log_level == "trace" {
+    sample_hash = hash(string!(.session_id ?? .trace_id ?? uuid_v4()))
+    .should_keep = mod(sample_hash, 100) < 2  # Keep 2%
+    .sample_reason = "trace_level"
+    .sampling_metadata.sample_rate = 0.02
+}
+
+# Warn logs - keep most (90%)
+else if .log_level == "warn" || .log_level == "warning" {
+    sample_hash = hash(string!(.session_id ?? .trace_id ?? uuid_v4()))
+    .should_keep = mod(sample_hash, 10) < 9  # Keep 90%
+    .sample_reason = "warning_level"
+    .sampling_metadata.sample_rate = 0.9
+}
+
+# Session-based sampling for user journeys
+if exists(.session_id) && .should_keep == false {
+    # Keep complete user journeys for a sample of sessions
+    session_hash = hash(string!(.session_id))
+    
+    # Keep 10% of complete user sessions
+    if mod(session_hash, 10) == 0 {
+        .should_keep = true
+        .sample_reason = "complete_user_journey"
+        .sampling_metadata.sample_rate = 0.1
+        .sampling_metadata.session_sampled = true
+    }
+}
+
+# Time-based sampling adjustments
+current_hour = format_timestamp!(now(), "%H")
+current_hour_int = parse_int!(current_hour)
+
+# Peak hours (9 AM - 5 PM) - reduce sampling to manage volume
+if current_hour_int >= 9 && current_hour_int <= 17 {
+    if .sample_reason == "general_info" || 
+       .sample_reason == "general_access" ||
+       .sample_reason == "debug_production" {
+        
+        # Further reduce sampling during peak hours
+        peak_hash = hash(string!(.trace_id ?? uuid_v4()))
+        if mod(peak_hash, 2) != 0 {  # Keep only 50% of already sampled logs
+            .should_keep = false
+            .sample_reason = .sample_reason + "_peak_hours"
+            .sampling_metadata.peak_hour_reduction = true
+        }
+    }
+}
+
+# Weekend sampling adjustments (less traffic expected)
+current_day = format_timestamp!(now(), "%u")  # 1=Monday, 7=Sunday
+if current_day == "6" || current_day == "7" {  # Saturday or Sunday
+    if .sample_reason == "debug_production" || 
+       .sample_reason == "trace_level" {
+        
+        # Increase sampling on weekends for better debugging
+        weekend_hash = hash(string!(.trace_id ?? uuid_v4()))
+        if mod(weekend_hash, 2) == 0 {  # Double the sampling rate
+            .should_keep = true
+            .sample_reason = .sample_reason + "_weekend_boost"
+            .sampling_metadata.weekend_boost = true
+        }
+    }
+}
+
+# Volume-based adaptive sampling
+# Estimate current log volume based on timestamp density
+if exists(.@timestamp) {
+    current_minute = format_timestamp!(.@timestamp, "%Y-%m-%d %H:%M")
+    minute_hash = hash(current_minute)
+    
+    # Simulate high volume detection (would normally come from metrics)
+    # In a real implementation, this would check recent throughput metrics
+    simulated_high_volume = mod(minute_hash, 10) < 2  # 20% of minutes are "high volume"
+    
+    if simulated_high_volume {
+        # During high volume, be more aggressive with sampling
+        if .sampling_metadata.sample_rate < 1.0 {
+            volume_hash = hash(string!(.trace_id ?? uuid_v4()))
+            if mod(volume_hash, 2) != 0 {  # Keep only 50% of sampled logs
+                .should_keep = false
+                .sample_reason = .sample_reason + "_high_volume"
+                .sampling_metadata.high_volume_reduction = true
+            }
+        }
+    }
+}
+
+# Correlation-based sampling - keep correlated events together
+if exists(.correlation_id) || exists(.trace_id) {
+    correlation_key = .correlation_id ?? .trace_id
+    correlation_hash = hash(string!(correlation_key))
+    
+    # If we're keeping this correlation group, keep related events
+    if mod(correlation_hash, 10) < 3 {  # 30% of correlation groups
+        .should_keep = true
+        .sample_reason = "correlated_events"
+        .sampling_metadata.correlation_sampled = true
+        .sampling_metadata.correlation_key = correlation_key
+    }
+}
+
+# Add final sampling metadata
+.sampling_metadata.decision_timestamp = now()
+.sampling_metadata.sampling_version = "1.0"
+.sampling_metadata.estimated_volume_reduction = 1.0 - (.sampling_metadata.sample_rate ?? 0.5)
+
+# Mark for dropping if not keeping
+if !.should_keep {
+    .dropped_by_sampling = true
+    .drop_reason = .sample_reason
+}
+
+# For kept events, add sampling context
+if .should_keep {
+    .sampled = .sampling_metadata.sample_rate < 1.0
+    .represents_volume = if .sampling_metadata.sample_rate > 0 {
+        to_int(1.0 / .sampling_metadata.sample_rate)
+    } else {
+        1
+    }
+}

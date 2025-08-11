@@ -1,0 +1,161 @@
+[
+  {
+    "timestamp": "2024-03-15T14:30:15.234Z",
+    "eventType": "order_created",
+    "action": "create",
+    "level": "info",
+    "service": "restaurant-app",
+    "userId": "virtual_user_001",
+    "sessionId": "session_789xyz012",
+    "orderId": "order_98765432",
+    "productId": null,
+    "amount": 21.49,
+    "currency": "USD",
+    "correlationId": "corr_abc123",
+    "traceId": "trace_def456ghi789",
+    "eventData": {
+      "items": [
+        {"id": 1, "name": "Margherita Pizza", "quantity": 1, "price": 12.99},
+        {"id": 5, "name": "Caesar Salad", "quantity": 1, "price": 8.50}
+      ],
+      "customerDetails": {
+        "email": "demo@example.com",
+        "phone": "+1-555-0123",
+        "deliveryAddress": "123 Demo Street, Demo City, DC 12345"
+      },
+      "orderType": "delivery",
+      "estimatedDeliveryTime": "45-60 minutes"
+    },
+    "duration": 289,
+    "count": 1,
+    "message": "New delivery order created successfully"
+  },
+  {
+    "timestamp": "2024-03-15T14:31:42.567Z",
+    "eventType": "payment_processed",
+    "action": "process",
+    "level": "info",
+    "service": "restaurant-app",
+    "userId": "virtual_user_001",
+    "sessionId": "session_789xyz012",
+    "orderId": "order_98765432",
+    "amount": 21.49,
+    "currency": "USD",
+    "correlationId": "corr_abc123",
+    "traceId": "trace_payment_xyz789",
+    "eventData": {
+      "paymentMethod": "credit_card",
+      "last4": "4242",
+      "cardType": "visa",
+      "transactionId": "txn_987654321",
+      "processingTime": 1234,
+      "gateway": "stripe",
+      "authorizationCode": "AUTH_12345"
+    },
+    "duration": 1234,
+    "count": 1,
+    "message": "Payment processed successfully via Stripe"
+  },
+  {
+    "timestamp": "2024-03-15T14:33:18.890Z",
+    "eventType": "reservation_created",
+    "action": "create",
+    "level": "info",
+    "service": "restaurant-app",
+    "userId": "virtual_user_002",
+    "sessionId": "session_customer_456",
+    "reservationId": "res_11223344",
+    "amount": null,
+    "currency": null,
+    "correlationId": "corr_def456",
+    "traceId": "trace_reservation_abc123",
+    "eventData": {
+      "partySize": 4,
+      "reservationDate": "2024-03-16",
+      "reservationTime": "19:30",
+      "specialRequests": "Vegetarian options preferred",
+      "customerDetails": {
+        "name": "Jane Smith",
+        "email": "jane.smith@email.com",
+        "phone": "+1-555-0456"
+      },
+      "tablePreference": "window_seat"
+    },
+    "duration": 156,
+    "count": 1,
+    "message": "Table reservation created for tomorrow evening"
+  },
+  {
+    "timestamp": "2024-03-15T14:35:02.123Z",
+    "eventType": "inventory_updated",
+    "action": "update",
+    "level": "info",
+    "service": "restaurant-app",
+    "userId": "staff_user_001",
+    "sessionId": "session_staff_789",
+    "productId": "prod_pizza_margherita",
+    "correlationId": "corr_inventory_789",
+    "traceId": "trace_inventory_def456",
+    "eventData": {
+      "previousStock": 25,
+      "newStock": 24,
+      "changeType": "order_fulfillment",
+      "orderId": "order_98765432",
+      "location": "main_kitchen",
+      "updatedBy": "system_auto"
+    },
+    "duration": 45,
+    "count": 1,
+    "message": "Inventory decreased due to order fulfillment"
+  },
+  {
+    "timestamp": "2024-03-15T14:36:45.456Z",
+    "eventType": "user_registered",
+    "action": "register",
+    "level": "info",
+    "service": "restaurant-app",
+    "userId": "virtual_user_003",
+    "sessionId": "session_new_user_123",
+    "correlationId": "corr_registration_456",
+    "traceId": "trace_user_reg_789",
+    "eventData": {
+      "registrationMethod": "email",
+      "userType": "customer",
+      "preferences": {
+        "newsletter": true,
+        "smsNotifications": false,
+        "dietaryRestrictions": ["vegetarian"]
+      },
+      "referralSource": "google_search",
+      "accountTier": "basic"
+    },
+    "duration": 267,
+    "count": 1,
+    "message": "New customer account created successfully"
+  },
+  {
+    "timestamp": "2024-03-15T14:38:12.789Z",
+    "eventType": "order_cancelled",
+    "action": "cancel",
+    "level": "warn",
+    "service": "restaurant-app",
+    "userId": "virtual_user_004",
+    "sessionId": "session_cancelled_456",
+    "orderId": "order_11223344",
+    "amount": 34.75,
+    "currency": "USD",
+    "correlationId": "corr_cancel_789",
+    "traceId": "trace_cancel_abc456",
+    "eventData": {
+      "cancellationReason": "customer_request",
+      "refundAmount": 34.75,
+      "refundMethod": "original_payment_method",
+      "orderStatus": "preparing",
+      "timeToCancel": "00:15:32",
+      "refundProcessingTime": 156
+    },
+    "duration": 156,
+    "count": 1,
+    "message": "Order cancelled by customer during preparation"
+  }
+]

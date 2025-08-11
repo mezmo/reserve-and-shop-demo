@@ -1,0 +1,807 @@
+# OpenTelemetry Collector Configuration Examples
+# Complete YAML configurations for different deployment scenarios
+
+# ===== BASIC CONFIGURATION =====
+
+# Basic single-pipeline configuration for logs only
+basic_logs_only: |
+  receivers:
+    filelog:
+      include:
+        - /tmp/codeuser/*.log
+      start_at: beginning
+
+  processors:
+    batch:
+      timeout: 1s
+      send_batch_size: 100
+
+  exporters:
+    logging:
+      loglevel: info
+    
+    file:
+      path: /tmp/codeuser/otel-output.json
+
+  service:
+    pipelines:
+      logs:
+        receivers: [filelog]
+        processors: [batch]
+        exporters: [logging, file]
+
+---
+
+# ===== MULTI-PIPELINE CONFIGURATIONS =====
+
+# Complete multi-pipeline setup with logs, metrics, and traces
+multi_pipeline_complete: |
+  receivers:
+    # File-based log ingestion
+    filelog:
+      include:
+        - /tmp/codeuser/access.log
+        - /tmp/codeuser/events.log
+        - /tmp/codeuser/performance.log
+        - /tmp/codeuser/restaurant-performance.log
+        - /tmp/codeuser/errors.log
+        - /tmp/codeuser/metrics.log
+        - /tmp/codeuser/app.log
+      start_at: beginning
+      include_file_name: false
+      include_file_path: true
+      operators:
+        - type: add
+          field: attributes.log_type
+          value: structured
+        - type: add
+          field: attributes.service
+          value: restaurant-app
+        - type: add
+          field: attributes.environment
+          value: demo
+
+    # Host system metrics
+    hostmetrics:
+      collection_interval: 30s
+      scrapers:
+        cpu:
+          metrics:
+            system.cpu.utilization:
+              enabled: true
+            system.cpu.time:
+              enabled: true
+        memory:
+          metrics:
+            system.memory.usage:
+              enabled: true
+            system.memory.utilization:
+              enabled: true
+        disk:
+          metrics:
+            system.disk.io:
+              enabled: true
+            system.disk.operations:
+              enabled: true
+        filesystem:
+          metrics:
+            system.filesystem.usage:
+              enabled: true
+            system.filesystem.utilization:
+              enabled: true
+        network:
+          metrics:
+            system.network.io:
+              enabled: true
+            system.network.connections:
+              enabled: true
+
+    # Application traces
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+          cors:
+            allowed_origins:
+              - http://localhost:8080
+              - http://localhost:3000
+              - http://localhost:3001
+            allowed_headers: ['*']
+            max_age: 7200
+
+  processors:
+    # Batch processing for efficiency
+    batch:
+      timeout: 1s
+      send_batch_size: 1024
+      send_batch_max_size: 2048
+
+    # Resource attribution
+    resource:
+      attributes:
+        - key: service.name
+          value: restaurant-app
+          action: upsert
+        - key: service.version
+          value: 1.0.0
+          action: upsert
+        - key: deployment.environment
+          value: demo
+          action: upsert
+        - key: service.tags
+          value: restaurant-app,otel,nodejs
+          action: upsert
+        - key: service.instance.id
+          value: restaurant-app-001
+          action: upsert
+
+    # Memory limiter to prevent OOM
+    memory_limiter:
+      limit_mib: 256
+      spike_limit_mib: 64
+      check_interval: 1s
+
+  exporters:
+    # Debug exporters
+    logging:
+      loglevel: info
+      
+    file/logs:
+      path: /tmp/codeuser/otel-logs-debug.json
+      format: json
+
+    file/metrics:
+      path: /tmp/codeuser/otel-metrics-debug.json
+      format: json
+
+    file/traces:
+      path: /tmp/codeuser/otel-traces-debug.json
+      format: json
+
+    # Mezmo Pipeline exporters (modern approach)
+    otlphttp/logs:
+      logs_endpoint: https://pipeline.mezmo.com/v1/YOUR_LOGS_PIPELINE_ID
+      headers:
+        authorization: YOUR_LOGS_INGESTION_KEY
+        content-type: application/x-protobuf
+      timeout: 30s
+      compression: gzip
+
+    otlphttp/metrics:
+      endpoint: https://pipeline.mezmo.com/v1/YOUR_METRICS_PIPELINE_ID
+      headers:
+        authorization: YOUR_METRICS_INGESTION_KEY
+        content-type: application/x-protobuf
+      timeout: 30s
+      compression: gzip
+
+    otlphttp/traces:
+      endpoint: https://pipeline.mezmo.com/v1/YOUR_TRACES_PIPELINE_ID
+      headers:
+        authorization: YOUR_TRACES_INGESTION_KEY
+        content-type: application/x-protobuf
+      timeout: 30s
+      compression: gzip
+
+    # Legacy LogDNA exporters (fallback)
+    mezmo/logs:
+      ingest_url: https://logs.mezmo.com/otel/ingest/rest
+      ingest_key: YOUR_LEGACY_INGESTION_KEY
+
+  service:
+    pipelines:
+      logs:
+        receivers: [filelog]
+        processors: [memory_limiter, resource, batch]
+        exporters: [file/logs, otlphttp/logs]
+
+      metrics:
+        receivers: [hostmetrics]
+        processors: [memory_limiter, resource, batch]
+        exporters: [file/metrics, otlphttp/metrics]
+
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, resource, batch]
+        exporters: [file/traces, otlphttp/traces]
+
+    extensions: [health_check, pprof]
+    telemetry:
+      logs:
+        level: info
+      metrics:
+        address: 0.0.0.0:8888
+        level: detailed
+
+  extensions:
+    health_check:
+      endpoint: 0.0.0.0:13133
+    pprof:
+      endpoint: 0.0.0.0:1777
+
+---
+
+# ===== PRODUCTION OPTIMIZED CONFIGURATION =====
+
+# High-performance production configuration
+production_optimized: |
+  receivers:
+    filelog:
+      include:
+        - /var/log/restaurant-app/*.log
+      start_at: end  # Only new logs in production
+      max_log_size: 1MiB
+      max_concurrent_files: 10
+      operators:
+        - type: add
+          field: attributes.environment
+          value: production
+
+    hostmetrics:
+      collection_interval: 60s  # Less frequent in production
+      scrapers:
+        cpu: {}
+        memory: {}
+        disk: {}
+        filesystem: {}
+
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+          max_recv_msg_size: 4194304  # 4MB
+        http:
+          endpoint: 0.0.0.0:4318
+          max_request_body_size: 4194304  # 4MB
+
+  processors:
+    # Larger batches for efficiency
+    batch:
+      timeout: 5s
+      send_batch_size: 2048
+      send_batch_max_size: 4096
+
+    # Resource attribution
+    resource:
+      attributes:
+        - key: service.name
+          value: restaurant-app
+          action: upsert
+        - key: deployment.environment
+          value: production
+          action: upsert
+
+    # Memory management for production
+    memory_limiter:
+      limit_mib: 1024
+      spike_limit_mib: 256
+
+    # Probabilistic sampling for traces (reduce volume)
+    probabilistic_sampler:
+      sampling_percentage: 10  # Sample 10% of traces
+
+  exporters:
+    # Production Mezmo exports
+    otlphttp/logs:
+      logs_endpoint: https://pipeline.mezmo.com/v1/PROD_LOGS_PIPELINE_ID
+      headers:
+        authorization: PROD_LOGS_INGESTION_KEY
+        content-type: application/x-protobuf
+      timeout: 30s
+      compression: gzip
+      retry_on_failure:
+        enabled: true
+        initial_interval: 1s
+        max_interval: 30s
+        max_elapsed_time: 300s
+
+    otlphttp/metrics:
+      endpoint: https://pipeline.mezmo.com/v1/PROD_METRICS_PIPELINE_ID
+      headers:
+        authorization: PROD_METRICS_INGESTION_KEY
+        content-type: application/x-protobuf
+      timeout: 30s
+      compression: gzip
+      retry_on_failure:
+        enabled: true
+        initial_interval: 1s
+        max_interval: 30s
+
+    otlphttp/traces:
+      endpoint: https://pipeline.mezmo.com/v1/PROD_TRACES_PIPELINE_ID
+      headers:
+        authorization: PROD_TRACES_INGESTION_KEY
+        content-type: application/x-protobuf
+      timeout: 30s
+      compression: gzip
+      retry_on_failure:
+        enabled: true
+        initial_interval: 1s
+        max_interval: 30s
+
+  service:
+    pipelines:
+      logs:
+        receivers: [filelog]
+        processors: [memory_limiter, resource, batch]
+        exporters: [otlphttp/logs]
+
+      metrics:
+        receivers: [hostmetrics]
+        processors: [memory_limiter, resource, batch]
+        exporters: [otlphttp/metrics]
+
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, probabilistic_sampler, resource, batch]
+        exporters: [otlphttp/traces]
+
+    extensions: [health_check]
+    telemetry:
+      logs:
+        level: warn  # Reduce collector's own logging
+      metrics:
+        address: 0.0.0.0:8888
+
+  extensions:
+    health_check:
+      endpoint: 0.0.0.0:13133
+      check_collector_pipeline:
+        enabled: true
+        interval: 30s
+        exporter_failure_threshold: 5
+
+---
+
+# ===== DEVELOPMENT CONFIGURATION =====
+
+# Development-friendly configuration with debug features
+development_debug: |
+  receivers:
+    filelog:
+      include:
+        - /tmp/codeuser/*.log
+      start_at: beginning
+      poll_interval: 200ms  # Frequent polling for development
+      operators:
+        - type: add
+          field: attributes.environment
+          value: development
+        - type: add
+          field: attributes.debug_mode
+          value: true
+
+    hostmetrics:
+      collection_interval: 10s  # More frequent for development
+      scrapers:
+        cpu: {}
+        memory: {}
+
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+          cors:
+            allowed_origins: ['*']  # Permissive CORS for development
+
+  processors:
+    # Small batches for immediate feedback
+    batch:
+      timeout: 500ms
+      send_batch_size: 100
+
+    resource:
+      attributes:
+        - key: service.name
+          value: restaurant-app-dev
+          action: upsert
+        - key: deployment.environment
+          value: development
+          action: upsert
+        - key: developer.name
+          value: ${DEV_NAME}
+          action: upsert
+
+  exporters:
+    # Console output for immediate feedback
+    logging:
+      loglevel: debug
+
+    # File outputs for inspection
+    file/logs:
+      path: /tmp/codeuser/dev-logs.json
+      format: json
+
+    file/metrics:
+      path: /tmp/codeuser/dev-metrics.json
+      format: json
+
+    file/traces:
+      path: /tmp/codeuser/dev-traces.json
+      format: json
+
+  service:
+    pipelines:
+      logs:
+        receivers: [filelog]
+        processors: [resource, batch]
+        exporters: [logging, file/logs]
+
+      metrics:
+        receivers: [hostmetrics]
+        processors: [resource, batch]
+        exporters: [logging, file/metrics]
+
+      traces:
+        receivers: [otlp]
+        processors: [resource, batch]
+        exporters: [logging, file/traces]
+
+    telemetry:
+      logs:
+        level: debug  # Verbose logging for development
+      metrics:
+        address: 0.0.0.0:8888
+
+---
+
+# ===== SPECIALIZED CONFIGURATIONS =====
+
+# High-volume logs configuration
+high_volume_logs: |
+  receivers:
+    filelog:
+      include:
+        - /var/log/nginx/access.log
+        - /var/log/nginx/error.log
+        - /tmp/codeuser/*.log
+      start_at: end
+      max_concurrent_files: 20
+      operators:
+        - type: regex_parser
+          regex: '^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(?P<level>\w+)\] (?P<message>.*)'
+          timestamp:
+            parse_from: attributes.timestamp
+            layout: '%Y-%m-%d %H:%M:%S'
+
+  processors:
+    # Large batches for high volume
+    batch:
+      timeout: 10s
+      send_batch_size: 5000
+      send_batch_max_size: 10000
+
+    # Sampling to reduce volume
+    probabilistic_sampler:
+      sampling_percentage: 1  # Sample 1% of high-volume logs
+
+    # Filter out noisy logs
+    filter:
+      logs:
+        exclude:
+          match_type: strict
+          bodies: ["health check", "ping", "heartbeat"]
+
+    resource:
+      attributes:
+        - key: log_type
+          value: high_volume
+          action: upsert
+
+  exporters:
+    otlphttp/logs:
+      logs_endpoint: https://pipeline.mezmo.com/v1/HIGH_VOLUME_PIPELINE_ID
+      headers:
+        authorization: HIGH_VOLUME_INGESTION_KEY
+      compression: gzip
+      timeout: 60s
+
+  service:
+    pipelines:
+      logs:
+        receivers: [filelog]
+        processors: [probabilistic_sampler, filter, resource, batch]
+        exporters: [otlphttp/logs]
+
+---
+
+# Security-focused configuration
+security_focused: |
+  receivers:
+    filelog:
+      include:
+        - /var/log/security/*.log
+        - /var/log/auth.log
+        - /tmp/codeuser/errors.log
+      operators:
+        - type: add
+          field: attributes.security_context
+          value: true
+        # Mask sensitive data
+        - type: regex_replace
+          field: body
+          pattern: '(password|token|key)=[^\\s]+'
+          replacement: '${1}=***REDACTED***'
+
+  processors:
+    batch:
+      timeout: 1s  # Quick processing for security events
+
+    # Attribute processor to add security metadata
+    attributes:
+      actions:
+        - key: security.classification
+          value: sensitive
+          action: upsert
+        - key: data.sanitized
+          value: true
+          action: upsert
+
+  exporters:
+    # Encrypted transport for security logs
+    otlphttp/security:
+      logs_endpoint: https://security-pipeline.mezmo.com/v1/SECURITY_PIPELINE_ID
+      headers:
+        authorization: SECURITY_INGESTION_KEY
+        x-security-classification: sensitive
+      compression: gzip
+      tls:
+        insecure: false
+        cert_file: /etc/ssl/certs/client.crt
+        key_file: /etc/ssl/private/client.key
+
+  service:
+    pipelines:
+      logs:
+        receivers: [filelog]
+        processors: [attributes, batch]
+        exporters: [otlphttp/security]
+
+---
+
+# Multi-tenant configuration
+multi_tenant: |
+  receivers:
+    filelog/tenant1:
+      include:
+        - /var/log/tenant1/*.log
+      operators:
+        - type: add
+          field: attributes.tenant_id
+          value: tenant1
+
+    filelog/tenant2:
+      include:
+        - /var/log/tenant2/*.log
+      operators:
+        - type: add
+          field: attributes.tenant_id
+          value: tenant2
+
+  processors:
+    batch:
+      timeout: 1s
+
+    # Route based on tenant
+    routing:
+      from_attribute: tenant_id
+      default_exporters: [otlphttp/default]
+      table:
+        - value: tenant1
+          exporters: [otlphttp/tenant1]
+        - value: tenant2
+          exporters: [otlphttp/tenant2]
+
+  exporters:
+    otlphttp/tenant1:
+      logs_endpoint: https://pipeline.mezmo.com/v1/TENANT1_PIPELINE_ID
+      headers:
+        authorization: TENANT1_INGESTION_KEY
+
+    otlphttp/tenant2:
+      logs_endpoint: https://pipeline.mezmo.com/v1/TENANT2_PIPELINE_ID
+      headers:
+        authorization: TENANT2_INGESTION_KEY
+
+    otlphttp/default:
+      logs_endpoint: https://pipeline.mezmo.com/v1/DEFAULT_PIPELINE_ID
+      headers:
+        authorization: DEFAULT_INGESTION_KEY
+
+  service:
+    pipelines:
+      logs:
+        receivers: [filelog/tenant1, filelog/tenant2]
+        processors: [routing, batch]
+        exporters: []  # Routing processor handles export
+
+---
+
+# ===== RESTAURANT-APP SPECIFIC CONFIGURATION =====
+
+# Tailored configuration for restaurant application
+restaurant_app_specific: |
+  receivers:
+    filelog:
+      include:
+        - /tmp/codeuser/access.log
+        - /tmp/codeuser/events.log
+        - /tmp/codeuser/performance.log
+        - /tmp/codeuser/restaurant-performance.log
+        - /tmp/codeuser/errors.log
+        - /tmp/codeuser/metrics.log
+        - /tmp/codeuser/app.log
+      start_at: beginning
+      operators:
+        # Parse JSON logs
+        - type: json_parser
+          parse_from: body
+          if: 'body matches "^\\s*\\{"'
+        
+        # Parse CLF access logs
+        - type: regex_parser
+          regex: '^(?P<ip>\\S+) \\S+ \\S+ \\[(?P<timestamp>[^\\]]+)\\] "(?P<method>\\S+) (?P<url>\\S+) \\S+" (?P<status>\\d+) (?P<size>\\S+)'
+          if: 'body matches "^\\S+ - - \\["'
+        
+        # Add business context
+        - type: add
+          field: attributes.business_type
+          value: restaurant
+        - type: add
+          field: attributes.app_features
+          value: ordering,reservations,payments
+
+    hostmetrics:
+      collection_interval: 30s
+      scrapers:
+        cpu: {}
+        memory: {}
+        disk: {}
+        filesystem:
+          include_fs_types:
+            match_type: strict
+            fs_types: [ext4, xfs]
+
+    # Restaurant-specific custom metrics
+    prometheus:
+      config:
+        scrape_configs:
+          - job_name: 'restaurant-app'
+            static_configs:
+              - targets: ['localhost:3001']
+            scrape_interval: 30s
+            metrics_path: /metrics
+
+    otlp:
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4318
+          cors:
+            allowed_origins:
+              - http://localhost:8080  # Frontend
+              - http://localhost:3001  # Backend
+
+  processors:
+    batch:
+      timeout: 2s
+      send_batch_size: 512
+
+    resource:
+      attributes:
+        - key: service.name
+          value: restaurant-app
+          action: upsert
+        - key: service.version
+          value: ${APP_VERSION}
+          action: upsert
+        - key: business.type
+          value: restaurant
+          action: upsert
+
+    # Transform business events
+    transform:
+      log_statements:
+        - context: log
+          statements:
+            # Categorize HTTP status codes
+            - set(attributes["http.status_category"], "success") where attributes["status"] >= 200 and attributes["status"] < 300
+            - set(attributes["http.status_category"], "client_error") where attributes["status"] >= 400 and attributes["status"] < 500
+            - set(attributes["http.status_category"], "server_error") where attributes["status"] >= 500
+            
+            # Categorize business events
+            - set(attributes["business.category"], "revenue") where attributes["eventType"] == "order_created" or attributes["eventType"] == "payment_processed"
+            - set(attributes["business.category"], "customer") where attributes["eventType"] == "reservation_created" or attributes["eventType"] == "user_registered"
+            - set(attributes["business.category"], "operational") where attributes["eventType"] == "product_updated" or attributes["eventType"] == "inventory_changed"
+
+  exporters:
+    # Restaurant business metrics to specialized pipeline
+    otlphttp/business:
+      logs_endpoint: https://pipeline.mezmo.com/v1/RESTAURANT_BUSINESS_PIPELINE_ID
+      headers:
+        authorization: RESTAURANT_BUSINESS_INGESTION_KEY
+        x-business-type: restaurant
+
+    # Technical logs to main pipeline
+    otlphttp/technical:
+      logs_endpoint: https://pipeline.mezmo.com/v1/RESTAURANT_TECH_PIPELINE_ID
+      headers:
+        authorization: RESTAURANT_TECH_INGESTION_KEY
+
+    # Performance metrics
+    otlphttp/performance:
+      endpoint: https://pipeline.mezmo.com/v1/RESTAURANT_PERF_PIPELINE_ID
+      headers:
+        authorization: RESTAURANT_PERF_INGESTION_KEY
+
+    # Debug output for development
+    file/debug:
+      path: /tmp/codeuser/otel-restaurant-debug.json
+      format: json
+
+  service:
+    pipelines:
+      # Business events pipeline
+      logs/business:
+        receivers: [filelog]
+        processors: [transform, resource, batch]
+        exporters: [otlphttp/business, file/debug]
+
+      # Technical logs pipeline
+      logs/technical:
+        receivers: [filelog]
+        processors: [resource, batch]
+        exporters: [otlphttp/technical]
+
+      # Performance metrics pipeline
+      metrics:
+        receivers: [hostmetrics, prometheus]
+        processors: [resource, batch]
+        exporters: [otlphttp/performance]
+
+      # Traces pipeline
+      traces:
+        receivers: [otlp]
+        processors: [resource, batch]
+        exporters: [otlphttp/technical]
+
+    extensions: [health_check, pprof]
+    telemetry:
+      logs:
+        level: info
+      metrics:
+        address: 0.0.0.0:8888
+
+  extensions:
+    health_check:
+      endpoint: 0.0.0.0:13133
+    pprof:
+      endpoint: 0.0.0.0:1777
+
+---
+
+# Usage Examples and Comments:
+
+# To use any of these configurations:
+# 1. Save the desired configuration to a file (e.g., config.yaml)
+# 2. Replace placeholder values (YOUR_PIPELINE_ID, YOUR_INGESTION_KEY, etc.)
+# 3. Start the collector: otelcol-contrib --config config.yaml
+
+# Configuration selection guide:
+# - basic_logs_only: Simple setup for testing
+# - multi_pipeline_complete: Full-featured setup for most use cases
+# - production_optimized: High-performance production deployment
+# - development_debug: Development environment with verbose logging
+# - high_volume_logs: For applications with very high log volume
+# - security_focused: For security-sensitive environments
+# - multi_tenant: For multi-tenant applications
+# - restaurant_app_specific: Tailored for the restaurant application
+
+# Environment variable substitution:
+# Use ${VAR_NAME} in configurations and set environment variables:
+# export APP_VERSION=1.2.3
+# export DEV_NAME=john_doe
+# otelcol-contrib --config config.yaml
