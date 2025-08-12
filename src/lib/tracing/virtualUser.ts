@@ -26,36 +26,63 @@ export class VirtualUser {
     this.journey = journey;
     this.trafficManager = trafficManager;
     
+    // Verify that OpenTelemetry tracer provider is registered
+    const tracerProvider = trace.getTracerProvider();
+    if (!tracerProvider || tracerProvider.constructor.name === 'NoopTracerProvider') {
+      console.warn(`⚠️ Virtual user ${userId}: OpenTelemetry tracer provider not initialized. Traces will be no-ops.`);
+    } else {
+      console.log(`🔍 Virtual user ${userId}: Using tracer provider: ${tracerProvider.constructor.name}`);
+    }
+    
     // Generate realistic customer profile and browser fingerprint
     this.customerProfile = generateCustomerProfile();
     this.browserFingerprint = generateBrowserFingerprint();
     
     // Create session with realistic browser context
     this.sessionTracker = SessionTracker.createStandaloneSession(userId, journey.name, this.browserFingerprint);
-    this.performanceLogger = PerformanceLogger.getInstance();
     
-    // Initialize metrics logger for trace-to-metrics correlation
-    try {
-      this.metricsLogger = MetricsLogger.createDefault(this.sessionTracker.getSessionId());
-      console.log(`📊 MetricsLogger initialized for user ${this.customerProfile.fullName}`);
-    } catch (error) {
-      console.warn(`⚠️ Failed to initialize MetricsLogger for user ${userId}:`, error);
-      // Create a minimal fallback metrics logger
-      this.metricsLogger = {
-        logCounter: (name: string, value: number, tags?: Record<string, string>) => {
-          console.log(`📊 Metric Counter: ${name} = ${value}`, tags);
-        },
-        logGauge: (name: string, value: number, unit?: string, tags?: Record<string, string>) => {
-          console.log(`📊 Metric Gauge: ${name} = ${value} ${unit || 'units'}`, tags);
-        },
-        logBusinessMetric: (name: string, value: number, currency?: string, tags?: Record<string, string>) => {
+    // Use simplified performance logger for virtual users to avoid sendBeacon errors
+    this.performanceLogger = {
+      logUserInteraction: (event: string, element: string, duration?: number) => {
+        console.log(`🖱️ Virtual User Interaction: ${event} on ${element} (${duration || 0}ms)`);
+      },
+      logRouteChange: (from: string, to: string, duration?: number) => {
+        console.log(`🧭 Virtual User Route: ${from} → ${to} (${duration || 0}ms)`);
+      },
+      logComponentMount: (component: string, duration?: number) => {
+        console.log(`⚡ Virtual User Component: ${component} mounted (${duration || 0}ms)`);
+      },
+      logDataFetch: (operation: string, duration?: number) => {
+        console.log(`📡 Virtual User Data: ${operation} (${duration || 0}ms)`);
+      },
+      logError: (error: Error, context?: string) => {
+        console.log(`❌ Virtual User Error: ${error.message} ${context ? `(${context})` : ''}`);
+      },
+      logCartAction: (action: string, product: any, quantityBefore: number, quantityAfter: number, cartTotal: number, duration?: number) => {
+        console.log(`🛒 Virtual User Cart: ${action} ${product.name} (${quantityBefore}→${quantityAfter}, total: $${cartTotal}, ${duration || 0}ms)`);
+      },
+      logCartSession: (itemCount: number, totalValue: number, sessionDuration: number) => {
+        console.log(`🛒 Virtual User Session: ${itemCount} items, $${totalValue}, ${sessionDuration}ms`);
+      }
+    } as any;
+    
+    // Initialize metrics logger for trace-to-metrics correlation  
+    // Use simplified fallback approach to avoid browser compatibility issues
+    console.log(`📊 Using fallback MetricsLogger for virtual user ${this.customerProfile.fullName}`);
+    this.metricsLogger = {
+      logCounter: (name: string, value: number, tags?: Record<string, string>) => {
+        console.log(`📊 Virtual User Metric Counter: ${name} = ${value}`, tags);
+      },
+      logGauge: (name: string, value: number, unit?: string, tags?: Record<string, string>) => {
+        console.log(`📊 Virtual User Metric Gauge: ${name} = ${value} ${unit || 'units'}`, tags);
+      },
+      logBusinessMetric: (name: string, value: number, currency?: string, tags?: Record<string, string>) => {
           console.log(`📊 Business Metric: ${name} = ${value} ${currency || 'units'}`, tags);
         },
         logPerformanceMetric: (name: string, duration: number, tags?: Record<string, string>) => {
           console.log(`📊 Performance Metric: ${name} = ${duration}ms`, tags);
         }
       } as any;
-    }
     
     // Initialize with sample products for cart operations
     this.initializeProducts();
@@ -94,6 +121,14 @@ export class VirtualUser {
   async executeJourney(): Promise<void> {
     try {
       console.log(`🎭 ${this.customerProfile.fullName} (${this.userId}) starting journey: ${this.journey.name} with ${this.journey.steps.length} steps`);
+      
+      // Verify OTEL is ready for trace generation
+      const tracerProvider = trace.getTracerProvider();
+      console.log(`🔍 Virtual User ${this.userId} trace provider status:`, {
+        providerType: tracerProvider.constructor.name,
+        isNoopProvider: tracerProvider.constructor.name === 'NoopTracerProvider'
+      });
+      
       this.updateActivity(`starting_${this.journey.name.toLowerCase().replace(/\s+/g, '_')}`);
       
       for (let i = 0; i < this.journey.steps.length && !this.aborted; i++) {
@@ -146,6 +181,15 @@ export class VirtualUser {
       },
       activeContext
     );
+    
+    // Verify trace generation
+    const spanContext = stepSpan.spanContext();
+    console.log(`🔍 Virtual User ${this.userId} generated trace:`, {
+      traceId: spanContext.traceId,
+      spanId: spanContext.spanId,
+      spanName: `step_${stepIndex}_${step.action}`,
+      isRecording: stepSpan.isRecording()
+    });
 
     try {
       switch (step.action) {

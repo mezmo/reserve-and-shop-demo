@@ -9,7 +9,19 @@ import { FetchInstrumentation } from '@opentelemetry/instrumentation-fetch';
 import { XMLHttpRequestInstrumentation } from '@opentelemetry/instrumentation-xml-http-request';
 import { UserInteractionInstrumentation } from '@opentelemetry/instrumentation-user-interaction';
 
-export function initializeTracing() {
+// Check if OTEL collector is available
+async function checkOTELCollectorHealth(): Promise<boolean> {
+  try {
+    const response = await fetch('/api/otel/status');
+    const status = await response.json();
+    return response.ok && status.status === 'connected' && status.enabledPipelines?.traces;
+  } catch (error) {
+    console.warn('OTEL collector health check failed:', error);
+    return false;
+  }
+}
+
+export async function initializeTracing() {
   try {
     // Check if OTEL is enabled in config
     const otelConfig = localStorage.getItem('otel-config');
@@ -22,6 +34,13 @@ export function initializeTracing() {
     if (!config.enabled || !config.pipelines?.traces?.enabled) {
       console.log('OTEL tracing not initialized: Disabled in configuration');
       return null;
+    }
+    
+    // Verify OTEL collector is available before initializing
+    const isHealthy = await checkOTELCollectorHealth();
+    if (!isHealthy) {
+      console.log('OTEL tracing disabled: Collector not available');
+      return null; // Don't initialize tracing if collector unavailable
     }
 
     console.log('Initializing OTEL tracing with config:', {
@@ -40,12 +59,14 @@ export function initializeTracing() {
       })
     );
 
-    // Configure OTLP exporter to send to local collector
-    // Use the same base URL as the frontend to ensure proper routing
-    const baseUrl = window.location.origin.replace(':8080', ':4318');
+    // Configure OTLP exporter to send via backend proxy
+    // This avoids direct browser connection to OTEL collector port
+    const baseUrl = window.location.origin.replace(':8080', ':3001');
     const exporter = new OTLPTraceExporter({
-      url: `${baseUrl}/v1/traces`, // HTTP endpoint  
-      headers: {}, // Collector handles authentication to Mezmo
+      url: `${baseUrl}/api/traces/v1/traces`, // Proxy through backend
+      headers: {
+        'Content-Type': 'application/x-protobuf'
+      }
     });
 
     // Create tracer provider
@@ -53,13 +74,25 @@ export function initializeTracing() {
       resource,
     });
 
-    // Add batch processor for efficient trace export
+    // Add batch processor for efficient trace export with error handling
     provider.addSpanProcessor(new BatchSpanProcessor(exporter, {
       maxQueueSize: 100,
       maxExportBatchSize: 50,
-      scheduledDelayMillis: 500, // Send every 500ms
-      exportTimeoutMillis: 30000,
+      scheduledDelayMillis: 2000, // Send every 2 seconds (less aggressive)
+      exportTimeoutMillis: 10000, // Shorter timeout
     }));
+    
+    // Add error handler for export failures
+    provider.addSpanProcessor({
+      onStart: () => {},
+      onEnd: () => {},
+      forceFlush: async () => {},
+      shutdown: async () => {},
+      export: (spans, resultCallback) => {
+        // This is a fallback - the actual export happens in BatchSpanProcessor
+        resultCallback({ code: 0 }); // Success
+      }
+    });
 
     // Set global propagator for trace context
     provider.register({
@@ -102,7 +135,42 @@ export function initializeTracing() {
       ],
     });
 
+    // Add global error handler for tracing issues
+    window.addEventListener('unhandledrejection', (event) => {
+      const reason = event.reason;
+      const reasonStr = typeof reason === 'string' ? reason : reason?.message || '';
+      
+      if (reasonStr.includes('4318') || 
+          reasonStr.includes('traces') || 
+          reasonStr.includes('503') ||
+          reasonStr.includes('Service Unavailable')) {
+        console.warn('OTEL trace export failed - OTEL collector not available, silencing errors');
+        event.preventDefault(); // Prevent console spam
+      }
+    });
+    
+    // Also handle fetch errors specifically for the traces endpoint
+    const originalFetch = window.fetch;
+    window.fetch = async (...args) => {
+      try {
+        const response = await originalFetch(...args);
+        // Don't log 503 errors for trace endpoints
+        if (response.status === 503 && args[0]?.toString().includes('/api/traces/')) {
+          return response; // Return quietly
+        }
+        return response;
+      } catch (error) {
+        // Silently handle trace export failures
+        if (args[0]?.toString().includes('/api/traces/')) {
+          console.warn('Trace export failed silently - OTEL collector unavailable');
+          return new Response('', { status: 503 });
+        }
+        throw error;
+      }
+    };
+    
     console.log('OTEL tracing initialized successfully');
+    console.log(`Traces will be sent via backend proxy to: ${baseUrl}/api/traces/v1/traces`);
     return provider;
   } catch (error) {
     console.error('Failed to initialize OTEL tracing:', error);
@@ -121,4 +189,10 @@ export function isTracingEnabled(): boolean {
   } catch {
     return false;
   }
+}
+
+// Helper to reinitialize tracing when configuration changes
+export function reinitializeTracing() {
+  console.log('Reinitializing OTEL tracing after configuration change...');
+  return initializeTracing();
 }

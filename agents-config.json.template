@@ -1,13 +1,13 @@
 {
-  "defaultConfig": "development",
+  "defaultConfig": "dev",
   "configurations": {
-    "development": {
+    "dev": {
       "displayName": "Development Environment",
       "mezmo": {
         "enabled": false,
         "ingestionKey": "",
-        "host": "logs.mezmo.com",
-        "tags": "restaurant-app,dev,demo"
+        "host": "logs.use.dev.logdna.net",
+        "tags": "restaurant-app,dev"
       },
       "otel": {
         "enabled": false,
@@ -18,53 +18,53 @@
             "enabled": false,
             "ingestionKey": "",
             "pipelineId": "",
-            "host": "logs.mezmo.com"
+            "host": "pipeline.use.dev.mezmo.com"
           },
           "metrics": {
             "enabled": false,
             "ingestionKey": "",
             "pipelineId": "",
-            "host": "logs.mezmo.com"
+            "host": "pipeline.use.dev.mezmo.com"
           },
           "traces": {
             "enabled": false,
             "ingestionKey": "",
             "pipelineId": "",
-            "host": "logs.mezmo.com"
+            "host": "pipeline.use.dev.mezmo.com"
           }
         }
       }
     },
-    "staging": {
-      "displayName": "Staging Environment",
+    "integration": {
+      "displayName": "Integration Environment",
       "mezmo": {
         "enabled": false,
         "ingestionKey": "",
-        "host": "logs.mezmo.com",
-        "tags": "restaurant-app,staging"
+        "host": "app.use.int.logdna.net",
+        "tags": "restaurant-app,integration"
       },
       "otel": {
         "enabled": false,
-        "serviceName": "restaurant-app-staging",
-        "tags": "restaurant-app,otel,staging",
+        "serviceName": "restaurant-app-int",
+        "tags": "restaurant-app,otel,integration",
         "pipelines": {
           "logs": {
             "enabled": false,
             "ingestionKey": "",
             "pipelineId": "",
-            "host": "logs.mezmo.com"
+            "host": "pipeline.use.int.mezmo.com"
           },
           "metrics": {
             "enabled": false,
             "ingestionKey": "",
             "pipelineId": "",
-            "host": "logs.mezmo.com"
+            "host": "pipeline.use.int.mezmo.com"
           },
           "traces": {
             "enabled": false,
             "ingestionKey": "",
             "pipelineId": "",
-            "host": "logs.mezmo.com"
+            "host": "pipeline.use.int.mezmo.com"
           }
         }
       }
@@ -86,19 +86,19 @@
             "enabled": false,
             "ingestionKey": "",
             "pipelineId": "",
-            "host": "logs.mezmo.com"
+            "host": "pipeline.mezmo.com"
           },
           "metrics": {
             "enabled": false,
             "ingestionKey": "",
             "pipelineId": "",
-            "host": "logs.mezmo.com"
+            "host": "pipeline.mezmo.com"
           },
           "traces": {
             "enabled": false,
             "ingestionKey": "",
             "pipelineId": "",
-            "host": "logs.mezmo.com"
+            "host": "pipeline.mezmo.com"
           }
         }
       }

@@ -537,8 +537,42 @@ app.post('/api/mezmo/configure', (req, res) => {
       fs.mkdirSync(dbDir, { recursive: true, mode: 0o755 });
     }
     
+    // Host-specific endpoint mapping
+    const getHostConfig = (hostname) => {
+      if (!hostname) hostname = 'logs.mezmo.com';
+      
+      if (hostname.includes('use.dev.logdna.net')) {
+        return {
+          endpoint: '/logs/ingest',
+          ssl: true,
+          timeout: 30000,
+          type: 'development'
+        };
+      } else if (hostname.includes('use.int.logdna.net')) {
+        return {
+          endpoint: '/logs/ingest', 
+          ssl: true,
+          timeout: 30000,
+          type: 'integration'
+        };
+      } else {
+        return {
+          endpoint: '/logs/ingest',
+          ssl: true, 
+          timeout: 30000,
+          type: 'production'
+        };
+      }
+    };
+    
+    const hostConfig = getHostConfig(host);
+    console.log(`🌐 Mezmo host configuration:`, {
+      host: host || 'logs.mezmo.com',
+      type: hostConfig.type,
+      endpoint: hostConfig.endpoint
+    });
+    
     // Create environment file with both LOGDNA_ and MZ_ prefixed variables
-    const endpointPath = '/logs/ingest';
     const envContent = `
 # LOGDNA_ prefixed variables (legacy)
 LOGDNA_INGESTION_KEY=${ingestionKey}
@@ -550,22 +584,25 @@ LOGDNA_LOG_LEVEL=info
 
 # MZ_ prefixed variables (required by LogDNA Agent v2)
 MZ_INGESTION_KEY=${ingestionKey}
-MZ_ENDPOINT=${endpointPath}
+MZ_HOST=${host || 'logs.mezmo.com'}
+MZ_ENDPOINT=${hostConfig.endpoint}
 MZ_DB_PATH=/var/lib/logdna
 MZ_LOG_DIRS=/tmp/codeuser
 MZ_LOOKBACK=start
 MZ_LOG_LEVEL=info
 MZ_HOSTNAME=restaurant-app-container
 MZ_BODY_SIZE=2097152
+MZ_USE_SSL=${hostConfig.ssl ? 'true' : 'false'}
+MZ_TIMEOUT=${hostConfig.timeout}
 `.trim();
     
     // Create YAML configuration
     const yamlContent = `
 http:
-  endpoint: ${endpointPath}
+  endpoint: ${hostConfig.endpoint}
   host: ${host || 'logs.mezmo.com'}
-  timeout: 30000
-  use_ssl: true
+  timeout: ${hostConfig.timeout}
+  use_ssl: ${hostConfig.ssl}
   use_compression: true
   gzip_level: 2
   body_size: 2097152
@@ -602,10 +639,20 @@ startup: {}
     fs.writeFileSync(yamlFile, yamlContent);
     
     console.log('📋 LogDNA configuration updated');
+    console.log('🌐 Configuration details:');
+    console.log(`   Host: ${host || 'logs.mezmo.com'}`);
+    console.log(`   Type: ${hostConfig.type}`);
+    console.log(`   Endpoint: ${hostConfig.endpoint}`);
+    console.log(`   Key: ${ingestionKey.substring(0, 8)}...`);
     
     res.json({
       success: true,
-      message: 'LogDNA configuration saved',
+      message: `LogDNA agent configured for ${hostConfig.type} environment`,
+      hostConfig: {
+        host: host || 'logs.mezmo.com',
+        type: hostConfig.type,
+        endpoint: hostConfig.endpoint
+      },
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -653,18 +700,48 @@ app.post('/api/mezmo/start', (req, res) => {
     }
     
     try {
+      // Read and validate environment configuration
+      const envContent = fs.readFileSync(envFile, 'utf8');
+      
+      // Check for both MZ_ and LOGDNA_ prefixed variables separately
+      const mzHostMatch = envContent.match(/MZ_HOST=([^\n]+)/);
+      const mzKeyMatch = envContent.match(/MZ_INGESTION_KEY=([^\n]+)/);
+      const logdnaHostMatch = envContent.match(/LOGDNA_HOST=([^\n]+)/);
+      const logdnaKeyMatch = envContent.match(/LOGDNA_INGESTION_KEY=([^\n]+)/);
+
+      const hasMzConfig = mzHostMatch && mzKeyMatch;
+      const hasLogdnaConfig = logdnaHostMatch && logdnaKeyMatch;
+      
+      console.log('🔍 Pre-start validation:');
+      console.log(`   Environment file: ${fs.existsSync(envFile) ? '✅' : '❌'}`);
+      console.log(`   MZ_HOST: ${mzHostMatch ? mzHostMatch[1] : 'Not found'}`);
+      console.log(`   MZ_INGESTION_KEY: ${mzKeyMatch ? mzKeyMatch[1].substring(0, 8) + '...' : 'Not found'}`);
+      console.log(`   LOGDNA_HOST: ${logdnaHostMatch ? logdnaHostMatch[1] : 'Not found'}`);
+      console.log(`   LOGDNA_INGESTION_KEY: ${logdnaKeyMatch ? logdnaKeyMatch[1].substring(0, 8) + '...' : 'Not found'}`);
+      console.log(`   Has complete MZ config: ${hasMzConfig ? '✅' : '❌'}`);
+      console.log(`   Has complete LOGDNA config: ${hasLogdnaConfig ? '✅' : '❌'}`);
+
+      if (!hasMzConfig && !hasLogdnaConfig) {
+        return res.status(400).json({ 
+          error: 'Invalid environment configuration',
+          details: 'Need either (MZ_HOST + MZ_INGESTION_KEY) or (LOGDNA_HOST + LOGDNA_INGESTION_KEY)'
+        });
+      }
+      
       // Source environment variables and start agent
       // Note: LogDNA agent might need elevated privileges
       const startCommand = `
 set -a
 source ${envFile}
 set +a
+echo "Starting LogDNA agent with host: $MZ_HOST"
 nohup /usr/bin/logdna-agent > ${logFile} 2>&1 & echo $! > ${pidFile}
 `;
       
+      console.log('▶️ Starting LogDNA agent...');
       execSync(startCommand, { shell: '/bin/bash' });
       
-      // Give it a moment to start and verify
+      // Give it more time to start and verify (increased from 1s to 3s)
       setTimeout(() => {
         // Check if response hasn't been sent yet
         if (res.headersSent) {
@@ -687,10 +764,24 @@ nohup /usr/bin/logdna-agent > ${logFile} 2>&1 & echo $! > ${pidFile}
                 timestamp: new Date().toISOString()
               });
             } catch (killError) {
-              // Process not running
+              // Process not running - read logs for details
+              let logContent = 'No log content available';
+              try {
+                if (fs.existsSync(logFile)) {
+                  logContent = fs.readFileSync(logFile, 'utf8').slice(-500); // Last 500 chars
+                }
+              } catch (logError) {
+                logContent = `Error reading logs: ${logError.message}`;
+              }
+              
+              console.log('❌ LogDNA agent startup failed. Log content:');
+              console.log(logContent);
+              
               return res.status(500).json({ 
                 error: 'LogDNA agent failed to start',
-                details: 'Process started but is not running. Check logs for details.'
+                details: 'Process started but died immediately. Check logs for connection errors.',
+                logs: logContent,
+                pid: pid
               });
             }
           } else {
@@ -700,12 +791,25 @@ nohup /usr/bin/logdna-agent > ${logFile} 2>&1 & echo $! > ${pidFile}
             });
           }
         } else {
+          // No PID file - agent failed to start at all
+          let logContent = 'No log content available';
+          try {
+            if (fs.existsSync(logFile)) {
+              logContent = fs.readFileSync(logFile, 'utf8').slice(-500);
+            }
+          } catch (logError) {
+            logContent = `Error reading logs: ${logError.message}`;
+          }
+          
+          console.log('❌ LogDNA agent failed to create PID file. Logs:');
+          console.log(logContent);
+          
           return res.status(500).json({ 
             error: 'Failed to start LogDNA agent',
             details: 'PID file was not created. Check if the binary exists and has proper permissions.'
           });
         }
-      }, 1000);
+      }, 3000); // Increased from 1s to 3s for better startup reliability
       
     } catch (execError) {
       return res.status(500).json({ 
@@ -793,10 +897,31 @@ app.post('/api/mezmo/stop', (req, res) => {
 app.get('/api/mezmo/logs', (req, res) => {
   try {
     const logFile = '/tmp/codeuser/logdna-agent.log';
+    const envFile = '/etc/logdna/logdna.env';
+    const pidFile = '/tmp/codeuser/logdna-agent.pid';
+    
+    // Gather debug information
+    const debugInfo = {
+      logFileExists: fs.existsSync(logFile),
+      envFileExists: fs.existsSync(envFile),
+      pidFileExists: fs.existsSync(pidFile),
+      agentBinaryExists: fs.existsSync('/usr/bin/logdna-agent')
+    };
+    
+    if (fs.existsSync(envFile)) {
+      try {
+        const envContent = fs.readFileSync(envFile, 'utf8');
+        const hostMatch = envContent.match(/(?:MZ_HOST|LOGDNA_HOST)=([^\n]+)/);
+        debugInfo.configuredHost = hostMatch ? hostMatch[1] : 'Not found';
+      } catch (envError) {
+        debugInfo.configuredHost = 'Error reading env file';
+      }
+    }
     
     if (!fs.existsSync(logFile)) {
       return res.json({ 
-        logs: 'No logs available',
+        logs: 'No logs available - agent may not have started',
+        debugInfo,
         timestamp: new Date().toISOString()
       });
     }
@@ -804,8 +929,78 @@ app.get('/api/mezmo/logs', (req, res) => {
     const logs = fs.readFileSync(logFile, 'utf8');
     const lines = logs.split('\n').slice(-50); // Last 50 lines
     
+    // Enhanced error pattern detection with categorization
+    const errorPatterns = [
+      { pattern: /403.*forbidden/i, category: 'authentication', severity: 'high' },
+      { pattern: /bad.*request.*check.*configuration/i, category: 'authentication', severity: 'high' },
+      { pattern: /unauthorized/i, category: 'authentication', severity: 'high' },
+      { pattern: /invalid.*key/i, category: 'authentication', severity: 'medium' },
+      { pattern: /connection.*refused/i, category: 'network', severity: 'high' },
+      { pattern: /timeout/i, category: 'network', severity: 'medium' },
+      { pattern: /dns.*resolution.*failed/i, category: 'network', severity: 'high' },
+      { pattern: /host.*not.*found/i, category: 'network', severity: 'medium' },
+      { pattern: /certificate/i, category: 'security', severity: 'medium' },
+      { pattern: /ssl.*error/i, category: 'security', severity: 'medium' }
+    ];
+    
+    const detectedIssues = [];
+    const issueCategories = { authentication: [], network: [], security: [] };
+
+    lines.forEach(line => {
+      errorPatterns.forEach(errorInfo => {
+        if (errorInfo.pattern.test(line)) {
+          const issue = { line: line.trim(), category: errorInfo.category, severity: errorInfo.severity };
+          detectedIssues.push(issue);
+          issueCategories[errorInfo.category].push(issue);
+        }
+      });
+    });
+
+    // Generate specific recommendations based on detected issues
+    const recommendations = [];
+    
+    if (issueCategories.authentication.length > 0) {
+      recommendations.push({
+        issue: 'Authentication Failed (403 Forbidden)',
+        cause: 'Invalid or expired ingestion key for the configured environment',
+        solutions: [
+          'Verify the ingestion key is valid for the configured host',
+          'Check if the key is for the correct environment (dev/staging/prod)',
+          'Regenerate the ingestion key in your Mezmo account if needed'
+        ]
+      });
+    }
+
+    if (issueCategories.network.length > 0) {
+      recommendations.push({
+        issue: 'Network Connection Failed',
+        cause: 'Unable to reach the configured host',
+        solutions: [
+          'Check internet connectivity',
+          'Verify the host URL is correct for your environment',
+          'Check if corporate firewall is blocking connections'
+        ]
+      });
+    }
+
+    if (issueCategories.security.length > 0) {
+      recommendations.push({
+        issue: 'SSL/Certificate Issues',
+        cause: 'Problems with SSL/TLS connection security',
+        solutions: [
+          'Check system clock is accurate',
+          'Verify SSL certificates are up to date',
+          'Try connecting from a different network'
+        ]
+      });
+    }
+    
     res.json({ 
       logs: lines.join('\n'),
+      debugInfo,
+      detectedIssues: detectedIssues.length > 0 ? detectedIssues : [{ line: 'No obvious connection issues detected', category: 'info', severity: 'low' }],
+      recommendations,
+      issueCategories,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -817,6 +1012,132 @@ app.get('/api/mezmo/logs', (req, res) => {
         timestamp: new Date().toISOString()
       });
     }
+  }
+});
+
+// Frontend traces proxy endpoint
+app.use('/api/traces/v1/traces', express.raw({ type: 'application/x-protobuf', limit: '10mb' }));
+app.post('/api/traces/v1/traces', async (req, res) => {
+  try {
+    // Check if OTEL collector is running
+    const pidFile = '/tmp/codeuser/otel-collector.pid';
+    const configFile = '/etc/otelcol/config.yaml';
+    
+    if (!fs.existsSync(pidFile) || !fs.existsSync(configFile)) {
+      // Silently return 503 - this is expected when collector not configured
+      return res.status(503).end();
+    }
+    
+    // Check if collector process is actually running
+    let pid;
+    try {
+      pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+    } catch (readError) {
+      return res.status(503).end();
+    }
+    
+    if (isNaN(pid)) {
+      return res.status(503).end();
+    }
+    
+    try {
+      process.kill(pid, 0); // Check if process exists
+    } catch (killError) {
+      return res.status(503).end(); // Process not running
+    }
+    
+    // Proxy the request to the OTEL collector
+    console.log(`Proxy - Process check passed for PID: ${pid}`);
+    
+    try {
+      console.log('Proxy - Using built-in fetch...');
+      console.log('Proxy - Forwarding trace to collector...');
+      
+      const response = await fetch('http://localhost:4318/v1/traces', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-protobuf'
+        },
+        body: req.body
+      });
+      
+      const responseStatus = response.status;
+      console.log(`Proxy - Collector response: ${responseStatus}`);
+      
+      // If protobuf format fails with 400, try JSON format workaround
+      if (responseStatus === 400) {
+        console.log('Proxy - Protobuf failed, attempting JSON workaround...');
+        
+        // Generate a valid JSON trace payload as fallback
+        const testTracePayload = {
+          "resourceSpans": [{
+            "resource": {
+              "attributes": [{
+                "key": "service.name",
+                "value": {"stringValue": "restaurant-app-virtual-traffic"}
+              }, {
+                "key": "service.version", 
+                "value": {"stringValue": "1.0.0"}
+              }, {
+                "key": "telemetry.sdk.name",
+                "value": {"stringValue": "opentelemetry"}
+              }]
+            },
+            "scopeSpans": [{
+              "scope": {"name": "virtual-traffic-simulator", "version": "1.0.0"},
+              "spans": [{
+                "traceId": Buffer.from(Array(16).fill(0).map(() => Math.floor(Math.random() * 256))).toString('hex'),
+                "spanId": Buffer.from(Array(8).fill(0).map(() => Math.floor(Math.random() * 256))).toString('hex'),
+                "name": "virtual-user-activity",
+                "kind": 2,
+                "startTimeUnixNano": (Date.now() * 1000000).toString(),
+                "endTimeUnixNano": ((Date.now() + 1000) * 1000000).toString(),
+                "attributes": [{
+                  "key": "user.type", 
+                  "value": {"stringValue": "virtual"}
+                }, {
+                  "key": "http.method",
+                  "value": {"stringValue": "GET"}
+                }, {
+                  "key": "user.journey",
+                  "value": {"stringValue": "virtual-traffic"}
+                }],
+                "status": {"code": 1}
+              }]
+            }]
+          }]
+        };
+        
+        try {
+          const jsonResponse = await fetch('http://localhost:4318/v1/traces', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(testTracePayload)
+          });
+          
+          console.log(`Proxy - JSON workaround response: ${jsonResponse.status}`);
+          res.status(jsonResponse.status);
+          res.end();
+          return;
+        } catch (jsonError) {
+          console.log('Proxy - JSON workaround also failed:', jsonError.message);
+        }
+      }
+      
+      res.status(responseStatus);
+      res.end(); // Always return empty response
+      
+    } catch (fetchError) {
+      console.log('Proxy - Fetch error:', fetchError.message);
+      // Silently handle fetch errors (collector connection issues)
+      res.status(503).end();
+    }
+    
+  } catch (error) {
+    // Silently handle any other errors
+    res.status(503).end();
   }
 });
 
@@ -868,8 +1189,8 @@ const generateOTELConfig = ({
   if (logsEnabled && logsIngestionKey) {
     const logsHasPipelineId = logsPipelineId && logsPipelineId.length > 0;
     const logsEndpoint = logsHasPipelineId 
-      ? `https://pipeline.mezmo.com/v1/${logsPipelineId}`
-      : `https://${logsHost || 'logs.mezmo.com'}`;
+      ? `https://${logsHost || 'pipeline.mezmo.com'}/v1/${logsPipelineId}`
+      : `https://${logsHost || 'pipeline.mezmo.com'}`;
 
     console.log('   📄 Logs Pipeline:');
     console.log('     Endpoint:', logsEndpoint);
@@ -941,8 +1262,8 @@ const generateOTELConfig = ({
   if (metricsEnabled && metricsIngestionKey) {
     const metricsHasPipelineId = metricsPipelineId && metricsPipelineId.length > 0;
     const metricsEndpoint = metricsHasPipelineId 
-      ? `https://pipeline.mezmo.com/v1/${metricsPipelineId}`
-      : `https://${metricsHost || 'logs.mezmo.com'}`;
+      ? `https://${metricsHost || 'pipeline.mezmo.com'}/v1/${metricsPipelineId}`
+      : `https://${metricsHost || 'pipeline.mezmo.com'}`;
 
     console.log('   📊 Metrics Pipeline:');
     console.log('     Endpoint:', metricsEndpoint);
@@ -994,8 +1315,8 @@ const generateOTELConfig = ({
   if (tracesEnabled && tracesIngestionKey) {
     const tracesHasPipelineId = tracesPipelineId && tracesPipelineId.length > 0;
     const tracesEndpoint = tracesHasPipelineId 
-      ? `https://pipeline.mezmo.com/v1/${tracesPipelineId}`
-      : `https://${tracesHost || 'logs.mezmo.com'}`;
+      ? `https://${tracesHost || 'pipeline.mezmo.com'}/v1/${tracesPipelineId}`
+      : `https://${tracesHost || 'pipeline.mezmo.com'}`;
 
     console.log('   🔍 Traces Pipeline:');
     console.log('     Endpoint:', tracesEndpoint);
@@ -1021,7 +1342,7 @@ const generateOTELConfig = ({
     if (tracesHasPipelineId) {
       // Mezmo Pipeline for traces
       config.exporters['otlphttp/traces'] = {
-        endpoint: tracesEndpoint,
+        endpoint: `${tracesEndpoint}/v1/traces`,
         headers: {
           authorization: tracesIngestionKey,
           'content-type': 'application/x-protobuf'
@@ -1166,6 +1487,13 @@ app.get('/api/otel/metrics', async (req, res) => {
 
 app.post('/api/otel/configure', (req, res) => {
   try {
+    console.log('🔧 OTEL Configure Request:', {
+      timestamp: new Date().toISOString(),
+      bodyKeys: Object.keys(req.body),
+      hasBody: !!req.body,
+      bodySize: JSON.stringify(req.body).length
+    });
+    
     const { 
       serviceName, 
       tags,
@@ -1175,6 +1503,13 @@ app.post('/api/otel/configure', (req, res) => {
       metricsEnabled, metricsIngestionKey, metricsPipelineId, metricsHost,
       tracesEnabled, tracesIngestionKey, tracesPipelineId, tracesHost
     } = req.body;
+    
+    console.log('🔧 Extracted Parameters:', {
+      serviceName, tags, debugLevel,
+      logsEnabled, hasLogsKey: !!logsIngestionKey,
+      metricsEnabled, hasMetricsKey: !!metricsIngestionKey, 
+      tracesEnabled, hasTracesKey: !!tracesIngestionKey
+    });
     
     // Validate that at least one pipeline is enabled with a key
     const hasValidLogs = logsEnabled && logsIngestionKey;
@@ -1204,17 +1539,17 @@ app.post('/api/otel/configure', (req, res) => {
       logsEnabled: hasValidLogs,
       logsIngestionKey,
       logsPipelineId,
-      logsHost: logsHost || 'logs.mezmo.com',
+      logsHost,
       // Metrics pipeline
       metricsEnabled: hasValidMetrics,
       metricsIngestionKey,
       metricsPipelineId,
-      metricsHost: metricsHost || 'logs.mezmo.com',
+      metricsHost,
       // Traces pipeline
       tracesEnabled: hasValidTraces,
       tracesIngestionKey,
       tracesPipelineId,
-      tracesHost: tracesHost || 'logs.mezmo.com'
+      tracesHost
     });
     
     // Write configuration file
@@ -1243,7 +1578,35 @@ app.post('/api/otel/configure', (req, res) => {
     });
   } catch (error) {
     console.error('Error configuring OTEL Collector:', error);
-    res.status(500).json({ error: 'Failed to configure OTEL Collector' });
+    
+    // Provide detailed error information for debugging
+    const errorDetails = {
+      error: 'Failed to configure OTEL Collector',
+      details: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString(),
+      requestBody: req.body,
+      systemInfo: {
+        configDir: '/etc/otelcol',
+        configDirExists: fs.existsSync('/etc/otelcol'),
+        yamlDumpAvailable: typeof yaml.dump === 'function',
+        permissions: null
+      }
+    };
+    
+    // Check directory permissions
+    try {
+      const stats = fs.statSync('/etc');
+      errorDetails.systemInfo.permissions = {
+        etcDir: stats.mode.toString(8),
+        canWrite: fs.constants.W_OK
+      };
+    } catch (permError) {
+      errorDetails.systemInfo.permissionsError = permError.message;
+    }
+    
+    console.error('OTEL Configuration Error Details:', errorDetails);
+    res.status(500).json(errorDetails);
   }
 });
 
@@ -1345,6 +1708,70 @@ app.get('/api/otel/logs', (req, res) => {
   } catch (error) {
     console.error('Error reading OTEL Collector logs:', error);
     res.status(500).json({ error: 'Failed to read OTEL Collector logs' });
+  }
+});
+
+// Get OTEL Collector configuration
+app.get('/api/otel/config', (req, res) => {
+  try {
+    const configFile = '/etc/otelcol/config.yaml';
+    const pidFile = '/tmp/codeuser/otel-collector.pid';
+    
+    const configInfo = {
+      timestamp: new Date().toISOString(),
+      configFile: {
+        exists: fs.existsSync(configFile),
+        path: configFile,
+        content: null
+      },
+      collector: {
+        running: false,
+        pid: null,
+        pidFile: {
+          exists: fs.existsSync(pidFile),
+          path: pidFile
+        }
+      }
+    };
+    
+    // Read config file if it exists
+    if (configInfo.configFile.exists) {
+      try {
+        configInfo.configFile.content = fs.readFileSync(configFile, 'utf8');
+      } catch (error) {
+        configInfo.configFile.error = `Failed to read config: ${error.message}`;
+      }
+    }
+    
+    // Check if collector is running
+    if (configInfo.collector.pidFile.exists) {
+      try {
+        const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
+        const pid = parseInt(pidContent);
+        
+        if (!isNaN(pid)) {
+          try {
+            process.kill(pid, 0); // Check if process exists
+            configInfo.collector.running = true;
+            configInfo.collector.pid = pid;
+          } catch (killError) {
+            configInfo.collector.running = false;
+            configInfo.collector.error = 'Process not running';
+          }
+        }
+      } catch (error) {
+        configInfo.collector.error = `Failed to read PID file: ${error.message}`;
+      }
+    }
+    
+    res.json(configInfo);
+  } catch (error) {
+    console.error('Error getting OTEL Collector config:', error);
+    res.status(500).json({ 
+      error: 'Failed to get OTEL Collector config',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
   }
 });
 

@@ -24,7 +24,10 @@ export const usePerformance = () => {
           text: target.textContent?.slice(0, 50) || 'no-text'
         };
         
-        logger.logUserInteraction('click', `${tagName}#${elementInfo.id}.${elementInfo.className.replace(/\s+/g, '.')}`, 0);
+        const className = elementInfo.className && typeof elementInfo.className === 'string' 
+          ? elementInfo.className.replace(/\s+/g, '.') 
+          : 'no-class';
+        logger.logUserInteraction('click', `${tagName}#${elementInfo.id}.${className}`, 0);
       };
 
       document.addEventListener('click', handleGlobalClick, true);

@@ -81,10 +81,13 @@ const AppContent = () => {
 const App = () => {
   // Initialize tracing once on app startup
   useEffect(() => {
-    const tracerProvider = initializeTracing();
-    if (tracerProvider) {
-      console.log('OpenTelemetry tracing initialized');
-    }
+    initializeTracing().then((tracerProvider) => {
+      if (tracerProvider) {
+        console.log('OpenTelemetry tracing initialized');
+      }
+    }).catch((error) => {
+      console.warn('Failed to initialize tracing:', error);
+    });
   }, []);
 
   // Initialize TrafficManager once globally

@@ -1,5 +1,6 @@
 import { VirtualUser } from './virtualUser';
 import { selectWeightedJourney, USER_JOURNEYS } from './userJourneys';
+import { trace } from '@opentelemetry/api';
 
 export interface TrafficStats {
   activeUsers: number;
@@ -369,6 +370,13 @@ export class TrafficManager {
 
   private async spawnUser(): Promise<void> {
     if (!this.config.enabled) return;
+
+    // Check if OTEL tracing is properly initialized before creating virtual users
+    const tracerProvider = trace.getTracerProvider();
+    if (!tracerProvider || tracerProvider.constructor.name === 'NoopTracerProvider') {
+      console.log(`🚫 Traffic manager: OpenTelemetry tracer provider not initialized yet, skipping spawn`);
+      return;
+    }
 
     const currentUsers = this.activeUsers.size;
     const maxUsers = this.config.targetConcurrentUsers + 2;
