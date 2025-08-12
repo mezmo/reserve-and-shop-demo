@@ -37,6 +37,179 @@ The application will be available at:
 - Frontend: http://localhost:8080
 - Backend API: http://localhost:3001
 
+## 🔧 Agent Configuration
+
+The application now features a dedicated **Agents** page (`/agents`) for configuring Mezmo Agent and OpenTelemetry Collector. This replaces the previous Configuration page and provides enhanced multi-environment support.
+
+### Configuration Methods
+
+1. **Web UI Configuration** (Default)
+   - Navigate to the Agents page (`/agents`)
+   - Select your environment (Development, Integration, or Production)
+   - Configure Mezmo Agent and/or OTEL Collector settings
+   - Save and start agents directly from the UI
+
+2. **File-Based Configuration** (Pre-configuration)
+   - Create an `agents-config.json` file based on the template
+   - Use with Docker builds or local development
+   - Supports multiple environment configurations
+   - Agents auto-start if configuration is valid
+
+### Multi-Environment Support
+
+The Agents page supports three pre-configured environments:
+- **Development**: Uses Mezmo's dev endpoints
+- **Integration**: Uses Mezmo's integration endpoints  
+- **Production**: Uses Mezmo's production endpoints
+
+Each environment can have separate configurations for:
+- Mezmo Agent (direct log forwarding)
+- OTEL Collector with multi-pipeline support (logs, metrics, traces)
+
+## 🐳 Docker Setup with Agent Configuration
+
+### Building with Agent Configuration
+
+You can pre-configure agents when building the Docker container:
+
+```bash
+# Build with agent configuration file
+./run-docker.sh --agents-config ./my-agents-config.json
+
+# Or manually with docker build
+docker build --build-arg AGENTS_CONFIG_FILE=agents-config.json -t restaurant-app .
+```
+
+### Running the Container
+
+```bash
+# Run with all required ports
+docker run -it -p 8080:8080 -p 3001:3001 -p 4317:4317 -p 4318:4318 restaurant-app
+
+# Run in detached mode
+docker run -d -p 8080:8080 -p 3001:3001 -p 4317:4317 -p 4318:4318 --name restaurant-app restaurant-app
+```
+
+### Agent Configuration File Template
+
+Create an `agents-config.json` file with the following structure:
+
+```json
+{
+  "defaultConfig": "dev",
+  "configurations": {
+    "dev": {
+      "displayName": "Development Environment",
+      "mezmo": {
+        "enabled": true,
+        "ingestionKey": "YOUR_DEV_INGESTION_KEY",
+        "host": "logs.use.dev.logdna.net",
+        "tags": "restaurant-app,dev"
+      },
+      "otel": {
+        "enabled": true,
+        "serviceName": "restaurant-app-dev",
+        "tags": "restaurant-app,otel,dev",
+        "pipelines": {
+          "logs": {
+            "enabled": true,
+            "ingestionKey": "YOUR_DEV_LOGS_KEY",
+            "pipelineId": "YOUR_PIPELINE_ID",
+            "host": "pipeline.use.dev.mezmo.com"
+          },
+          "metrics": {
+            "enabled": true,
+            "ingestionKey": "YOUR_DEV_METRICS_KEY",
+            "pipelineId": "",
+            "host": "pipeline.use.dev.mezmo.com"
+          },
+          "traces": {
+            "enabled": true,
+            "ingestionKey": "YOUR_DEV_TRACES_KEY",
+            "pipelineId": "",
+            "host": "pipeline.use.dev.mezmo.com"
+          }
+        }
+      }
+    },
+    "integration": {
+      "displayName": "Integration Environment",
+      "mezmo": {
+        "enabled": false,
+        "ingestionKey": "",
+        "host": "logs.use.int.logdna.net",
+        "tags": "restaurant-app,integration"
+      },
+      "otel": {
+        "enabled": false,
+        "serviceName": "restaurant-app-int",
+        "tags": "restaurant-app,otel,integration",
+        "pipelines": {
+          "logs": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "pipeline.use.int.mezmo.com"
+          },
+          "metrics": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "pipeline.use.int.mezmo.com"
+          },
+          "traces": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "pipeline.use.int.mezmo.com"
+          }
+        }
+      }
+    },
+    "production": {
+      "displayName": "Production Environment",
+      "mezmo": {
+        "enabled": false,
+        "ingestionKey": "",
+        "host": "logs.mezmo.com",
+        "tags": "restaurant-app,production"
+      },
+      "otel": {
+        "enabled": false,
+        "serviceName": "restaurant-app-prod",
+        "tags": "restaurant-app,otel,production",
+        "pipelines": {
+          "logs": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "pipeline.mezmo.com"
+          },
+          "metrics": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "pipeline.mezmo.com"
+          },
+          "traces": {
+            "enabled": false,
+            "ingestionKey": "",
+            "pipelineId": "",
+            "host": "pipeline.mezmo.com"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**Configuration Notes:**
+- Set `defaultConfig` to the environment you want to use by default
+- Enable/disable specific agents and pipelines as needed
+- Pipeline IDs are optional but recommended for Mezmo Pipelines routing
+- The template file `agents-config.json.template` is provided as a starting point
+
 ## 📱 Application Features
 
 ### Restaurant Management
@@ -56,12 +229,13 @@ The application will be available at:
 
 ### Setting Up Mezmo Agent
 
-1. **Navigate to Configuration Page** (`/config`)
+1. **Navigate to Agents Page** (`/agents`)
 
 2. **Mezmo Agent Setup**:
+   - Select your environment (Development, Integration, or Production)
    - Toggle "Enable Mezmo Agent" switch
    - Enter your **Ingestion Key** from Mezmo dashboard
-   - Set **Mezmo Host** (default: `logs.mezmo.com`)
+   - The **Mezmo Host** is pre-configured based on environment
    - Add **Tags** for log categorization (e.g., `restaurant-app,demo`)
    - Click "Save Configuration"
 
@@ -105,10 +279,12 @@ The application will be available at:
 
 ### Configuration Tips
 
-- **PID Display**: The UI now shows the Process ID when agents are running
+- **Environment Selection**: Choose between Development, Integration, and Production environments
+- **PID Display**: The UI shows the Process ID when agents are running
 - **Auto-sync**: Toggle states automatically sync with actual process status
 - **Health Checks**: Use "Test Connection" to verify configuration
 - **View Logs**: Check agent logs directly from the UI
+- **Pre-configuration**: Use `agents-config.json` file for automated setup
 
 ## 🧪 Testing Tools
 
@@ -194,14 +370,16 @@ Features:
 - Automatic status polling (10-second intervals)
 - Connection health indicators
 - Last sync timestamps
+- Environment-specific configuration display
 
 ### Debug Information
-Available in Configuration page:
+Available in Agents page:
 - Collector component status
 - Log directory information
 - Current configuration display
 - Recent collector logs
 - File system permissions
+- Active environment settings
 
 ### Troubleshooting Common Issues
 
@@ -250,7 +428,8 @@ Available in Configuration page:
 1. **Sign up for Mezmo** at [mezmo.com](https://mezmo.com)
 2. **Create an Ingestion Key** in your Mezmo dashboard
 3. **Configure the Demo App**:
-   - Open the Configuration page
+   - Open the Agents page (`/agents`)
+   - Select your environment
    - Enter your ingestion key
    - Enable desired features
    - Start generating data
@@ -273,6 +452,11 @@ npm install
 # Run development server
 npm run dev
 
+# Run with agent configuration
+cp agents-config.json.template agents-config.json
+# Edit agents-config.json with your settings
+npm run dev
+
 # Run backend only
 npm run server
 
@@ -281,6 +465,9 @@ npm run client
 
 # Build for production
 npm run build
+
+# Build Docker with agent configuration
+./run-docker.sh --agents-config ./agents-config.json
 ```
 
 ## 📚 Additional Resources
@@ -295,4 +482,4 @@ This is a demo application for Mezmo's log analysis and pipeline platform.
 
 ---
 
-**Need Help?** Check the Configuration page's debug section for detailed system information, or view the various log files for troubleshooting.
+**Need Help?** Check the Agents page's debug section for detailed system information, or view the various log files for troubleshooting.
