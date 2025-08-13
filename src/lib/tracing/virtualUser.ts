@@ -41,30 +41,8 @@ export class VirtualUser {
     // Create session with realistic browser context
     this.sessionTracker = SessionTracker.createStandaloneSession(userId, journey.name, this.browserFingerprint);
     
-    // Use simplified performance logger for virtual users to avoid sendBeacon errors
-    this.performanceLogger = {
-      logUserInteraction: (event: string, element: string, duration?: number) => {
-        console.log(`🖱️ Virtual User Interaction: ${event} on ${element} (${duration || 0}ms)`);
-      },
-      logRouteChange: (from: string, to: string, duration?: number) => {
-        console.log(`🧭 Virtual User Route: ${from} → ${to} (${duration || 0}ms)`);
-      },
-      logComponentMount: (component: string, duration?: number) => {
-        console.log(`⚡ Virtual User Component: ${component} mounted (${duration || 0}ms)`);
-      },
-      logDataFetch: (operation: string, duration?: number) => {
-        console.log(`📡 Virtual User Data: ${operation} (${duration || 0}ms)`);
-      },
-      logError: (error: Error, context?: string) => {
-        console.log(`❌ Virtual User Error: ${error.message} ${context ? `(${context})` : ''}`);
-      },
-      logCartAction: (action: string, product: any, quantityBefore: number, quantityAfter: number, cartTotal: number, duration?: number) => {
-        console.log(`🛒 Virtual User Cart: ${action} ${product.name} (${quantityBefore}→${quantityAfter}, total: $${cartTotal}, ${duration || 0}ms)`);
-      },
-      logCartSession: (itemCount: number, totalValue: number, sessionDuration: number) => {
-        console.log(`🛒 Virtual User Session: ${itemCount} items, $${totalValue}, ${sessionDuration}ms`);
-      }
-    } as any;
+    // Use the real performance logger instance
+    this.performanceLogger = PerformanceLogger.getInstance();
     
     // Initialize metrics logger for trace-to-metrics correlation  
     // Use simplified fallback approach to avoid browser compatibility issues
