@@ -35,9 +35,12 @@ class PerformanceLogger {
 
   private loadConfig(): PerformanceConfig {
     try {
-      const stored = localStorage.getItem('performance-config');
-      if (stored) {
-        return { ...DEFAULT_CONFIG, ...JSON.parse(stored) };
+      // Check if we're in a browser environment
+      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem('performance-config');
+        if (stored) {
+          return { ...DEFAULT_CONFIG, ...JSON.parse(stored) };
+        }
       }
     } catch (error) {
       console.error('Error loading performance config:', error);
@@ -48,7 +51,10 @@ class PerformanceLogger {
   updateConfig(newConfig: Partial<PerformanceConfig>): void {
     this.config = { ...this.config, ...newConfig };
     try {
-      localStorage.setItem('performance-config', JSON.stringify(this.config));
+      // Check if we're in a browser environment
+      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+        localStorage.setItem('performance-config', JSON.stringify(this.config));
+      }
     } catch (error) {
       console.error('Error saving performance config:', error);
     }
@@ -698,8 +704,9 @@ class PerformanceLogger {
     this.logBuffer = [];
 
     try {
-      // Try to write using navigator.sendBeacon for reliable delivery
-      if ('sendBeacon' in navigator) {
+      // Check if we're in a browser environment
+      if (typeof window !== 'undefined' && typeof navigator !== 'undefined' && 'sendBeacon' in navigator) {
+        // Browser environment: use sendBeacon
         const blob = new Blob([content], { type: 'text/plain' });
         const formData = new FormData();
         formData.append('logFile', blob, 'performance.log');
@@ -709,8 +716,26 @@ class PerformanceLogger {
         if (!success) {
           throw new Error('sendBeacon failed');
         }
-      } else {
-        // Fallback: create a downloadable file for manual inspection
+      } else if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
+        // Browser without sendBeacon or virtual user: use fetch
+        const blob = new Blob([content], { type: 'text/plain' });
+        const formData = new FormData();
+        formData.append('logFile', blob, 'performance.log');
+        formData.append('filePath', this.logFile);
+        
+        // Use fetch as fallback for virtual users
+        const response = await fetch('/api/log-beacon', {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Fetch failed: ${response.status}`);
+        }
+        
+        console.log('✅ Performance logs sent via fetch');
+      } else if (typeof window !== 'undefined' && typeof sessionStorage !== 'undefined') {
+        // Browser fallback: create a downloadable file for manual inspection
         const blob = new Blob([content], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         
@@ -725,6 +750,9 @@ class PerformanceLogger {
         
         console.log(`📁 Performance log blob created: ${url}`);
         console.log('💡 You can download this from the Config page or access via sessionStorage');
+      } else {
+        // Server-side environment: log to console
+        console.log('📝 Performance Log Buffer:', content);
       }
     } catch (error) {
       console.warn('Could not flush log buffer:', error);
