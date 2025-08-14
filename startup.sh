@@ -41,8 +41,8 @@ if [ ! -d "node_modules/concurrently" ]; then
 fi
 
 # Ensure temp directory exists for performance logs and Winston logs
-mkdir -p /tmp/codeuser /logs
-chmod 755 /tmp/codeuser /logs
+mkdir -p /tmp/codeuser
+chmod 755 /tmp/codeuser
 
 # Create structured log files with proper permissions
 # Server operational logs
@@ -96,6 +96,19 @@ load_agents_config() {
             local otel_service=$(jq -r ".configurations.$default_config.otel.serviceName // \"restaurant-app\"" "$config_file")
             local otel_tags=$(jq -r ".configurations.$default_config.otel.tags // \"restaurant-app,otel\"" "$config_file")
             
+            # Extract Datadog configuration
+            local datadog_enabled=$(jq -r ".configurations.$default_config.datadog.enabled // false" "$config_file")
+            local datadog_api_key=$(jq -r ".configurations.$default_config.datadog.apiKey // \"\"" "$config_file")
+            local datadog_route_id=$(jq -r ".configurations.$default_config.datadog.routeId // \"5c7e0854-7705-11f0-b8ef-0260f52d7685\"" "$config_file")
+            local datadog_service=$(jq -r ".configurations.$default_config.datadog.service // \"restaurant-app\"" "$config_file")
+            local datadog_env=$(jq -r ".configurations.$default_config.datadog.env // \"development\"" "$config_file")
+            local datadog_tags=$(jq -r ".configurations.$default_config.datadog.tags // \"restaurant-app,datadog\"" "$config_file")
+            local datadog_logs_enabled=$(jq -r ".configurations.$default_config.datadog.logCollection.enabled // false" "$config_file")
+            local datadog_apm_enabled=$(jq -r ".configurations.$default_config.datadog.apmTracing.enabled // false" "$config_file")
+            local datadog_process_enabled=$(jq -r ".configurations.$default_config.datadog.processMonitoring.enabled // false" "$config_file")
+            
+            echo "🔍 Datadog config check: enabled=$datadog_enabled, key=${datadog_api_key:0:8}..."
+            
             # Configure agents if keys are provided
             if [ "$mezmo_enabled" = "true" ] && [ -n "$mezmo_key" ] && [ "$mezmo_key" != "null" ] && [ "$mezmo_key" != "" ]; then
                 echo "🔧 Configuring Mezmo agent from file..."
@@ -113,6 +126,48 @@ EOF
             
             if [ "$otel_enabled" = "true" ]; then
                 echo "🔧 OTEL Collector configuration found in file (will be applied when enabled via API)"
+            fi
+            
+            if [ "$datadog_enabled" = "true" ] && [ -n "$datadog_api_key" ] && [ "$datadog_api_key" != "null" ] && [ "$datadog_api_key" != "" ]; then
+                echo "🔧 Configuring Datadog agent from file..."
+                
+                # Create Datadog environment file
+                cat > /tmp/codeuser/datadog-agent.env << EOF
+DD_API_KEY=$datadog_api_key
+DD_ROUTE_ID=$datadog_route_id
+DD_SERVICE=$datadog_service
+DD_ENV=$datadog_env
+DD_VERSION=1.0.0
+DD_TAGS=$datadog_tags
+DD_LOGS_ENABLED=$datadog_logs_enabled
+DD_APM_ENABLED=$datadog_apm_enabled
+DD_PROCESS_AGENT_ENABLED=$datadog_process_enabled
+DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+DD_LOGS_CONFIG_USE_HTTP=true
+DD_CONF_DIR=/tmp/codeuser/datadog-agent
+DD_RUN_PATH=/tmp/codeuser/datadog-run
+DD_LOG_FILE=/tmp/codeuser/datadog-agent.log
+EOF
+                
+                # Copy and substitute environment variables in the Datadog configuration
+                envsubst < /app/datadog-agent.yaml > /tmp/codeuser/datadog-agent/datadog.yaml
+                envsubst < /app/datadog-agent.yaml > /etc/datadog-agent/datadog.yaml
+                
+                # Copy and substitute environment variables in the logs configuration
+                envsubst < /app/datadog-logs.yaml > /tmp/codeuser/datadog-agent/conf.d/logs.d/logs.yaml
+                envsubst < /app/datadog-logs.yaml > /etc/datadog-agent/conf.d/logs.d/logs.yaml
+                
+                # Create auth token file for agent status commands
+                echo "$(openssl rand -hex 32)" > /etc/datadog-agent/auth_token
+                echo "$(openssl rand -hex 32)" > /tmp/codeuser/datadog-agent/auth_token
+                chmod 600 /etc/datadog-agent/auth_token /tmp/codeuser/datadog-agent/auth_token
+                
+                # Create IPC certificate files for agent communication
+                openssl req -x509 -newkey rsa:2048 -keyout /etc/datadog-agent/ipc_key.pem -out /etc/datadog-agent/ipc_cert.pem -days 365 -nodes -subj "/CN=datadog-agent"
+                openssl req -x509 -newkey rsa:2048 -keyout /tmp/codeuser/datadog-agent/ipc_key.pem -out /tmp/codeuser/datadog-agent/ipc_cert.pem -days 365 -nodes -subj "/CN=datadog-agent"
+                chmod 600 /etc/datadog-agent/ipc_*.pem /tmp/codeuser/datadog-agent/ipc_*.pem
+                
+                echo "✅ Datadog agent pre-configured with key ${datadog_api_key:0:8}..."
             fi
             
         else
@@ -274,6 +329,105 @@ check_logdna_agent() {
     fi
 }
 
+# Datadog agent management functions
+start_datadog_agent() {
+    local config_file="/etc/datadog-agent/datadog.yaml"
+    local user_config_file="/tmp/codeuser/datadog-agent/datadog.yaml"
+    local env_file="/tmp/codeuser/datadog-agent.env"
+    
+    echo "🔍 Checking Datadog agent configuration..."
+    
+    # Check if configuration exists (prefer user config, fallback to system)
+    local active_config=""
+    if [ -f "$env_file" ]; then
+        if [ -f "$user_config_file" ]; then
+            active_config="$user_config_file"
+        elif [ -f "$config_file" ]; then
+            active_config="$config_file"
+        fi
+    fi
+    
+    if [ -n "$active_config" ]; then
+        echo "🐕 Found Datadog configuration at $active_config, starting agent..."
+        
+        # Source environment variables
+        set -a
+        source "$env_file"
+        set +a
+        
+        # Create run directory for datadog agent if it doesn't exist
+        mkdir -p /tmp/codeuser/datadog-run
+        
+        # Export additional environment variables for the agent
+        export DD_RUN_PATH="/tmp/codeuser/datadog-run"
+        export DD_LOG_FILE="/tmp/codeuser/datadog-agent.log"
+        export DD_CONF_DIR="/tmp/codeuser/datadog-agent"
+        
+        # Initialize agent to create any missing files
+        echo "🔧 Initializing Datadog agent..."
+        datadog-agent configcheck -c "$active_config" >/dev/null 2>&1 || echo "Config check completed"
+        
+        # Start Datadog agent in background with proper configuration
+        # Run without sudo since codeuser now owns the necessary directories
+        nohup datadog-agent run -c "$active_config" > /tmp/codeuser/datadog-agent.log 2>&1 &
+        DATADOG_PID=$!
+        
+        # Save PID for later management
+        echo $DATADOG_PID > /tmp/codeuser/datadog-agent.pid
+        
+        echo "✅ Datadog agent started (PID: $DATADOG_PID)"
+        
+        # Wait a moment and check if it's still running
+        sleep 3
+        if kill -0 $DATADOG_PID 2>/dev/null; then
+            echo "🐕 Datadog agent is running and collecting logs"
+        else
+            echo "❌ Datadog agent failed to start, check logs at /tmp/codeuser/datadog-agent.log"
+        fi
+    else
+        echo "⚠️  No Datadog configuration found, skipping agent startup"
+        echo "💡 Configure Datadog in the web interface at /config"
+    fi
+}
+
+stop_datadog_agent() {
+    local pid_file="/tmp/codeuser/datadog-agent.pid"
+    
+    if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file")
+        if kill -0 $pid 2>/dev/null; then
+            echo "🛑 Stopping Datadog agent (PID: $pid)..."
+            kill $pid
+            rm -f "$pid_file"
+            echo "✅ Datadog agent stopped"
+        else
+            echo "⚠️  Datadog agent PID $pid not running"
+            rm -f "$pid_file"
+        fi
+    else
+        echo "⚠️  No Datadog agent PID file found"
+    fi
+}
+
+check_datadog_agent() {
+    local pid_file="/tmp/codeuser/datadog-agent.pid"
+    
+    if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file")
+        if kill -0 $pid 2>/dev/null; then
+            echo "✅ Datadog agent is running (PID: $pid)"
+            return 0
+        else
+            echo "❌ Datadog agent is not running (stale PID file)"
+            rm -f "$pid_file"
+            return 1
+        fi
+    else
+        echo "❌ Datadog agent is not running"
+        return 1
+    fi
+}
+
 echo "🔍 Debug info:"
 echo "   Current user: $(whoami)"
 echo "   Working directory: $(pwd)"
@@ -290,6 +444,10 @@ echo ""
 
 # Try to start OpenTelemetry Collector
 start_otel_collector
+echo ""
+
+# Try to start Datadog agent
+start_datadog_agent
 echo ""
 
 # Start the development server
@@ -313,6 +471,7 @@ cleanup() {
     kill $DEV_PID 2>/dev/null || true
     stop_logdna_agent
     stop_otel_collector
+    stop_datadog_agent
     exit 0
 }
 

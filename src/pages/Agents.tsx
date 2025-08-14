@@ -96,10 +96,31 @@ interface OtelConfig {
   };
 }
 
+interface DatadogConfig {
+  enabled: boolean;
+  apiKey: string;
+  routeId: string;
+  ddUrl?: string;
+  logsUrl?: string;
+  service: string;
+  env: string;
+  tags: string;
+  logCollection: {
+    enabled: boolean;
+  };
+  apmTracing: {
+    enabled: boolean;
+  };
+  processMonitoring: {
+    enabled: boolean;
+  };
+}
+
 interface AgentConfiguration {
   displayName: string;
   mezmo: MezmoConfig;
   otel: OtelConfig;
+  datadog: DatadogConfig;
 }
 
 interface AgentsConfigFile {
@@ -180,12 +201,34 @@ const Agents = () => {
     traces: ''
   });
 
+  // DataDog configuration state
+  const [datadogEnabled, setDatadogEnabled] = useState(false);
+  const [datadogApiKey, setDatadogApiKey] = useState('');
+  const [datadogRouteId, setDatadogRouteId] = useState('');
+  const [datadogDdUrl, setDatadogDdUrl] = useState('');
+  const [datadogLogsUrl, setDatadogLogsUrl] = useState('');
+  const [datadogService, setDatadogService] = useState('restaurant-app');
+  const [datadogEnv, setDatadogEnv] = useState('dev');
+  const [datadogTags, setDatadogTags] = useState('restaurant-app,datadog');
+  const [datadogStatus, setDatadogStatus] = useState('disconnected');
+  const [datadogPid, setDatadogPid] = useState<number | null>(null);
+  const [datadogLastSync, setDatadogLastSync] = useState<string | null>(null);
+  const [datadogStats, setDatadogStats] = useState({
+    logsSent: 0,
+    errors: 0,
+    lastError: null as string | null
+  });
+  const [datadogLogCollection, setDatadogLogCollection] = useState(true);
+  const [datadogApmTracing, setDatadogApmTracing] = useState(false);
+  const [datadogProcessMonitoring, setDatadogProcessMonitoring] = useState(false);
+
   // UI state
   const [showIngestionKeys, setShowIngestionKeys] = useState({
     mezmo: false,
     logs: false,
     metrics: false,
-    traces: false
+    traces: false,
+    datadog: false
   });
 
   // Error tracking state
@@ -197,7 +240,8 @@ const Agents = () => {
   const [isChangingConfig, setIsChangingConfig] = useState(false);
   const [operationInProgress, setOperationInProgress] = useState({
     mezmo: false,
-    otel: false
+    otel: false,
+    datadog: false
   });
 
   // Helper functions for host management
@@ -356,6 +400,39 @@ const Agents = () => {
       } catch (error) {
         console.error('Error checking OTEL service status:', error);
       }
+
+      // Check DataDog service status
+      try {
+        const statusResponse = await fetch('/api/datadog/status');
+        const status = await statusResponse.json();
+        
+        if (statusResponse.ok) {
+          const isRunning = status.status === 'connected' && status.pid !== null;
+          setDatadogEnabled(isRunning);
+          setDatadogPid(status.pid);
+          setDatadogStatus(status.status);
+          
+          // Load configuration from localStorage if no file config
+          if (!hasFileConfig) {
+            const savedDatadogConfig = localStorage.getItem('datadog-config');
+            if (savedDatadogConfig) {
+              const config = JSON.parse(savedDatadogConfig);
+              setDatadogApiKey(config.apiKey || '');
+              setDatadogRouteId(config.routeId || '');
+              setDatadogDdUrl(config.ddUrl || '');
+              setDatadogLogsUrl(config.logsUrl || '');
+              setDatadogService(config.service || 'restaurant-app');
+              setDatadogEnv(config.env || 'dev');
+              setDatadogTags(config.tags || 'restaurant-app,datadog');
+              setDatadogLogCollection(config.logCollection !== false);
+              setDatadogApmTracing(config.apmTracing || false);
+              setDatadogProcessMonitoring(config.processMonitoring || false);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error checking DataDog service status:', error);
+      }
     };
 
     if (!hasFileConfig) {
@@ -398,6 +475,20 @@ const Agents = () => {
         }
       }
     });
+
+    // Apply DataDog configuration directly from file
+    if (config.datadog) {
+      setDatadogApiKey(config.datadog.apiKey);
+      setDatadogRouteId(config.datadog.routeId);
+      setDatadogDdUrl(config.datadog.ddUrl || '');
+      setDatadogLogsUrl(config.datadog.logsUrl || '');
+      setDatadogService(config.datadog.service);
+      setDatadogEnv(config.datadog.env);
+      setDatadogTags(config.datadog.tags);
+      setDatadogLogCollection(config.datadog.logCollection.enabled);
+      setDatadogApmTracing(config.datadog.apmTracing.enabled);
+      setDatadogProcessMonitoring(config.datadog.processMonitoring.enabled);
+    }
     
     // For preset configurations, we don't save to localStorage - they remain read-only
     
@@ -471,9 +562,24 @@ const Agents = () => {
           tags: otelTags,
           pipelines: otelPipelines
         };
+
+        const currentDatadogConfig = {
+          enabled: datadogEnabled,
+          apiKey: datadogApiKey,
+          routeId: datadogRouteId,
+          ddUrl: datadogDdUrl,
+          logsUrl: datadogLogsUrl,
+          service: datadogService,
+          env: datadogEnv,
+          tags: datadogTags,
+          logCollection: datadogLogCollection,
+          apmTracing: datadogApmTracing,
+          processMonitoring: datadogProcessMonitoring
+        };
         
         localStorage.setItem('mezmo-config', JSON.stringify(currentMezmoConfig));
         localStorage.setItem('otel-config', JSON.stringify(currentOtelConfig));
+        localStorage.setItem('datadog-config', JSON.stringify(currentDatadogConfig));
         console.log('💾 Saved custom configuration before switching to preset');
       }
 
@@ -485,6 +591,7 @@ const Agents = () => {
       // Load from localStorage
       const savedMezmoConfig = localStorage.getItem('mezmo-config');
       const savedOtelConfig = localStorage.getItem('otel-config');
+      const savedDatadogConfig = localStorage.getItem('datadog-config');
       
       if (savedMezmoConfig) {
         const config = JSON.parse(savedMezmoConfig);
@@ -517,6 +624,20 @@ const Agents = () => {
             }
           });
         }
+      }
+
+      if (savedDatadogConfig) {
+        const config = JSON.parse(savedDatadogConfig);
+        setDatadogApiKey(config.apiKey || '');
+        setDatadogRouteId(config.routeId || '');
+        setDatadogDdUrl(config.ddUrl || '');
+        setDatadogLogsUrl(config.logsUrl || '');
+        setDatadogService(config.service || 'restaurant-app');
+        setDatadogEnv(config.env || 'dev');
+        setDatadogTags(config.tags || 'restaurant-app,datadog');
+        setDatadogLogCollection(config.logCollection !== false);
+        setDatadogApmTracing(config.apmTracing || false);
+        setDatadogProcessMonitoring(config.processMonitoring || false);
       }
     } else if (availableConfigs[configName]) {
       console.log(`🔄 Applying ${configName} preset configuration (read-only)...`);
@@ -842,6 +963,346 @@ const Agents = () => {
     }
   };
 
+  // DataDog handlers
+  const saveDatadogConfig = () => {
+    const config = {
+      enabled: datadogEnabled,
+      apiKey: datadogApiKey,
+      routeId: datadogRouteId,
+      ddUrl: datadogDdUrl,
+      logsUrl: datadogLogsUrl,
+      service: datadogService,
+      env: datadogEnv,
+      tags: datadogTags,
+      logCollection: datadogLogCollection,
+      apmTracing: datadogApmTracing,
+      processMonitoring: datadogProcessMonitoring
+    };
+    
+    try {
+      localStorage.setItem('datadog-config', JSON.stringify(config));
+      toast({
+        title: "DataDog Configuration Saved",
+        description: "Your DataDog settings have been saved locally."
+      });
+    } catch (error) {
+      toast({
+        title: "Save Failed",
+        description: "Could not save DataDog configuration.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleDatadogToggle = async (enabled: boolean) => {
+    if (operationInProgress.datadog || isChangingConfig) {
+      toast({
+        title: "Operation in Progress",
+        description: "Please wait for the current DataDog operation to complete.",
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    // Enhanced validation before enabling
+    if (enabled && !validateDatadogConfig()) {
+      return; // validateDatadogConfig already shows appropriate toast messages
+    }
+    
+    setOperationInProgress(prev => ({ ...prev, datadog: true }));
+    
+    try {
+      setDatadogEnabled(enabled);
+      
+      if (enabled && datadogApiKey && datadogRouteId) {
+        saveDatadogConfig();
+        await handleStartDatadogAgent();
+        
+        // Wait 4 seconds then validate the agent is still running
+        setTimeout(async () => {
+          try {
+            const statusResponse = await fetch('/api/datadog/status');
+            const statusResult = await statusResponse.json();
+            
+            if (!statusResult.pid || statusResult.status !== 'connected') {
+              setDatadogStatus('error');
+              setDatadogEnabled(false);
+              toast({
+                title: "Agent Failed to Start",
+                description: "DataDog agent failed to establish connection. Check configuration and try again.",
+                variant: "destructive"
+              });
+            }
+          } catch (error) {
+            console.warn('Failed to validate DataDog agent startup:', error);
+          }
+        }, 4000);
+        
+      } else if (!enabled) {
+        await handleStopDatadogAgent();
+      }
+    } catch (error: any) {
+      console.error('DataDog toggle operation failed:', error);
+      setDatadogEnabled(!enabled); // Reset state on failure
+      setDatadogStatus('error');
+      
+      // Enhanced error messages based on operation type
+      let title = enabled ? "Failed to Enable DataDog Agent" : "Failed to Disable DataDog Agent";
+      let description = error.message;
+      
+      if (error.message.includes('Route ID')) {
+        description = 'Invalid Mezmo Route ID. Please verify your Route ID and try again.';
+      } else if (error.message.includes('API key')) {
+        description = 'Invalid DataDog API key. Please verify your API key and try again.';
+      } else if (error.message.includes('Failed to start DataDog agent')) {
+        description = 'The DataDog agent could not be started. Check your configuration and network connectivity to Mezmo.';
+      } else if (error.message.includes('PID file')) {
+        description = 'Agent startup verification failed. The agent may not have started properly.';
+      } else if (!description) {
+        description = enabled 
+          ? 'Unable to start the DataDog agent. Please check your configuration and try again.'
+          : 'Unable to stop the DataDog agent. Please check the agent status.';
+      }
+      
+      toast({ 
+        title,
+        description,
+        variant: "destructive",
+        duration: 8000
+      });
+    } finally {
+      setOperationInProgress(prev => ({ ...prev, datadog: false }));
+    }
+  };
+
+  const validateDatadogConfig = () => {
+    if (!datadogApiKey.trim()) {
+      toast({
+        title: "Missing API Key",
+        description: "Please enter your DataDog API key. You can find this in your DataDog account under Organization Settings > API Keys.",
+        variant: "destructive"
+      });
+      return false;
+    }
+    
+    // Enhanced API key validation
+    if (datadogApiKey.trim().length < 20) {
+      toast({
+        title: "Invalid API Key Format",
+        description: "DataDog API key appears to be too short. Please verify your API key is correct.",
+        variant: "destructive"
+      });
+      return false;
+    }
+    
+    if (!datadogRouteId.trim()) {
+      toast({
+        title: "Missing Route ID",
+        description: "Please enter your Mezmo Route ID. This is required to route DataDog logs to Mezmo.",
+        variant: "destructive"
+      });
+      return false;
+    }
+    
+    // Enhanced Route ID validation
+    const routeIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!routeIdPattern.test(datadogRouteId.trim())) {
+      toast({
+        title: "Invalid Route ID Format",
+        description: "Mezmo Route ID must be in UUID format (e.g., 5c7e0854-7705-11f0-b8ef-0260f52d7685). Please check your Mezmo account for the correct Route ID.",
+        variant: "destructive"
+      });
+      return false;
+    }
+    
+    return true;
+  };
+
+  const handleStartDatadogAgent = async () => {
+    if (!validateDatadogConfig()) return;
+    
+    setDatadogStatus('connecting');
+    
+    try {
+      // Configure the agent
+      const configResponse = await fetch('/api/datadog/configure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apiKey: datadogApiKey,
+          routeId: datadogRouteId,
+          ddUrl: datadogDdUrl,
+          logsUrl: datadogLogsUrl,
+          service: datadogService,
+          env: datadogEnv,
+          tags: datadogTags,
+          logCollection: datadogLogCollection,
+          apmTracing: datadogApmTracing,
+          processMonitoring: datadogProcessMonitoring
+        })
+      });
+      
+      if (!configResponse.ok) {
+        throw new Error('Failed to configure DataDog agent');
+      }
+      
+      // Start the agent
+      const startResponse = await fetch('/api/datadog/start', {
+        method: 'POST'
+      });
+      
+      const result = await startResponse.json();
+      
+      if (startResponse.ok) {
+        setDatadogStatus('connected');
+        setDatadogLastSync(new Date().toISOString());
+        setDatadogPid(result.pid);
+        toast({
+          title: "DataDog Agent Started",
+          description: `DataDog agent is now forwarding logs to Mezmo (PID: ${result.pid}).`
+        });
+      } else {
+        throw new Error(result.error || 'Failed to start DataDog agent');
+      }
+    } catch (error: any) {
+      setDatadogStatus('error');
+      setDatadogStats(prev => ({ 
+        ...prev, 
+        errors: prev.errors + 1,
+        lastError: error.message
+      }));
+      toast({
+        title: "Failed to Start DataDog Agent",
+        description: error.message,
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleStopDatadogAgent = async () => {
+    setDatadogStatus('disconnecting');
+    try {
+      const response = await fetch('/api/datadog/stop', {
+        method: 'POST'
+      });
+      
+      const result = await response.json();
+      
+      setDatadogStatus('disconnected');
+      setDatadogPid(null);
+      setDatadogEnabled(false);
+      toast({
+        title: "DataDog Agent Stopped",
+        description: result.message || "Log forwarding to Mezmo has been disabled."
+      });
+    } catch (error) {
+      setDatadogStatus('error');
+      toast({
+        title: "Stop Failed",
+        description: "Could not stop DataDog agent.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleTestDatadogConnection = async () => {
+    if (!validateDatadogConfig()) return;
+    
+    setDatadogStatus('connecting');
+    
+    try {
+      console.log('🐕 Testing DataDog configuration...');
+      
+      const configResponse = await fetch('/api/datadog/configure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apiKey: datadogApiKey,
+          routeId: datadogRouteId,
+          ddUrl: datadogDdUrl,
+          logsUrl: datadogLogsUrl,
+          service: datadogService,
+          env: datadogEnv,
+          tags: datadogTags,
+          logCollection: datadogLogCollection,
+          apmTracing: datadogApmTracing,
+          processMonitoring: datadogProcessMonitoring
+        })
+      });
+      
+      const configResult = await configResponse.json();
+      console.log('🐕 Configuration response:', configResult);
+      
+      if (!configResponse.ok) {
+        // Handle specific server-side validation errors
+        if (configResult.field && configResult.details) {
+          throw new Error(`${configResult.error}: ${configResult.details}`);
+        }
+        
+        if (configResult.troubleshooting && configResult.troubleshooting.length > 0) {
+          throw new Error(`${configResult.error}: ${configResult.details}. Try: ${configResult.troubleshooting[0]}`);
+        }
+        
+        throw new Error(configResult.error || 'Failed to configure DataDog agent');
+      }
+      
+      if (!configResult.success) {
+        throw new Error('Configuration was not successful');
+      }
+      
+      console.log('🐕 Checking configuration status...');
+      const statusResponse = await fetch('/api/datadog/status');
+      const status = await statusResponse.json();
+      console.log('🐕 Status response:', status);
+      
+      if (!statusResponse.ok) {
+        throw new Error(`Failed to check status: ${status.error || 'Unknown error'}`);
+      }
+      
+      if (status.hasConfig) {
+        setDatadogStatus('connected');
+        setDatadogLastSync(new Date().toISOString());
+        
+        const routeId = datadogRouteId.substring(0, 8) + '...';
+        toast({
+          title: "Connection Test Successful",
+          description: `DataDog agent configured successfully for Mezmo routing (Route: ${routeId}). You can now enable the agent.`,
+          duration: 5000
+        });
+        
+        console.log('✅ DataDog configuration test successful');
+      } else {
+        throw new Error('Configuration files were not created properly. Please check server logs for details.');
+      }
+    } catch (error: any) {
+      console.error('❌ DataDog configuration test failed:', error);
+      setDatadogStatus('error');
+      
+      // Enhanced error handling with specific guidance
+      let errorMessage = error.message;
+      let description = '';
+      
+      if (error.message.includes('Route ID')) {
+        description = 'Please verify your Mezmo Route ID is correct and accessible.';
+      } else if (error.message.includes('API key')) {
+        description = 'Please verify your DataDog API key is valid and has the necessary permissions.';
+      } else if (error.message.includes('permission') || error.message.includes('EACCES')) {
+        description = 'The application may not have permission to write configuration files.';
+      } else if (error.message.includes('network') || error.message.includes('fetch')) {
+        description = 'Network error occurred. Please check your connection and try again.';
+      } else {
+        description = 'Please check your configuration and try again. View logs for more details.';
+      }
+      
+      toast({
+        title: "Connection Test Failed",
+        description: `${errorMessage}. ${description}`,
+        variant: "destructive",
+        duration: 8000
+      });
+    }
+  };
+
   // OTEL handlers
   const saveOtelConfig = async () => {
     const config = {
@@ -1122,7 +1583,7 @@ const Agents = () => {
   useEffect(() => {
     const pollStatus = async () => {
       // Skip polling during configuration changes or operations to prevent race conditions
-      if (isChangingConfig || operationInProgress.mezmo || operationInProgress.otel) {
+      if (isChangingConfig || operationInProgress.mezmo || operationInProgress.otel || operationInProgress.datadog) {
         return;
       }
 
@@ -1182,13 +1643,35 @@ const Agents = () => {
           console.warn('Could not check OTEL status:', error);
         }
       }
+      
+      // Poll DataDog status
+      if (datadogEnabled) {
+        try {
+          const response = await fetch('/api/datadog/status');
+          const status = await response.json();
+          
+          if (response.ok) {
+            setDatadogStatus(status.status);
+            setDatadogPid(status.pid);
+            
+            const isRunning = status.status === 'connected' && status.pid !== null;
+            // Only auto-disable if agent status isn't 'connecting' (prevents disabling during startup)
+            if (!isRunning && datadogEnabled && datadogStatus !== 'connecting') {
+              console.warn('DataDog agent detected as not running, disabling UI toggle');
+              setDatadogEnabled(false);
+            }
+          }
+        } catch (error) {
+          console.warn('Could not check DataDog status:', error);
+        }
+      }
     };
     
     const interval = setInterval(pollStatus, 5000);
     pollStatus(); // Initial poll
     
     return () => clearInterval(interval);
-  }, [mezmoEnabled, otelEnabled]);
+  }, [mezmoEnabled, otelEnabled, datadogEnabled]);
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -1260,7 +1743,7 @@ const Agents = () => {
       )}
 
       <Tabs defaultValue="mezmo" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-2">
+        <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="mezmo" className="flex items-center space-x-2">
             <Cloud className="h-4 w-4" />
             <span>Mezmo Log Forwarding</span>
@@ -1268,6 +1751,10 @@ const Agents = () => {
           <TabsTrigger value="otel" className="flex items-center space-x-2">
             <Activity className="h-4 w-4" />
             <span>OpenTelemetry Collector</span>
+          </TabsTrigger>
+          <TabsTrigger value="datadog" className="flex items-center space-x-2">
+            <Settings className="h-4 w-4" />
+            <span>DataDog Agent</span>
           </TabsTrigger>
         </TabsList>
 
@@ -1935,6 +2422,453 @@ Full details logged to console and copied to clipboard.
                       <p><strong>Metrics Pipeline:</strong> Collects system and app metrics</p>
                       <p><strong>Traces Pipeline:</strong> Receives traces via OTLP protocol</p>
                       <p><strong>Protocol:</strong> OTLP/HTTP on ports 4317 (gRPC) and 4318 (HTTP)</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* DataDog Configuration Tab */}
+        <TabsContent value="datadog">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span>DataDog Agent → Mezmo</span>
+                <div className="flex items-center space-x-2">
+                  {getStatusIcon(datadogStatus)}
+                  <Badge variant={datadogStatus === 'connected' ? 'success' : 'secondary'}>
+                    {datadogStatus}
+                  </Badge>
+                  {datadogPid && (
+                    <Badge variant="outline">PID: {datadogPid}</Badge>
+                  )}
+                </div>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <p className="text-muted-foreground">
+                Configure DataDog Agent to collect logs and forward them exclusively to Mezmo's telemetry pipeline.
+              </p>
+
+              {/* Enable/Disable Toggle */}
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <Label className="text-base font-medium">Enable DataDog Agent</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Forward logs from /tmp/codeuser/ to Mezmo via DataDog Agent
+                  </p>
+                </div>
+                <Switch
+                  checked={datadogEnabled}
+                  onCheckedChange={handleDatadogToggle}
+                />
+              </div>
+
+              {/* Configuration Fields */}
+              <div className="space-y-4">
+                {/* Read-only indicator for preset configurations */}
+                {isPresetConfiguration && (
+                  <Alert>
+                    <Info className="h-4 w-4" />
+                    <AlertDescription>
+                      This is a preset configuration loaded from the agents-config.json file. Values are read-only.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                {/* API Key */}
+                <div className="space-y-2">
+                  <Label htmlFor="datadog-key">
+                    DataDog API Key
+                    {isPresetConfiguration && <span className="ml-1 text-xs text-muted-foreground">(Read-only)</span>}
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      id="datadog-key"
+                      type={showIngestionKeys.datadog ? "text" : "password"}
+                      value={datadogApiKey}
+                      onChange={(e) => {
+                        setDatadogApiKey(e.target.value);
+                        // Auto-save only for custom configuration
+                        if (activeConfig === 'custom') {
+                          const updatedConfig = {
+                            enabled: datadogEnabled,
+                            apiKey: e.target.value,
+                            routeId: datadogRouteId,
+                            service: datadogService,
+                            env: datadogEnv,
+                            tags: datadogTags,
+                            logCollection: datadogLogCollection,
+                            apmTracing: datadogApmTracing,
+                            processMonitoring: datadogProcessMonitoring
+                          };
+                          localStorage.setItem('datadog-config', JSON.stringify(updatedConfig));
+                        }
+                      }}
+                      placeholder={isPresetConfiguration ? "Configured from file" : "Enter your DataDog API key"}
+                      className={`pr-10 ${isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''}`}
+                      readOnly={isPresetConfiguration}
+                      disabled={isPresetConfiguration}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-0 top-0 h-full px-3"
+                      onClick={() => setShowIngestionKeys(prev => ({ ...prev, datadog: !prev.datadog }))}
+                    >
+                      {showIngestionKeys.datadog ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Get your API key from your DataDog account settings
+                  </p>
+                </div>
+
+                {/* Mezmo Route ID */}
+                <div className="space-y-2">
+                  <Label htmlFor="datadog-route-id">
+                    Mezmo Route ID
+                    {isPresetConfiguration && <span className="ml-1 text-xs text-muted-foreground">(Read-only)</span>}
+                  </Label>
+                  <Input
+                    id="datadog-route-id"
+                    type="text"
+                    value={datadogRouteId}
+                    onChange={(e) => {
+                      setDatadogRouteId(e.target.value);
+                      // Auto-save only for custom configuration
+                      if (activeConfig === 'custom') {
+                        const updatedConfig = {
+                          enabled: datadogEnabled,
+                          apiKey: datadogApiKey,
+                          routeId: e.target.value,
+                          service: datadogService,
+                          env: datadogEnv,
+                          tags: datadogTags,
+                          logCollection: datadogLogCollection,
+                          apmTracing: datadogApmTracing,
+                          processMonitoring: datadogProcessMonitoring
+                        };
+                        localStorage.setItem('datadog-config', JSON.stringify(updatedConfig));
+                      }
+                    }}
+                    placeholder={isPresetConfiguration ? "Configured from file" : "Enter your Mezmo Route ID"}
+                    className={isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''}
+                    readOnly={isPresetConfiguration}
+                    disabled={isPresetConfiguration}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {isPresetConfiguration ? "Route ID is configured in the agents-config.json file" : "The Route ID from your Mezmo telemetry pipeline configuration"}
+                  </p>
+                </div>
+
+                {/* Service Name */}
+                <div className="space-y-2">
+                  <Label htmlFor="datadog-service">
+                    Service Name
+                    {isPresetConfiguration && <span className="ml-1 text-xs text-muted-foreground">(Read-only)</span>}
+                  </Label>
+                  <Input
+                    id="datadog-service"
+                    type="text"
+                    value={datadogService}
+                    onChange={(e) => {
+                      setDatadogService(e.target.value);
+                      // Auto-save only for custom configuration
+                      if (activeConfig === 'custom') {
+                        const updatedConfig = {
+                          enabled: datadogEnabled,
+                          apiKey: datadogApiKey,
+                          routeId: datadogRouteId,
+                          service: e.target.value,
+                          env: datadogEnv,
+                          tags: datadogTags,
+                          logCollection: datadogLogCollection,
+                          apmTracing: datadogApmTracing,
+                          processMonitoring: datadogProcessMonitoring
+                        };
+                        localStorage.setItem('datadog-config', JSON.stringify(updatedConfig));
+                      }
+                    }}
+                    placeholder={isPresetConfiguration ? "Configured from file" : "restaurant-app"}
+                    className={isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''}
+                    readOnly={isPresetConfiguration}
+                    disabled={isPresetConfiguration}
+                  />
+                </div>
+
+                {/* Environment */}
+                <div className="space-y-2">
+                  <Label htmlFor="datadog-env">
+                    Environment
+                    {isPresetConfiguration && <span className="ml-1 text-xs text-muted-foreground">(Read-only)</span>}
+                  </Label>
+                  <Input
+                    id="datadog-env"
+                    type="text"
+                    value={datadogEnv}
+                    onChange={(e) => {
+                      setDatadogEnv(e.target.value);
+                      // Auto-save only for custom configuration
+                      if (activeConfig === 'custom') {
+                        const updatedConfig = {
+                          enabled: datadogEnabled,
+                          apiKey: datadogApiKey,
+                          routeId: datadogRouteId,
+                          service: datadogService,
+                          env: e.target.value,
+                          tags: datadogTags,
+                          logCollection: datadogLogCollection,
+                          apmTracing: datadogApmTracing,
+                          processMonitoring: datadogProcessMonitoring
+                        };
+                        localStorage.setItem('datadog-config', JSON.stringify(updatedConfig));
+                      }
+                    }}
+                    placeholder={isPresetConfiguration ? "Configured from file" : "dev"}
+                    className={isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''}
+                    readOnly={isPresetConfiguration}
+                    disabled={isPresetConfiguration}
+                  />
+                </div>
+
+                {/* Tags */}
+                <div className="space-y-2">
+                  <Label htmlFor="datadog-tags">
+                    Tags (comma-separated)
+                    {isPresetConfiguration && <span className="ml-1 text-xs text-muted-foreground">(Read-only)</span>}
+                  </Label>
+                  <Input
+                    id="datadog-tags"
+                    type="text"
+                    value={datadogTags}
+                    onChange={(e) => {
+                      setDatadogTags(e.target.value);
+                      // Auto-save only for custom configuration
+                      if (activeConfig === 'custom') {
+                        const updatedConfig = {
+                          enabled: datadogEnabled,
+                          apiKey: datadogApiKey,
+                          routeId: datadogRouteId,
+                          service: datadogService,
+                          env: datadogEnv,
+                          tags: e.target.value,
+                          logCollection: datadogLogCollection,
+                          apmTracing: datadogApmTracing,
+                          processMonitoring: datadogProcessMonitoring
+                        };
+                        localStorage.setItem('datadog-config', JSON.stringify(updatedConfig));
+                      }
+                    }}
+                    placeholder={isPresetConfiguration ? "Configured from file" : "restaurant-app,datadog,production"}
+                    className={isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''}
+                    readOnly={isPresetConfiguration}
+                    disabled={isPresetConfiguration}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {isPresetConfiguration ? "Tag values are configured in the agents-config.json file" : "Tags help organize and filter your logs in DataDog and Mezmo"}
+                  </p>
+                </div>
+
+                {/* Feature Toggles */}
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold">Agent Features</h3>
+                  
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1">
+                      <Label className="text-base font-medium">Log Collection</Label>
+                      <p className="text-sm text-muted-foreground">
+                        Enable log collection from containers and files
+                      </p>
+                    </div>
+                    <Switch
+                      checked={datadogLogCollection}
+                      onCheckedChange={(checked) => {
+                        setDatadogLogCollection(checked);
+                        // Auto-save only for custom configuration
+                        if (activeConfig === 'custom') {
+                          const updatedConfig = {
+                            enabled: datadogEnabled,
+                            apiKey: datadogApiKey,
+                            routeId: datadogRouteId,
+                            service: datadogService,
+                            env: datadogEnv,
+                            tags: datadogTags,
+                            logCollection: checked,
+                            apmTracing: datadogApmTracing,
+                            processMonitoring: datadogProcessMonitoring
+                          };
+                          localStorage.setItem('datadog-config', JSON.stringify(updatedConfig));
+                        }
+                      }}
+                      disabled={isPresetConfiguration}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1">
+                      <Label className="text-base font-medium">APM Tracing</Label>
+                      <p className="text-sm text-muted-foreground">
+                        Enable Application Performance Monitoring traces
+                      </p>
+                    </div>
+                    <Switch
+                      checked={datadogApmTracing}
+                      onCheckedChange={(checked) => {
+                        setDatadogApmTracing(checked);
+                        // Auto-save only for custom configuration
+                        if (activeConfig === 'custom') {
+                          const updatedConfig = {
+                            enabled: datadogEnabled,
+                            apiKey: datadogApiKey,
+                            routeId: datadogRouteId,
+                            service: datadogService,
+                            env: datadogEnv,
+                            tags: datadogTags,
+                            logCollection: datadogLogCollection,
+                            apmTracing: checked,
+                            processMonitoring: datadogProcessMonitoring
+                          };
+                          localStorage.setItem('datadog-config', JSON.stringify(updatedConfig));
+                        }
+                      }}
+                      disabled={isPresetConfiguration}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1">
+                      <Label className="text-base font-medium">Process Monitoring</Label>
+                      <p className="text-sm text-muted-foreground">
+                        Enable system and process monitoring
+                      </p>
+                    </div>
+                    <Switch
+                      checked={datadogProcessMonitoring}
+                      onCheckedChange={(checked) => {
+                        setDatadogProcessMonitoring(checked);
+                        // Auto-save only for custom configuration
+                        if (activeConfig === 'custom') {
+                          const updatedConfig = {
+                            enabled: datadogEnabled,
+                            apiKey: datadogApiKey,
+                            routeId: datadogRouteId,
+                            service: datadogService,
+                            env: datadogEnv,
+                            tags: datadogTags,
+                            logCollection: datadogLogCollection,
+                            apmTracing: datadogApmTracing,
+                            processMonitoring: checked
+                          };
+                          localStorage.setItem('datadog-config', JSON.stringify(updatedConfig));
+                        }
+                      }}
+                      disabled={isPresetConfiguration}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-2">
+                <Button
+                  onClick={saveDatadogConfig}
+                  disabled={!datadogApiKey.trim() || !datadogRouteId.trim()}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  <Save className="mr-2 h-4 w-4" />
+                  Save Configuration
+                </Button>
+                
+                <Button
+                  onClick={handleTestDatadogConnection}
+                  disabled={!datadogApiKey.trim() || !datadogRouteId.trim() || datadogStatus === 'connecting'}
+                  variant="outline"
+                >
+                  <TestTube className="mr-2 h-4 w-4" />
+                  Test Connection
+                </Button>
+                
+                <Button
+                  onClick={async () => {
+                    try {
+                      const response = await fetch('/api/datadog/logs');
+                      const result = await response.json();
+                      
+                      console.log('📋 DataDog Agent Logs:', result);
+                      
+                      if (result.detectedIssues && result.detectedIssues.length > 0 && result.detectedIssues[0] !== 'No obvious connection issues detected') {
+                        setLastError(`DataDog Agent Issues Detected: ${result.detectedIssues.join('; ')}`);
+                        setErrorDetails({
+                          logs: result.logs,
+                          debugInfo: result.debugInfo,
+                          detectedIssues: result.detectedIssues,
+                          timestamp: result.timestamp
+                        });
+                      } else {
+                        setLastError(null);
+                        setErrorDetails(null);
+                      }
+                      
+                      toast({
+                        title: "Agent Logs Retrieved",
+                        description: `Found ${result.detectedIssues?.length || 0} potential issues. Check console and error panel for details.`
+                      });
+                    } catch (error) {
+                      toast({
+                        title: "Failed to get logs",
+                        description: error.message,
+                        variant: "destructive"
+                      });
+                    }
+                  }}
+                  variant="outline"
+                >
+                  <FileText className="mr-2 h-4 w-4" />
+                  View Agent Logs
+                </Button>
+              </div>
+
+              {/* Status Information */}
+              {datadogStatus === 'connected' && (
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4 space-y-2">
+                  <div className="flex items-center space-x-2">
+                    <CheckCircle className="h-5 w-5 text-green-600" />
+                    <span className="font-medium text-green-900">Agent Active</span>
+                  </div>
+                  <div className="text-sm text-green-800 space-y-1">
+                    <p>Process ID: {datadogPid}</p>
+                    {datadogLastSync && (
+                      <p>Last sync: {new Date(datadogLastSync).toLocaleTimeString()}</p>
+                    )}
+                    <p>Logs sent: {datadogStats.logsSent}</p>
+                    {datadogStats.errors > 0 && (
+                      <p>Errors: {datadogStats.errors}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Architecture Documentation */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
+                <div className="flex items-start space-x-2">
+                  <Info className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                  <div className="space-y-1 text-sm">
+                    <p className="font-medium text-blue-900">DataDog → Mezmo Architecture</p>
+                    <div className="text-blue-800 space-y-1">
+                      <p><strong>What it forwards:</strong> All structured log files from /tmp/codeuser/</p>
+                      <p><strong>Route ID:</strong> {datadogRouteId || 'Not configured'}</p>
+                      {datadogDdUrl && datadogRouteId && (
+                        <p><strong>Metrics URL:</strong> {datadogDdUrl}/{datadogRouteId}</p>
+                      )}
+                      {datadogLogsUrl && (
+                        <p><strong>Logs URL:</strong> {datadogLogsUrl}</p>
+                      )}
+                      <p><strong>Format:</strong> DataDog agent format routed to Mezmo</p>
+                      <p><strong>Important:</strong> This agent routes ONLY to Mezmo, not to DataDog.com</p>
                     </div>
                   </div>
                 </div>

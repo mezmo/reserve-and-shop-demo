@@ -1,0 +1,31 @@
+api_key: "${DD_API_KEY}"
+dd_url: https://pipeline.use.dev.logdna.net/v1/${DD_ROUTE_ID:-5c7e0854-7705-11f0-b8ef-0260f52d7685}
+hostname: restaurant-app
+
+# Logs configuration
+logs_enabled: true
+logs_config:
+  container_collect_all: true
+  logs_dd_url: ${DD_ROUTE_ID:-5c7e0854-7705-11f0-b8ef-0260f52d7685}.v1.pipeline.use.dev.logdna.net
+  logs_dd_port: 443
+  use_tcp: true
+  log_file: /tmp/codeuser/datadog-agent.log
+
+# Process monitoring
+process_config:
+  enabled: ${DD_PROCESS_AGENT_ENABLED:-false}
+
+# APM (Application Performance Monitoring)
+apm_config:
+  enabled: ${DD_APM_ENABLED:-false}
+  receiver_port: 8126
+
+# Runtime configuration for non-root operation
+run_path: /tmp/codeuser/datadog-run
+log_file: /tmp/codeuser/datadog-agent.log
+
+# Global tags
+tags:
+  - service:${DD_SERVICE:-restaurant-app}
+  - env:${DD_ENV:-development}
+  - component:webapp

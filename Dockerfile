@@ -3,7 +3,7 @@ FROM node:20-slim AS base
 
 # Install Python and other system dependencies including wget for LogDNA agent and jq for JSON parsing
 RUN apt-get update && \
-    apt-get install -y python3 python3-pip curl wget ca-certificates procps sudo jq && \
+    apt-get install -y python3 python3-pip curl wget ca-certificates procps sudo jq gettext-base openssl && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI
@@ -30,10 +30,19 @@ RUN wget -qO /tmp/otelcol.tar.gz "https://github.com/open-telemetry/opentelemetr
 RUN mkdir -p /etc/otelcol && \
     chmod 755 /etc/otelcol
 
+# Install DataDog Agent v7
+RUN DD_API_KEY=dummy DD_INSTALL_ONLY=true bash -c "$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script_agent7.sh)"
+
+# Create DataDog directories and set permissions
+RUN mkdir -p /etc/datadog-agent /etc/datadog-agent/conf.d/logs.d /var/log/datadog /tmp/codeuser/datadog-agent /tmp/codeuser/datadog-agent/conf.d/logs.d /tmp/codeuser/datadog-run && \
+    chmod 755 /etc/datadog-agent /etc/datadog-agent/conf.d /etc/datadog-agent/conf.d/logs.d /var/log/datadog /tmp/codeuser/datadog-agent /tmp/codeuser/datadog-agent/conf.d/logs.d /tmp/codeuser/datadog-run
+
 # Create non-root user and configure sudo
 RUN useradd -m codeuser && \
     echo "codeuser ALL=(ALL) NOPASSWD: /usr/bin/logdna-agent" >> /etc/sudoers && \
-    echo "codeuser ALL=(ALL) NOPASSWD: /bin/kill" >> /etc/sudoers
+    echo "codeuser ALL=(ALL) NOPASSWD: /bin/kill" >> /etc/sudoers && \
+    echo "codeuser ALL=(ALL) NOPASSWD: /opt/datadog-agent/bin/agent/agent" >> /etc/sudoers && \
+    echo "codeuser ALL=(ALL) NOPASSWD: /usr/bin/datadog-agent" >> /etc/sudoers
 
 WORKDIR /app
 
@@ -66,10 +75,16 @@ RUN sed -i 's/\r$//' /usr/local/bin/startup.sh && chmod +x /usr/local/bin/startu
 RUN mkdir -p /tmp/codeuser && chown codeuser:codeuser /tmp/codeuser && chmod 755 /tmp/codeuser
 
 # Set up LogDNA permissions for codeuser
-RUN chown -R codeuser:codeuser /var/lib/logdna /etc/logdna
+RUN chown -R codeuser:codeuser /var/lib/logdna /etc/logdna && \
+    chmod -R 755 /etc/logdna
 
 # Set up OpenTelemetry Collector permissions for codeuser
-RUN chown -R codeuser:codeuser /etc/otelcol
+RUN chown -R codeuser:codeuser /etc/otelcol && \
+    chmod -R 755 /etc/otelcol
+
+# Set up DataDog permissions for codeuser
+RUN chown -R codeuser:codeuser /tmp/codeuser/datadog-agent /tmp/codeuser/datadog-run /var/log/datadog /etc/datadog-agent && \
+    chmod -R 755 /etc/datadog-agent
 
 # Change ownership to codeuser after all setup is complete
 RUN chown -R codeuser:codeuser /app
@@ -78,7 +93,7 @@ RUN chown -R codeuser:codeuser /app
 USER codeuser
 
 # Expose the ports
-EXPOSE 8080 3001 4317 4318
+EXPOSE 8080 3001 4317 4318 8126
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

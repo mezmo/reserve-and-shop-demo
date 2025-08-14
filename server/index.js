@@ -2194,6 +2194,592 @@ app.post('/api/simulate/stop', (req, res) => {
   }
 });
 
+// DataDog Agent Management
+app.get('/api/datadog/status', (req, res) => {
+  try {
+    const pidFile = '/tmp/codeuser/datadog-agent.pid';
+    const configDir = process.env.DATADOG_CONFIG_DIR || '/tmp/codeuser/datadog-agent';
+    const configFile = `${configDir}/datadog.yaml`;
+    
+    let status = 'disconnected';
+    let pid = null;
+    let hasConfig = false;
+    let agentVersion = null;
+    
+    // Check if config file exists
+    if (fs.existsSync(configFile)) {
+      hasConfig = true;
+    }
+    
+    // Check if agent is running
+    if (fs.existsSync(pidFile)) {
+      try {
+        const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
+        pid = parseInt(pidContent);
+        
+        if (!isNaN(pid)) {
+          // Check if process is still running
+          process.kill(pid, 0);
+          status = 'connected';
+          
+          // Try to get agent version
+          try {
+            agentVersion = execSync('datadog-agent version 2>/dev/null | head -1', { encoding: 'utf8' }).trim();
+          } catch (versionError) {
+            agentVersion = 'Unknown';
+          }
+        } else {
+          // Invalid PID, clean up
+          fs.unlinkSync(pidFile);
+          status = 'disconnected';
+          pid = null;
+        }
+      } catch (pidError) {
+        // Process not running, clean up stale PID file
+        try {
+          if (fs.existsSync(pidFile)) {
+            fs.unlinkSync(pidFile);
+          }
+        } catch (cleanupError) {
+          console.warn('Error cleaning up DataDog PID file:', cleanupError);
+        }
+        status = 'disconnected';
+        pid = null;
+      }
+    }
+    
+    const response = {
+      status,
+      pid,
+      hasConfig,
+      agentVersion,
+      timestamp: new Date().toISOString()
+    };
+    
+    res.json(response);
+  } catch (error) {
+    console.error('Error checking DataDog status:', error);
+    res.status(500).json({ 
+      error: 'Failed to check DataDog status',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+app.post('/api/datadog/configure', (req, res) => {
+  try {
+    const { apiKey, routeId, ddUrl, logsUrl, service, env, tags, logCollection, apmTracing, processMonitoring } = req.body;
+    
+    // Enhanced validation with detailed error messages
+    if (!apiKey || !apiKey.trim()) {
+      console.warn('DataDog configuration failed: missing API key', {
+        ip: req.ip
+      });
+      return res.status(400).json({ 
+        error: 'API key is required',
+        details: 'DataDog API key cannot be empty. Please provide a valid API key from your DataDog account.',
+        field: 'apiKey'
+      });
+    }
+
+    if (!routeId || !routeId.trim()) {
+      console.warn('DataDog configuration failed: missing route ID', {
+        ip: req.ip
+      });
+      return res.status(400).json({ 
+        error: 'Mezmo Route ID is required',
+        details: 'Mezmo Route ID is required for routing DataDog logs to Mezmo. Please provide your Mezmo Route ID.',
+        field: 'routeId'
+      });
+    }
+
+    // Validate Route ID format (UUID-like format)
+    const routeIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!routeIdPattern.test(routeId.trim())) {
+      console.warn('DataDog configuration failed: invalid route ID format', {
+        routeIdLength: routeId.length,
+        ip: req.ip
+      });
+      return res.status(400).json({ 
+        error: 'Invalid Mezmo Route ID format',
+        details: 'Mezmo Route ID must be in UUID format (e.g., 5c7e0854-7705-11f0-b8ef-0260f52d7685).',
+        field: 'routeId',
+        received: routeId.substring(0, 10) + '...'
+      });
+    }
+
+    // Validate API key format (basic check - DataDog keys are typically 32 chars)
+    if (apiKey.trim().length < 20) {
+      console.warn('DataDog configuration failed: API key too short', {
+        apiKeyLength: apiKey.length,
+        ip: req.ip
+      });
+      return res.status(400).json({ 
+        error: 'Invalid API key format',
+        details: 'DataDog API key appears to be too short. Please verify your API key.',
+        field: 'apiKey'
+      });
+    }
+    
+    // Use a writable directory for configuration files in containerized environments
+    const configDir = process.env.DATADOG_CONFIG_DIR || '/tmp/codeuser/datadog-agent';
+    const configFile = `${configDir}/datadog.yaml`;
+    const logsConfigFile = `${configDir}/conf.d/logs.d/restaurant-app.yaml`;
+
+    // Ensure config directories exist with proper error handling
+    try {
+      if (!fs.existsSync(configDir)) {
+        fs.mkdirSync(configDir, { recursive: true, mode: 0o755 });
+      }
+      
+      const logsDir = `${configDir}/conf.d/logs.d`;
+      if (!fs.existsSync(logsDir)) {
+        fs.mkdirSync(logsDir, { recursive: true, mode: 0o755 });
+      }
+    } catch (dirError) {
+      console.error('Failed to create DataDog configuration directory', {
+        configDir,
+        error: dirError.message,
+        ip: req.ip
+      });
+      
+      return res.status(500).json({
+        error: 'Failed to create configuration directory',
+        details: 'Unable to create DataDog configuration directory. This may be due to insufficient permissions or a read-only file system.',
+        troubleshooting: [
+          'Ensure the application has write permissions to the file system',
+          'Consider running in a container with writable volumes',
+          'Check if the file system is mounted as read-only'
+        ],
+        configDir,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    console.log(`🐕 DataDog agent configuration for Mezmo routing:`, {
+      service: service || 'restaurant-app',
+      env: env || 'dev',
+      routeId: routeId.substring(0, 8) + '...',
+      logCollection: logCollection?.enabled !== false,
+      apmTracing: apmTracing?.enabled === true,
+      processMonitoring: processMonitoring?.enabled === true
+    });
+    
+    // Create main DataDog configuration with Mezmo routing (following Mezmo documentation format)
+    // Use provided URLs or fallback to defaults with routeId
+    const resolvedDdUrl = ddUrl ? `${ddUrl}/${routeId}` : `https://pipeline.mezmo.com/v1/${routeId}`;
+    const resolvedLogsUrl = logsUrl || `${routeId}.v1.pipeline.mezmo.com:443`;
+    
+    const datadogConfig = `# DataDog Agent Configuration - Mezmo Routing Only
+# Generated by Restaurant App Demo
+
+api_key: ${apiKey}
+dd_url: ${resolvedDdUrl}
+
+# Host metadata
+hostname: restaurant-app-container
+tags:
+  - env:${env || 'dev'}
+  - service:${service || 'restaurant-app'}
+${tags ? tags.split(',').map(tag => `  - ${tag.trim()}`).join('\n') : ''}
+
+# Log collection - Route to Mezmo only
+logs_enabled: ${logCollection?.enabled !== false}
+logs_config:
+  container_collect_all: true
+  logs_dd_url: ${resolvedLogsUrl}
+  
+# APM Tracing - Route to Mezmo
+apm_config:
+  enabled: ${apmTracing?.enabled === true}
+  env: ${env || 'dev'}
+  receiver_port: 8126
+  
+# Process monitoring
+process_config:
+  enabled: ${processMonitoring?.enabled === true}
+  
+# System checks
+enable_metadata_collection: true`.trim();
+    
+    // Create logs collection configuration
+    const logsConfig = `# Log Collection Configuration for Restaurant App - Mezmo Routing
+logs:
+  - type: file
+    path: "/tmp/codeuser/*.log"
+    service: ${service || 'restaurant-app'}
+    source: nodejs
+    sourcecategory: backend
+    tags:
+      - env:${env || 'dev'}
+      - component:api
+  
+  - type: file
+    path: "/tmp/codeuser/access.log"
+    service: ${service || 'restaurant-app'}
+    source: nginx
+    sourcecategory: http
+    
+  - type: file
+    path: "/tmp/codeuser/errors.log"
+    service: ${service || 'restaurant-app'}
+    source: nodejs
+    sourcecategory: error
+    
+  - type: file
+    path: "/tmp/codeuser/events.log"
+    service: ${service || 'restaurant-app'}
+    source: nodejs
+    sourcecategory: business
+    
+  - type: file
+    path: "/tmp/codeuser/performance.log"
+    service: ${service || 'restaurant-app'}
+    source: nodejs
+    sourcecategory: performance`.trim();
+    
+    // Write configuration files
+    fs.writeFileSync(configFile, datadogConfig);
+    if (logCollection?.enabled !== false) {
+      fs.writeFileSync(logsConfigFile, logsConfig);
+    }
+    
+    console.log('🐕 DataDog agent configured for Mezmo routing');
+    console.log('   Route ID:', routeId.substring(0, 8) + '...');
+    console.log('   Service:', service || 'restaurant-app');
+    console.log('   Environment:', env || 'dev');
+    console.log('   DD URL:', resolvedDdUrl);
+    console.log('   Logs URL:', resolvedLogsUrl);
+    console.log('   Log Collection:', logCollection?.enabled !== false ? '✅' : '❌');
+    console.log('   APM Tracing:', apmTracing?.enabled === true ? '✅' : '❌');
+    console.log('   Process Monitoring:', processMonitoring?.enabled === true ? '✅' : '❌');
+    
+    // Log successful configuration
+    console.log('DataDog agent configured successfully', {
+      routeId: routeId.substring(0, 8) + '...',
+      service: service || 'restaurant-app',
+      env: env || 'dev',
+      logCollection: logCollection?.enabled !== false,
+      apmTracing: apmTracing?.enabled === true,
+      processMonitoring: processMonitoring?.enabled === true,
+      ip: req.ip
+    });
+    
+    res.json({
+      success: true,
+      message: 'DataDog agent configured for Mezmo routing',
+      configuration: {
+        routeId: routeId.substring(0, 8) + '...',
+        ddUrl: resolvedDdUrl,
+        logsUrl: resolvedLogsUrl,
+        service: service || 'restaurant-app',
+        env: env || 'dev',
+        logCollection: logCollection?.enabled !== false,
+        apmTracing: apmTracing?.enabled === true,
+        processMonitoring: processMonitoring?.enabled === true
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    // Enhanced error logging
+    console.error('DataDog configuration failed', {
+      error: error.message,
+      stack: error.stack,
+      configDir: '/tmp/codeuser/datadog-agent',
+      ip: req.ip,
+      hasRouteId: !!req.body.routeId,
+      hasApiKey: !!req.body.apiKey
+    });
+    
+    console.error('Error configuring DataDog:', error);
+    
+    // Provide more specific error information
+    let errorDetails = error.message;
+    let troubleshootingTips = [];
+    
+    if (error.message.includes('EACCES') || error.message.includes('permission')) {
+      errorDetails = 'Permission denied while writing configuration files';
+      troubleshootingTips.push('Check file system permissions for /etc/datadog-agent/');
+    } else if (error.message.includes('ENOENT')) {
+      errorDetails = 'Configuration directory could not be created';
+      troubleshootingTips.push('Verify the file system supports creating directories');
+    } else if (error.message.includes('ENOSPC')) {
+      errorDetails = 'Insufficient disk space to write configuration';
+      troubleshootingTips.push('Free up disk space and try again');
+    }
+    
+    res.status(500).json({ 
+      error: 'Failed to configure DataDog agent',
+      details: errorDetails,
+      troubleshooting: troubleshootingTips.length > 0 ? troubleshootingTips : [
+        'Verify your DataDog API key is valid',
+        'Ensure the Mezmo Route ID is correct',
+        'Check that the application has write permissions'
+      ],
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+app.post('/api/datadog/start', (req, res) => {
+  try {
+    const pidFile = '/tmp/codeuser/datadog-agent.pid';
+    const logFile = '/tmp/codeuser/datadog-agent.log';
+    const configFile = '/etc/datadog-agent/datadog.yaml';
+    
+    // Check if already running
+    if (fs.existsSync(pidFile)) {
+      const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+      try {
+        process.kill(pid, 0);
+        return res.json({ message: 'DataDog agent is already running', pid });
+      } catch (error) {
+        // Process not running, clean up
+        fs.unlinkSync(pidFile);
+      }
+    }
+    
+    // Check if configuration exists
+    if (!fs.existsSync(configFile)) {
+      return res.status(400).json({ error: 'DataDog not configured. Please configure first.' });
+    }
+    
+    // Check if DataDog agent binary exists in common locations
+    const possibleBinaries = [
+      '/usr/bin/datadog-agent',
+      '/opt/datadog-agent/bin/agent/agent',
+      '/opt/datadog-agent/embedded/bin/agent'
+    ];
+    
+    let datadogBinary = null;
+    for (const binary of possibleBinaries) {
+      if (fs.existsSync(binary)) {
+        datadogBinary = binary;
+        break;
+      }
+    }
+    
+    if (!datadogBinary) {
+      // Try to install DataDog agent or provide instructions
+      return res.status(500).json({ 
+        error: 'DataDog agent not installed',
+        details: 'The DataDog agent is not installed in this container. You can install it or use OpenTelemetry Collector instead.',
+        installCommand: 'DD_AGENT_MAJOR_VERSION=7 DD_API_KEY=<KEY> DD_SITE="datadoghq.com" bash -c "$(curl -L https://s3.amazonaws.com/dd-agent/scripts/install_script.sh)"',
+        checkedPaths: possibleBinaries
+      });
+    }
+    
+    // Start DataDog agent
+    const startCommand = `nohup ${datadogBinary} run > ${logFile} 2>&1 & echo $! > ${pidFile}`;
+    
+    console.log('▶️ Starting DataDog agent...');
+    execSync(startCommand, { shell: '/bin/bash' });
+    
+    // Give it time to start and verify
+    setTimeout(() => {
+      if (res.headersSent) {
+        return;
+      }
+      
+      if (fs.existsSync(pidFile)) {
+        const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
+        const pid = parseInt(pidContent);
+        
+        if (!isNaN(pid)) {
+          try {
+            process.kill(pid, 0);
+            console.log('✅ DataDog agent started with PID:', pid);
+            return res.json({ 
+              success: true,
+              message: 'DataDog agent started successfully', 
+              pid,
+              timestamp: new Date().toISOString()
+            });
+          } catch (killError) {
+            // Process not running - check logs
+            let logContent = 'No log content available';
+            try {
+              if (fs.existsSync(logFile)) {
+                logContent = fs.readFileSync(logFile, 'utf8').slice(-500);
+              }
+            } catch (logError) {
+              logContent = `Error reading logs: ${logError.message}`;
+            }
+            
+            return res.status(500).json({ 
+              error: 'DataDog agent failed to start',
+              details: 'Process started but died immediately',
+              logs: logContent
+            });
+          }
+        }
+      }
+      
+      return res.status(500).json({ 
+        error: 'Failed to start DataDog agent',
+        details: 'PID file was not created'
+      });
+    }, 3000);
+    
+  } catch (error) {
+    console.error('Error starting DataDog agent:', error);
+    return res.status(500).json({ 
+      error: 'Failed to start DataDog agent',
+      details: error.message
+    });
+  }
+});
+
+app.post('/api/datadog/stop', (req, res) => {
+  try {
+    const pidFile = '/tmp/codeuser/datadog-agent.pid';
+    
+    if (!fs.existsSync(pidFile)) {
+      return res.json({ 
+        message: 'DataDog agent is not running',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
+    const pid = parseInt(pidContent);
+    
+    if (isNaN(pid)) {
+      fs.unlinkSync(pidFile);
+      return res.json({ 
+        message: 'DataDog agent was not running (invalid PID)',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    try {
+      process.kill(pid, 'SIGTERM');
+      fs.unlinkSync(pidFile);
+      console.log('🛑 DataDog agent stopped');
+      res.json({ 
+        success: true,
+        message: 'DataDog agent stopped',
+        timestamp: new Date().toISOString()
+      });
+    } catch (killError) {
+      // Process might already be dead
+      try {
+        if (fs.existsSync(pidFile)) {
+          fs.unlinkSync(pidFile);
+        }
+      } catch (cleanupError) {
+        console.warn('Error cleaning up PID file:', cleanupError);
+      }
+      
+      res.json({ 
+        message: 'DataDog agent was not running',
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error) {
+    console.error('Error stopping DataDog agent:', error);
+    res.status(500).json({ 
+      error: 'Failed to stop DataDog agent',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+app.get('/api/datadog/logs', (req, res) => {
+  try {
+    const logFile = '/tmp/codeuser/datadog-agent.log';
+    const configDir = process.env.DATADOG_CONFIG_DIR || '/tmp/codeuser/datadog-agent';
+    const configFile = `${configDir}/datadog.yaml`;
+    const pidFile = '/tmp/codeuser/datadog-agent.pid';
+    
+    const possibleBinaries = [
+      '/usr/bin/datadog-agent',
+      '/opt/datadog-agent/bin/agent/agent',
+      '/opt/datadog-agent/embedded/bin/agent'
+    ];
+    
+    const binaryStatus = {};
+    let foundBinary = null;
+    for (const binary of possibleBinaries) {
+      const exists = fs.existsSync(binary);
+      binaryStatus[binary] = exists;
+      if (exists && !foundBinary) {
+        foundBinary = binary;
+      }
+    }
+    
+    const debugInfo = {
+      logFileExists: fs.existsSync(logFile),
+      configFileExists: fs.existsSync(configFile),
+      pidFileExists: fs.existsSync(pidFile),
+      agentBinaryExists: !!foundBinary,
+      foundBinaryPath: foundBinary,
+      binaryStatus
+    };
+    
+    if (fs.existsSync(configFile)) {
+      try {
+        const configContent = fs.readFileSync(configFile, 'utf8');
+        const routeMatch = configContent.match(/dd_url:.*\/v1\/([^\s]+)/);
+        debugInfo.configuredRouteId = routeMatch ? routeMatch[1].substring(0, 8) + '...' : 'Not found';
+      } catch (configError) {
+        debugInfo.configuredRouteId = 'Error reading config file';
+      }
+    }
+    
+    if (!fs.existsSync(logFile)) {
+      return res.json({ 
+        logs: 'No logs available - agent may not have started',
+        debugInfo,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    const logs = fs.readFileSync(logFile, 'utf8');
+    const lines = logs.split('\n').slice(-50); // Last 50 lines
+    
+    // DataDog-specific error pattern detection
+    const errorPatterns = [
+      { pattern: /401.*unauthorized/i, category: 'authentication', severity: 'high' },
+      { pattern: /403.*forbidden/i, category: 'authentication', severity: 'high' },
+      { pattern: /invalid.*api.*key/i, category: 'authentication', severity: 'high' },
+      { pattern: /connection.*refused/i, category: 'network', severity: 'high' },
+      { pattern: /timeout/i, category: 'network', severity: 'medium' },
+      { pattern: /dns.*error/i, category: 'network', severity: 'high' },
+      { pattern: /certificate/i, category: 'security', severity: 'medium' }
+    ];
+    
+    const detectedIssues = [];
+    lines.forEach(line => {
+      errorPatterns.forEach(errorInfo => {
+        if (errorInfo.pattern.test(line)) {
+          detectedIssues.push({ 
+            line: line.trim(), 
+            category: errorInfo.category, 
+            severity: errorInfo.severity 
+          });
+        }
+      });
+    });
+    
+    res.json({ 
+      logs: lines.join('\n'),
+      debugInfo,
+      detectedIssues: detectedIssues.length > 0 ? detectedIssues : null,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error reading DataDog logs:', error);
+    res.status(500).json({ 
+      error: 'Failed to read DataDog logs',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Agent Configuration Management Endpoints
 
 // Get all available configurations from file

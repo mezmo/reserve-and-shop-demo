@@ -1,0 +1,83 @@
+# Log collection configuration for Datadog agent
+# This file should be placed in /etc/datadog-agent/conf.d/logs.d/
+
+logs:
+  # Application logs
+  - type: file
+    path: "/tmp/codeuser/app.log"
+    service: "${DD_SERVICE:-restaurant-app}"
+    source: application
+    sourcecategory: webapp
+    tags:
+      - env:${DD_ENV:-development}
+      - logtype:application
+
+  # Server logs
+  - type: file
+    path: "/tmp/codeuser/server.log"
+    service: "${DD_SERVICE:-restaurant-app}"
+    source: nodejs
+    sourcecategory: server
+    tags:
+      - env:${DD_ENV:-development}
+      - logtype:server
+
+  # Error logs
+  - type: file
+    path: "/tmp/codeuser/errors.log"
+    service: "${DD_SERVICE:-restaurant-app}"
+    source: application
+    sourcecategory: error
+    tags:
+      - env:${DD_ENV:-development}
+      - logtype:error
+
+  # Access logs
+  - type: file
+    path: "/tmp/codeuser/access.log"
+    service: "${DD_SERVICE:-restaurant-app}"
+    source: nginx
+    sourcecategory: http_web_access
+    tags:
+      - env:${DD_ENV:-development}
+      - logtype:access
+
+  # Performance logs
+  - type: file
+    path: "/tmp/codeuser/performance.log"
+    service: "${DD_SERVICE:-restaurant-app}"
+    source: application
+    sourcecategory: performance
+    tags:
+      - env:${DD_ENV:-development}
+      - logtype:performance
+
+  # Metrics logs
+  - type: file
+    path: "/tmp/codeuser/metrics.log"
+    service: "${DD_SERVICE:-restaurant-app}"
+    source: application
+    sourcecategory: metrics
+    tags:
+      - env:${DD_ENV:-development}
+      - logtype:metrics
+
+  # Events logs
+  - type: file
+    path: "/tmp/codeuser/events.log"
+    service: "${DD_SERVICE:-restaurant-app}"
+    source: application
+    sourcecategory: business
+    tags:
+      - env:${DD_ENV:-development}
+      - logtype:events
+
+  # Server error logs
+  - type: file
+    path: "/tmp/codeuser/server-error.log"
+    service: "${DD_SERVICE:-restaurant-app}"
+    source: nodejs
+    sourcecategory: error
+    tags:
+      - env:${DD_ENV:-development}
+      - logtype:server-error

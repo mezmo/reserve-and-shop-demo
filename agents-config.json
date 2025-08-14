@@ -33,6 +33,25 @@
             "host": "pipeline.use.dev.logdna.net"
           }
         }
+      },
+      "datadog": {
+        "enabled": true,
+        "apiKey": "7fIRCwdkh/EBhtyD7qAV6/zoVbluHGFSTsuK0Le8F8E=",
+        "routeId": "5c7e0854-7705-11f0-b8ef-0260f52d7685",
+        "ddUrl": "https://pipeline.use.dev.logdna.net/v1",
+        "logsUrl": "v1.pipeline.use.dev.logdna.net:443",
+        "service": "restaurant-app-dev",
+        "env": "dev",
+        "tags": "restaurant-app,datadog,dev",
+        "logCollection": {
+          "enabled": true
+        },
+        "apmTracing": {
+          "enabled": false
+        },
+        "processMonitoring": {
+          "enabled": false
+        }
       }
     },
     "integration": {
@@ -67,6 +86,25 @@
             "host": "pipeline.use.int.logdna.net"
           }
         }
+      },
+      "datadog": {
+        "enabled": false,
+        "apiKey": "your-integration-datadog-api-key",
+        "routeId": "integration-route-id-placeholder",
+        "ddUrl": "https://pipeline.use.int.logdna.net/v1",
+        "logsUrl": "v1.pipeline.use.int.logdna.net:443",
+        "service": "restaurant-app-int",
+        "env": "integration",
+        "tags": "restaurant-app,datadog,integration",
+        "logCollection": {
+          "enabled": true
+        },
+        "apmTracing": {
+          "enabled": false
+        },
+        "processMonitoring": {
+          "enabled": false
+        }
       }
     },
     "production": {
@@ -100,6 +138,25 @@
             "pipelineId": "your-production-pipeline-id",
             "host": "pipeline.mezmo.com"
           }
+        }
+      },
+      "datadog": {
+        "enabled": false,
+        "apiKey": "your-production-datadog-api-key",
+        "routeId": "production-route-id-placeholder",
+        "ddUrl": "https://pipeline.mezmo.com/v1",
+        "logsUrl": "v1.pipeline.mezmo.com:443",
+        "service": "restaurant-app-prod",
+        "env": "production",
+        "tags": "restaurant-app,datadog,production",
+        "logCollection": {
+          "enabled": true
+        },
+        "apmTracing": {
+          "enabled": true
+        },
+        "processMonitoring": {
+          "enabled": true
         }
       }
     }
