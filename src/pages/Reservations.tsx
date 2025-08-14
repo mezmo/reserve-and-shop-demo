@@ -75,12 +75,12 @@ const Reservations = () => {
 
     const newReservation: Reservation = {
       id: Date.now().toString(),
-      customerName: formData.customerName,
-      customerEmail: formData.customerEmail,
-      customerPhone: formData.customerPhone,
+      name: formData.customerName,
+      email: formData.customerEmail,
+      phone: formData.customerPhone,
       date: format(selectedDate, 'yyyy-MM-dd'),
       time: formData.time,
-      partySize: parseInt(formData.partySize),
+      guests: parseInt(formData.partySize),
       specialRequests: formData.specialRequests,
       status: 'confirmed',
       createdAt: new Date().toISOString()
@@ -314,7 +314,7 @@ const Reservations = () => {
                     <div className="flex flex-col md:flex-row md:items-center justify-between">
                       <div className="flex-1">
                         <div className="flex items-center space-x-2 mb-2">
-                          <h3 className="font-semibold text-lg">{reservation.customerName}</h3>
+                          <h3 className="font-semibold text-lg">{reservation.name}</h3>
                           {getStatusIcon(reservation.status)}
                           <span className="text-sm capitalize text-muted-foreground">
                             {reservation.status}
@@ -331,12 +331,12 @@ const Reservations = () => {
                           </div>
                           <div className="flex items-center space-x-1">
                             <Users className="h-4 w-4" />
-                            <span>{reservation.partySize} people</span>
+                            <span>{reservation.guests} people</span>
                           </div>
                         </div>
                         <div className="mt-2 text-sm">
-                          <p>Email: {reservation.customerEmail}</p>
-                          <p>Phone: {reservation.customerPhone}</p>
+                          <p>Email: {reservation.email}</p>
+                          <p>Phone: {reservation.phone}</p>
                           {reservation.specialRequests && (
                             <p className="mt-1">
                               <span className="font-medium">Special requests:</span> {reservation.specialRequests}
