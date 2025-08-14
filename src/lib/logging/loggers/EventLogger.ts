@@ -49,18 +49,14 @@ export class EventLogger extends BaseLogger {
     return correlatedEventTypes.includes(eventType);
   }
 
+  private eventFrequency: Map<string, number> = new Map();
+
   private getEventFrequency(eventType: string): number {
-    // In a real implementation, this would query a cache or database
-    // For demo purposes, we'll use localStorage
-    try {
-      const key = `event_frequency_${eventType}`;
-      const count = parseInt(localStorage.getItem(key) || '0', 10);
-      const newCount = count + 1;
-      localStorage.setItem(key, String(newCount));
-      return newCount;
-    } catch {
-      return 1;
-    }
+    // Use in-memory frequency tracking instead of localStorage
+    const count = this.eventFrequency.get(eventType) || 0;
+    const newCount = count + 1;
+    this.eventFrequency.set(eventType, newCount);
+    return newCount;
   }
 
   // Convenience methods for common event scenarios

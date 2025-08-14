@@ -368,17 +368,34 @@ const Config = () => {
 
   const [summaryRefresh, setSummaryRefresh] = useState(0);
 
-  const getCurrentDataSummary = () => {
-    const dataStore = DataStore.getInstance();
-    const data = dataStore.getAllData();
-    return {
-      products: data.products.length,
-      reservations: data.reservations.length,
-      orders: data.orders.length
-    };
+  const getCurrentDataSummary = async () => {
+    try {
+      const dataStore = DataStore.getInstance();
+      const data = await dataStore.getAllData();
+      return {
+        products: data.products?.length || 0,
+        reservations: data.reservations?.length || 0,
+        orders: data.orders?.length || 0
+      };
+    } catch (error) {
+      console.error('Error getting data summary:', error);
+      return {
+        products: 0,
+        reservations: 0,
+        orders: 0
+      };
+    }
   };
 
-  const summary = useMemo(() => getCurrentDataSummary(), [summaryRefresh]);
+  const [summary, setSummary] = useState({ products: 0, reservations: 0, orders: 0 });
+
+  useEffect(() => {
+    const loadSummary = async () => {
+      const newSummary = await getCurrentDataSummary();
+      setSummary(newSummary);
+    };
+    loadSummary();
+  }, [summaryRefresh]);
 
   const handlePerformanceConfigChange = (key: string, value: any) => {
     updateConfig({ [key]: value });

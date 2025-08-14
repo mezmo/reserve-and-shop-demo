@@ -35,10 +35,21 @@ const Reservations = () => {
   const { toast } = useToast();
 
   useEffect(() => {
-    const endTracking = trackDataFetch('Load reservations');
-    const dataStore = DataStore.getInstance();
-    setReservations(dataStore.getReservations());
-    endTracking();
+    const loadReservations = async () => {
+      const endTracking = trackDataFetch('Load reservations');
+      try {
+        const dataStore = DataStore.getInstance();
+        const reservationsData = await dataStore.getReservations();
+        setReservations(reservationsData);
+      } catch (error) {
+        console.error('Error loading reservations:', error);
+        setReservations([]); // Set empty array as fallback
+      } finally {
+        endTracking();
+      }
+    };
+    
+    loadReservations();
   }, [trackDataFetch]);
 
   const timeSlots = [
@@ -49,7 +60,7 @@ const Reservations = () => {
 
   const partySizes = Array.from({ length: 12 }, (_, i) => i + 1);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!selectedDate || !formData.customerName || !formData.customerEmail || 
@@ -75,9 +86,20 @@ const Reservations = () => {
       createdAt: new Date().toISOString()
     };
 
-    const dataStore = DataStore.getInstance();
-    dataStore.addReservation(newReservation);
-    setReservations(dataStore.getReservations());
+    try {
+      const dataStore = DataStore.getInstance();
+      await dataStore.addReservation(newReservation);
+      const updatedReservations = await dataStore.getReservations();
+      setReservations(updatedReservations);
+    } catch (error) {
+      console.error('Error adding reservation:', error);
+      toast({
+        title: "Error",
+        description: "Failed to create reservation. Please try again.",
+        variant: "destructive"
+      });
+      return;
+    }
     
     // Reset form
     setFormData({
@@ -107,17 +129,27 @@ const Reservations = () => {
     }
   };
 
-  const updateReservationStatus = (reservationId: string, newStatus: 'confirmed' | 'pending' | 'cancelled') => {
+  const updateReservationStatus = async (reservationId: string, newStatus: 'confirmed' | 'pending' | 'cancelled') => {
     const dataStore = DataStore.getInstance();
     const reservation = reservations.find(r => r.id === reservationId);
     if (reservation) {
-      const updatedReservation = { ...reservation, status: newStatus };
-      dataStore.updateReservation(updatedReservation);
-      setReservations(dataStore.getReservations());
-      toast({
-        title: "Status Updated",
-        description: `Reservation status changed to ${newStatus}.`
-      });
+      try {
+        const updatedReservation = { ...reservation, status: newStatus };
+        await dataStore.updateReservation(updatedReservation);
+        const updatedReservations = await dataStore.getReservations();
+        setReservations(updatedReservations);
+        toast({
+          title: "Status Updated",
+          description: `Reservation status changed to ${newStatus}.`
+        });
+      } catch (error) {
+        console.error('Error updating reservation status:', error);
+        toast({
+          title: "Error",
+          description: "Failed to update reservation status. Please try again.",
+          variant: "destructive"
+        });
+      }
     }
   };
 

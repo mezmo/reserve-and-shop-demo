@@ -439,6 +439,148 @@ app.put('/api/settings', (req, res) => {
   res.json(data.settings);
 });
 
+// DELETE endpoints for complete CRUD operations
+app.delete('/api/products/:id', (req, res) => {
+  const index = data.products.findIndex(p => p.id === req.params.id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Product not found' });
+  }
+  
+  const deletedProduct = data.products.splice(index, 1)[0];
+  
+  appLogger.info('Product deleted', {
+    requestId: req.requestId,
+    productId: req.params.id,
+    productName: deletedProduct.name
+  });
+  
+  res.json({ 
+    success: true, 
+    message: 'Product deleted successfully',
+    product: deletedProduct 
+  });
+});
+
+app.delete('/api/orders/:id', (req, res) => {
+  const index = data.orders.findIndex(o => o.id === req.params.id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Order not found' });
+  }
+  
+  const deletedOrder = data.orders.splice(index, 1)[0];
+  
+  appLogger.info('Order deleted', {
+    requestId: req.requestId,
+    orderId: req.params.id,
+    orderTotal: deletedOrder.total
+  });
+  
+  res.json({ 
+    success: true, 
+    message: 'Order deleted successfully',
+    order: deletedOrder 
+  });
+});
+
+app.delete('/api/reservations/:id', (req, res) => {
+  const index = data.reservations.findIndex(r => r.id === req.params.id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Reservation not found' });
+  }
+  
+  const deletedReservation = data.reservations.splice(index, 1)[0];
+  
+  appLogger.info('Reservation deleted', {
+    requestId: req.requestId,
+    reservationId: req.params.id,
+    guestName: deletedReservation.name
+  });
+  
+  res.json({ 
+    success: true, 
+    message: 'Reservation deleted successfully',
+    reservation: deletedReservation 
+  });
+});
+
+// Get all data (for DataStore compatibility)
+app.get('/api/data', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      products: data.products,
+      orders: data.orders,
+      reservations: data.reservations,
+      settings: data.settings
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Reset all data to defaults
+app.post('/api/data/reset', (req, res) => {
+  const originalData = {
+    products: [
+      {
+        id: '1',
+        name: 'Margherita Pizza',
+        description: 'Fresh tomato sauce, mozzarella, and basil',
+        price: 18.99,
+        category: 'Pizza',
+        image: '/placeholder.svg',
+        available: true
+      },
+      {
+        id: '2',
+        name: 'Caesar Salad',
+        description: 'Crisp romaine lettuce with parmesan and croutons',
+        price: 14.99,
+        category: 'Salads',
+        image: '/placeholder.svg',
+        available: true
+      },
+      {
+        id: '3',
+        name: 'Grilled Salmon',
+        description: 'Atlantic salmon with lemon herb seasoning',
+        price: 28.99,
+        category: 'Main Course',
+        image: '/placeholder.svg',
+        available: true
+      },
+      {
+        id: '4',
+        name: 'Chocolate Brownie',
+        description: 'Warm chocolate brownie with vanilla ice cream',
+        price: 8.99,
+        category: 'Desserts',
+        image: '/placeholder.svg',
+        available: true
+      }
+    ],
+    reservations: [],
+    orders: [],
+    settings: {
+      restaurantName: 'Bella Vista Restaurant',
+      contactEmail: 'info@bellavista.com',
+      contactPhone: '+1 (555) 123-4567'
+    }
+  };
+  
+  data = { ...originalData };
+  
+  appLogger.info('Data reset to defaults', {
+    requestId: req.requestId
+  });
+  
+  res.json({
+    success: true,
+    message: 'Data reset to defaults successfully',
+    data,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -2437,6 +2579,496 @@ app.get('/api/traffic/config', async (req, res) => {
 // Structured error handling middleware
 app.use(errorLoggingMiddleware);
 
+// =============================================================================
+// CONFIGURATION MANAGEMENT API - Replace localStorage with server-side storage
+// =============================================================================
+
+const configManager = ConfigManager.getInstance();
+
+// Get configuration by type
+app.get('/api/config/:type', (req, res) => {
+  try {
+    const { type } = req.params;
+    const config = configManager.getConfig(type);
+    
+    res.json({
+      success: true,
+      config,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error getting configuration', {
+      requestId: req.requestId,
+      configType: req.params.type,
+      error: error.message
+    });
+    
+    res.status(400).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Set configuration by type
+app.post('/api/config/:type', (req, res) => {
+  try {
+    const { type } = req.params;
+    const config = configManager.setConfig(type, req.body);
+    
+    appLogger.info('Configuration updated', {
+      requestId: req.requestId,
+      configType: type,
+      config: config
+    });
+    
+    res.json({
+      success: true,
+      config,
+      message: `${type} configuration updated successfully`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error setting configuration', {
+      requestId: req.requestId,
+      configType: req.params.type,
+      error: error.message,
+      requestBody: req.body
+    });
+    
+    res.status(400).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Get all configurations
+app.get('/api/config', (req, res) => {
+  try {
+    const configs = configManager.getAllConfigs();
+    
+    res.json({
+      success: true,
+      configs,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error getting all configurations', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve configurations',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Reset configuration by type
+app.delete('/api/config/:type', (req, res) => {
+  try {
+    const { type } = req.params;
+    const config = configManager.resetConfig(type);
+    
+    appLogger.info('Configuration reset', {
+      requestId: req.requestId,
+      configType: type
+    });
+    
+    res.json({
+      success: true,
+      config,
+      message: `${type} configuration reset to defaults`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error resetting configuration', {
+      requestId: req.requestId,
+      configType: req.params.type,
+      error: error.message
+    });
+    
+    res.status(400).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// =============================================================================
+// CLIENT LOG COLLECTION API - Replace localStorage logging with server storage
+// =============================================================================
+
+// Create log file writers for client logs
+import path from 'path';
+
+// Ensure log directory exists
+const logDir = '/tmp/codeuser';
+if (!fs.existsSync(logDir)) {
+  fs.mkdirSync(logDir, { recursive: true });
+}
+
+// Write log to disk and memory buffer
+function writeClientLog(logType, logEntry) {
+  try {
+    // Add to memory buffer for quick access
+    configManager.addLogToBuffer(logType, logEntry);
+    
+    // Write to disk for Mezmo Agent pickup
+    const logFile = path.join(logDir, `client-${logType}.log`);
+    const logLine = JSON.stringify(logEntry) + '\n';
+    fs.appendFileSync(logFile, logLine);
+    
+    return true;
+  } catch (error) {
+    console.error(`Error writing ${logType} log:`, error);
+    return false;
+  }
+}
+
+// Receive client performance logs
+app.post('/api/logs/performance', (req, res) => {
+  try {
+    const logs = Array.isArray(req.body) ? req.body : [req.body];
+    let successCount = 0;
+    
+    logs.forEach(logEntry => {
+      // Ensure required fields
+      if (!logEntry.timestamp) {
+        logEntry.timestamp = new Date().toISOString();
+      }
+      
+      if (writeClientLog('performance', logEntry)) {
+        successCount++;
+      }
+    });
+    
+    res.json({
+      success: true,
+      processed: logs.length,
+      successful: successCount,
+      message: `${successCount}/${logs.length} performance logs written to disk`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error processing client performance logs', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process performance logs',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Receive client event logs
+app.post('/api/logs/events', (req, res) => {
+  try {
+    const logs = Array.isArray(req.body) ? req.body : [req.body];
+    let successCount = 0;
+    
+    logs.forEach(logEntry => {
+      // Ensure required fields
+      if (!logEntry.timestamp) {
+        logEntry.timestamp = new Date().toISOString();
+      }
+      
+      if (writeClientLog('events', logEntry)) {
+        successCount++;
+      }
+    });
+    
+    res.json({
+      success: true,
+      processed: logs.length,
+      successful: successCount,
+      message: `${successCount}/${logs.length} event logs written to disk`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error processing client event logs', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process event logs',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Receive client trace logs
+app.post('/api/logs/traces', (req, res) => {
+  try {
+    const logs = Array.isArray(req.body) ? req.body : [req.body];
+    let successCount = 0;
+    
+    logs.forEach(logEntry => {
+      // Ensure required fields
+      if (!logEntry.timestamp) {
+        logEntry.timestamp = new Date().toISOString();
+      }
+      
+      if (writeClientLog('traces', logEntry)) {
+        successCount++;
+      }
+    });
+    
+    res.json({
+      success: true,
+      processed: logs.length,
+      successful: successCount,
+      message: `${successCount}/${logs.length} trace logs written to disk`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error processing client trace logs', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process trace logs',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Get recent logs from memory buffer (for debugging/UI)
+app.get('/api/logs/recent/:type', (req, res) => {
+  try {
+    const { type } = req.params;
+    const limit = parseInt(req.query.limit) || 100;
+    const logs = configManager.getRecentLogs(type, limit);
+    
+    res.json({
+      success: true,
+      type,
+      count: logs.length,
+      logs,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error getting recent logs', {
+      requestId: req.requestId,
+      logType: req.params.type,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve recent logs',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Get log buffer statistics
+app.get('/api/logs/stats', (req, res) => {
+  try {
+    const stats = configManager.getBufferStats();
+    
+    res.json({
+      success: true,
+      stats,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error getting log statistics', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve log statistics',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// =============================================================================
+// SESSION MANAGEMENT API - Replace localStorage auth with server sessions
+// =============================================================================
+
+// Login endpoint
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    // Simple auth check (same as client-side)
+    if (username === 'admin' && password === 'password') {
+      const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      configManager.createSession(sessionId, {
+        username,
+        loginTime: new Date(),
+        isAuthenticated: true
+      });
+      
+      res.json({
+        success: true,
+        sessionId,
+        message: 'Login successful',
+        timestamp: new Date().toISOString()
+      });
+      
+      appLogger.info('User logged in', {
+        requestId: req.requestId,
+        sessionId,
+        username
+      });
+    } else {
+      res.status(401).json({
+        success: false,
+        error: 'Invalid credentials',
+        timestamp: new Date().toISOString()
+      });
+      
+      appLogger.warn('Failed login attempt', {
+        requestId: req.requestId,
+        username
+      });
+    }
+  } catch (error) {
+    appLogger.error('Error during login', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Login failed',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Check session status
+app.get('/api/auth/status', (req, res) => {
+  try {
+    const sessionId = req.headers['x-session-id'] || req.headers['authorization']?.replace('Bearer ', '');
+    
+    if (!sessionId) {
+      return res.json({
+        success: true,
+        isAuthenticated: false,
+        message: 'No session ID provided',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    const session = configManager.getSession(sessionId);
+    
+    if (session && session.isAuthenticated) {
+      res.json({
+        success: true,
+        isAuthenticated: true,
+        session: {
+          username: session.username,
+          loginTime: session.createdAt,
+          lastAccess: session.lastAccess
+        },
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.json({
+        success: true,
+        isAuthenticated: false,
+        message: 'Invalid or expired session',
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error) {
+    appLogger.error('Error checking auth status', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check authentication status',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', (req, res) => {
+  try {
+    const sessionId = req.headers['x-session-id'] || req.headers['authorization']?.replace('Bearer ', '');
+    
+    if (sessionId) {
+      const destroyed = configManager.destroySession(sessionId);
+      
+      if (destroyed) {
+        appLogger.info('User logged out', {
+          requestId: req.requestId,
+          sessionId
+        });
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: 'Logged out successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error during logout', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Logout failed',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Get system status (including config manager stats)
+app.get('/api/system/status', (req, res) => {
+  try {
+    const status = configManager.getSystemStatus();
+    
+    res.json({
+      success: true,
+      system: {
+        ...status,
+        serverUptime: process.uptime(),
+        serverMemory: process.memoryUsage(),
+        nodeVersion: process.version
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error getting system status', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get system status',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Final error handler
 app.use((err, req, res, next) => {
   // Winston logging is handled by errorLoggingMiddleware
@@ -2459,6 +3091,9 @@ import PerformanceLogger from './services/virtualTraffic/performanceLogger.js';
 
 // Import simulator manager for cart checkout and stress test simulators
 import SimulatorManager from './services/simulators/simulatorManager.js';
+
+// Import configuration manager
+import ConfigManager from './services/configManager.js';
 
 // Create user session tracking
 const userSessions = new Map(); // sessionId -> { userId, startTime, lastActivity, customerProfile }
