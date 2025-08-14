@@ -1,19 +1,4 @@
-export interface JourneyStep {
-  action: 'navigate' | 'browse' | 'add_to_cart' | 'remove_from_cart' | 'checkout' | 'view_details' | 'make_reservation';
-  target?: string; // route or product ID
-  duration?: { min: number; max: number }; // simulate think time in ms
-  probability?: number; // chance of executing this step (0-1)
-  data?: any; // Additional data for the action
-}
-
-export interface UserJourney {
-  name: string;
-  description: string;
-  weight: number; // probability weight for selection
-  steps: JourneyStep[];
-}
-
-export const USER_JOURNEYS: UserJourney[] = [
+const USER_JOURNEYS = [
   {
     name: 'Quick Buyer',
     description: 'User who knows what they want and purchases quickly',
@@ -103,7 +88,7 @@ export const USER_JOURNEYS: UserJourney[] = [
 ];
 
 // Helper function to select a journey based on weights
-export function selectWeightedJourney(journeys: UserJourney[]): UserJourney {
+function selectWeightedJourney(journeys) {
   const totalWeight = journeys.reduce((sum, journey) => sum + journey.weight, 0);
   let random = Math.random() * totalWeight;
   
@@ -118,7 +103,7 @@ export function selectWeightedJourney(journeys: UserJourney[]): UserJourney {
 }
 
 // Helper to generate realistic think time
-export function getThinkTime(step: JourneyStep): number {
+function getThinkTime(step) {
   if (!step.duration) {
     return 3000; // Default 3 seconds
   }
@@ -132,9 +117,16 @@ export function getThinkTime(step: JourneyStep): number {
 }
 
 // Helper to decide if optional step should execute
-export function shouldExecuteStep(step: JourneyStep): boolean {
+function shouldExecuteStep(step) {
   if (step.probability === undefined) {
     return true;
   }
   return Math.random() < step.probability;
 }
+
+export {
+  USER_JOURNEYS,
+  selectWeightedJourney,
+  getThinkTime,
+  shouldExecuteStep
+};

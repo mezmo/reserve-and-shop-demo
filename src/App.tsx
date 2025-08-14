@@ -7,7 +7,6 @@ import { CartProvider } from "@/hooks/useCart";
 import { usePerformance } from "@/hooks/usePerformance";
 import { useSessionTracker } from "@/hooks/useSessionTracker";
 import { initializeTracing } from "@/lib/tracing/config";
-import { TrafficManager } from "@/lib/tracing/trafficManager";
 import { useEffect, useRef } from "react";
 import Home from "./pages/Home";
 import Menu from "./pages/Menu";
@@ -90,15 +89,6 @@ const App = () => {
     });
   }, []);
 
-  // Initialize TrafficManager once globally
-  useEffect(() => {
-    const trafficManager = TrafficManager.getInstance();
-    
-    // Cleanup on app unmount
-    return () => {
-      trafficManager.destroy();
-    };
-  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>

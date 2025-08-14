@@ -1259,18 +1259,19 @@ const Config = () => {
 
   // Initialize traffic manager and poll stats
   useEffect(() => {
-    let trafficManager: any = null;
     let statsInterval: NodeJS.Timeout | null = null;
 
     const initTraffic = async () => {
       try {
-        console.log('🔧 Initializing Traffic Manager...');
-        const { TrafficManager } = await import('@/lib/tracing/trafficManager');
-        trafficManager = TrafficManager.getInstance();
+        console.log('🔧 Initializing Traffic Manager via API...');
         
-        // Load saved configuration
-        const config = trafficManager.getConfig();
-        console.log('📋 Loaded traffic config:', config);
+        // Load saved configuration from server
+        const configResponse = await fetch('/api/traffic/config');
+        if (!configResponse.ok) {
+          throw new Error(`Failed to fetch config: ${configResponse.statusText}`);
+        }
+        const { config } = await configResponse.json();
+        console.log('📋 Loaded traffic config from server:', config);
         
         setTrafficEnabled(config.enabled);
         setTrafficTargetUsers(config.targetConcurrentUsers);
@@ -1279,20 +1280,19 @@ const Config = () => {
         
         console.log(`🎛️ UI State set - Enabled: ${config.enabled}, Users: ${config.targetConcurrentUsers}, Pattern: ${config.journeyPattern}, Timing: ${config.trafficTiming}`);
         
-        // Start traffic if enabled
-        if (config.enabled) {
-          console.log('▶️ Auto-starting traffic manager...');
-          trafficManager.start();
-        } else {
-          console.log('⏸️ Traffic manager disabled, not starting');
-        }
-
         // Poll stats every 5 seconds
-        const updateStats = () => {
-          const stats = trafficManager.getStats();
-          setTrafficStats(stats);
-          if (stats.activeUsers > 0) {
-            console.log('📊 Traffic stats:', stats);
+        const updateStats = async () => {
+          try {
+            const statsResponse = await fetch('/api/traffic/status');
+            if (statsResponse.ok) {
+              const { stats } = await statsResponse.json();
+              setTrafficStats(stats);
+              if (stats.activeUsers > 0) {
+                console.log('📊 Traffic stats from server:', stats);
+              }
+            }
+          } catch (error) {
+            console.warn('Failed to fetch traffic stats:', error);
           }
         };
 
@@ -1310,7 +1310,6 @@ const Config = () => {
       if (statsInterval) {
         clearInterval(statsInterval);
       }
-      // Don't destroy the traffic manager - let it persist globally
     };
   }, []);
 
@@ -1318,8 +1317,6 @@ const Config = () => {
   const handleTrafficToggle = async (enabled: boolean) => {
     try {
       console.log(`🔄 Toggling traffic: ${enabled ? 'ON' : 'OFF'}`);
-      const { TrafficManager } = await import('@/lib/tracing/trafficManager');
-      const trafficManager = TrafficManager.getInstance();
       
       setTrafficEnabled(enabled);
       
@@ -1330,8 +1327,21 @@ const Config = () => {
         trafficTiming: trafficTiming
       };
 
-      console.log('🔧 Updating traffic config:', config);
-      trafficManager.updateConfig(config);
+      console.log('🔧 Updating traffic config via API:', config);
+      
+      const endpoint = enabled ? '/api/traffic/start' : '/api/traffic/stop';
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to ${enabled ? 'start' : 'stop'} traffic: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('✅ Traffic toggle response:', result);
 
       toast({
         title: enabled ? "Virtual Traffic Started" : "Virtual Traffic Stopped",
@@ -1342,6 +1352,8 @@ const Config = () => {
 
     } catch (error) {
       console.error('❌ Error toggling traffic:', error);
+      // Revert the UI state on error
+      setTrafficEnabled(!enabled);
       toast({
         title: "Error",
         description: "Failed to toggle virtual traffic",
@@ -1352,16 +1364,24 @@ const Config = () => {
 
   const handleTrafficUsersChange = async (users: number) => {
     try {
-      const { TrafficManager } = await import('@/lib/tracing/trafficManager');
-      const trafficManager = TrafficManager.getInstance();
-      
       setTrafficTargetUsers(users);
       
-      trafficManager.updateConfig({
+      const config = {
+        enabled: trafficEnabled,
         targetConcurrentUsers: users,
         journeyPattern: trafficPattern,
         trafficTiming: trafficTiming
+      };
+
+      const response = await fetch('/api/traffic/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
       });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update traffic users: ${response.statusText}`);
+      }
 
     } catch (error) {
       console.error('Error updating traffic users:', error);
@@ -1370,17 +1390,24 @@ const Config = () => {
 
   const handleTrafficPatternChange = async (pattern: 'mixed' | 'buyers' | 'browsers' | 'researchers') => {
     try {
-      const { TrafficManager } = await import('@/lib/tracing/trafficManager');
-      const trafficManager = TrafficManager.getInstance();
-      
       setTrafficPattern(pattern);
       
-      trafficManager.updateConfig({
+      const config = {
         enabled: trafficEnabled,
         targetConcurrentUsers: trafficTargetUsers,
         journeyPattern: pattern,
         trafficTiming: trafficTiming
+      };
+
+      const response = await fetch('/api/traffic/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
       });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update traffic pattern: ${response.statusText}`);
+      }
 
     } catch (error) {
       console.error('Error updating traffic pattern:', error);
@@ -1389,17 +1416,24 @@ const Config = () => {
 
   const handleTrafficTimingChange = async (timing: 'steady' | 'normal' | 'peak' | 'low' | 'burst') => {
     try {
-      const { TrafficManager } = await import('@/lib/tracing/trafficManager');
-      const trafficManager = TrafficManager.getInstance();
-      
       setTrafficTiming(timing);
       
-      trafficManager.updateConfig({
+      const config = {
         enabled: trafficEnabled,
         targetConcurrentUsers: trafficTargetUsers,
         journeyPattern: trafficPattern,
         trafficTiming: timing
+      };
+
+      const response = await fetch('/api/traffic/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
       });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update traffic timing: ${response.statusText}`);
+      }
 
     } catch (error) {
       console.error('Error updating traffic timing:', error);

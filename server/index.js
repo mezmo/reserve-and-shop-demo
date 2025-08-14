@@ -7,6 +7,8 @@ import { loggingMiddleware, errorLoggingMiddleware, logBusinessEvent, logPerform
 import { updateLogFormat, getLogFormats } from './logging/winston-config.js';
 import { appLogger, serverLogger, updateLogLevel, getLogLevels } from './logging/winston-config.js';
 import { startFailure, stopFailure, getFailureStatus, isFailureActive } from './services/failureSimulator.js';
+// Import TrafficManager using dynamic import since it uses CommonJS
+let TrafficManager = null;
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -2308,6 +2310,127 @@ app.post('/api/agents/save-custom', (req, res) => {
   } catch (error) {
     console.error('Error saving custom configuration:', error);
     res.status(500).json({ error: 'Failed to save custom configuration' });
+  }
+});
+
+// ========== VIRTUAL TRAFFIC CONTROL ENDPOINTS ==========
+
+// Initialize TrafficManager lazily
+let trafficManager = null;
+async function getTrafficManager() {
+  if (!trafficManager) {
+    try {
+      const { TrafficManager } = await import('./services/virtualTraffic/trafficManager.js');
+      trafficManager = TrafficManager.getInstance();
+      console.log('🚦 TrafficManager initialized for API endpoints');
+    } catch (error) {
+      console.error('❌ Failed to initialize TrafficManager:', error);
+      throw error;
+    }
+  }
+  return trafficManager;
+}
+
+// Start virtual traffic
+app.post('/api/traffic/start', async (req, res) => {
+  try {
+    const manager = await getTrafficManager();
+    const config = req.body || {};
+    
+    // Update config and start
+    manager.updateConfig({ ...config, enabled: true });
+    
+    res.json({
+      message: 'Virtual traffic started successfully',
+      config: manager.getConfig(),
+      status: manager.getDetailedStatus()
+    });
+  } catch (error) {
+    console.error('Error starting virtual traffic:', error);
+    res.status(500).json({ error: 'Failed to start virtual traffic' });
+  }
+});
+
+// Stop virtual traffic
+app.post('/api/traffic/stop', async (req, res) => {
+  try {
+    const manager = await getTrafficManager();
+    manager.updateConfig({ enabled: false });
+    
+    res.json({
+      message: 'Virtual traffic stopped successfully',
+      config: manager.getConfig(),
+      status: manager.getDetailedStatus()
+    });
+  } catch (error) {
+    console.error('Error stopping virtual traffic:', error);
+    res.status(500).json({ error: 'Failed to stop virtual traffic' });
+  }
+});
+
+// Update traffic configuration
+app.post('/api/traffic/config', async (req, res) => {
+  try {
+    const manager = await getTrafficManager();
+    const newConfig = req.body;
+    
+    manager.updateConfig(newConfig);
+    
+    res.json({
+      message: 'Traffic configuration updated successfully',
+      config: manager.getConfig(),
+      status: manager.getDetailedStatus()
+    });
+  } catch (error) {
+    console.error('Error updating traffic config:', error);
+    res.status(500).json({ error: 'Failed to update traffic configuration' });
+  }
+});
+
+// Get current traffic status
+app.get('/api/traffic/status', async (req, res) => {
+  try {
+    const manager = await getTrafficManager();
+    
+    res.json({
+      config: manager.getConfig(),
+      stats: manager.getStats(),
+      detailed: manager.getDetailedStatus()
+    });
+  } catch (error) {
+    console.error('Error getting traffic status:', error);
+    res.status(500).json({ error: 'Failed to get traffic status' });
+  }
+});
+
+// Get real-time activity feed for the UI
+app.get('/api/traffic/activities', async (req, res) => {
+  try {
+    const manager = await getTrafficManager();
+    const detailed = manager.getDetailedStatus();
+    
+    res.json({
+      activeUsers: detailed.activeUsers,
+      recentlyCompleted: detailed.recentlyCompleted,
+      stats: detailed.stats
+    });
+  } catch (error) {
+    console.error('Error getting traffic activities:', error);
+    res.status(500).json({ error: 'Failed to get traffic activities' });
+  }
+});
+
+// Get traffic configuration (for initialization)
+app.get('/api/traffic/config', async (req, res) => {
+  try {
+    const manager = await getTrafficManager();
+    
+    res.json({
+      config: manager.getConfig()
+    });
+  } catch (error) {
+    console.error('Error getting traffic config:', error);
+    res.status(500).json({ error: 'Failed to get traffic configuration' });
   }
 });
 
