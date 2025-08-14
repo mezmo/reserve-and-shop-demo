@@ -311,19 +311,26 @@ const Agents = () => {
           setMezmoPid(status.pid);
           setMezmoStatus(status.status);
           
-          // Load configuration from localStorage if no file config
+          // Load configuration from server if no file config
           if (!hasFileConfig) {
-            const savedMezmoConfig = localStorage.getItem('mezmo-config');
-            if (savedMezmoConfig) {
-              const config = JSON.parse(savedMezmoConfig);
-              setMezmoIngestionKey(config.ingestionKey || '');
-              const hostDetection = detectMezmoHostEnvironment(config.host || 'logs.mezmo.com');
-              setMezmoHostEnv(hostDetection.env);
-              if (hostDetection.env === 'custom' && hostDetection.customHost) {
-                setMezmoCustomHost(hostDetection.customHost);
+            try {
+              const configResponse = await fetch('/api/config/mezmo');
+              if (configResponse.ok) {
+                const result = await configResponse.json();
+                if (result.success && result.config) {
+                  const config = result.config;
+                  setMezmoIngestionKey(config.ingestionKey || '');
+                  const hostDetection = detectMezmoHostEnvironment(config.host || 'logs.mezmo.com');
+                  setMezmoHostEnv(hostDetection.env);
+                  if (hostDetection.env === 'custom' && hostDetection.customHost) {
+                    setMezmoCustomHost(hostDetection.customHost);
+                  }
+                  setMezmoHost(config.host || 'logs.mezmo.com');
+                  setMezmoTags(config.tags || 'restaurant-app,demo');
+                }
               }
-              setMezmoHost(config.host || 'logs.mezmo.com');
-              setMezmoTags(config.tags || 'restaurant-app,demo');
+            } catch (error) {
+              console.error('Error loading Mezmo config from server:', error);
             }
           }
         }
@@ -486,9 +493,16 @@ const Agents = () => {
           pipelines: otelPipelines
         };
         
-        localStorage.setItem('mezmo-config', JSON.stringify(currentMezmoConfig));
+        // Save Mezmo config to server
+        await fetch('/api/config/mezmo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(currentMezmoConfig)
+        });
+        
+        // Still save OTEL to localStorage for now (can migrate later)
         localStorage.setItem('otel-config', JSON.stringify(currentOtelConfig));
-        console.log('💾 Saved custom configuration before switching to preset');
+        console.log('💾 Saved custom configuration to server before switching to preset');
       }
 
       setActiveConfig(configName);
@@ -496,21 +510,29 @@ const Agents = () => {
       localStorage.setItem('agents-active-config', configName);
     
     if (configName === 'custom') {
-      // Load from localStorage
-      const savedMezmoConfig = localStorage.getItem('mezmo-config');
-      const savedOtelConfig = localStorage.getItem('otel-config');
-      
-      if (savedMezmoConfig) {
-        const config = JSON.parse(savedMezmoConfig);
-        setMezmoIngestionKey(config.ingestionKey || '');
-        const hostDetection = detectMezmoHostEnvironment(config.host || 'logs.mezmo.com');
-        setMezmoHostEnv(hostDetection.env);
-        if (hostDetection.env === 'custom' && hostDetection.customHost) {
-          setMezmoCustomHost(hostDetection.customHost);
+      // Load Mezmo config from server
+      try {
+        const mezmoResponse = await fetch('/api/config/mezmo');
+        if (mezmoResponse.ok) {
+          const result = await mezmoResponse.json();
+          if (result.success && result.config) {
+            const config = result.config;
+            setMezmoIngestionKey(config.ingestionKey || '');
+            const hostDetection = detectMezmoHostEnvironment(config.host || 'logs.mezmo.com');
+            setMezmoHostEnv(hostDetection.env);
+            if (hostDetection.env === 'custom' && hostDetection.customHost) {
+              setMezmoCustomHost(hostDetection.customHost);
+            }
+            setMezmoHost(config.host || 'logs.mezmo.com');
+            setMezmoTags(config.tags || 'restaurant-app,demo');
+          }
         }
-        setMezmoHost(config.host || 'logs.mezmo.com');
-        setMezmoTags(config.tags || 'restaurant-app,demo');
+      } catch (error) {
+        console.error('Error loading Mezmo config from server:', error);
       }
+      
+      // Load OTEL from localStorage (for now)
+      const savedOtelConfig = localStorage.getItem('otel-config');
       
       if (savedOtelConfig) {
         const config = JSON.parse(savedOtelConfig);
@@ -543,22 +565,40 @@ const Agents = () => {
       await new Promise(resolve => setTimeout(resolve, 500));
 
       // Restart agents if they were previously running and have valid configs
-      // Use current values from localStorage/config instead of potentially stale closure values
-      const currentMezmoKey = configName === 'custom' ? 
-        (JSON.parse(localStorage.getItem('mezmo-config') || '{}').ingestionKey || '') :
-        (availableConfigs[configName]?.mezmo?.ingestionKey || '');
-      const currentMezmoHost = configName === 'custom' ?
-        (JSON.parse(localStorage.getItem('mezmo-config') || '{}').host || 'logs.mezmo.com') :
-        (availableConfigs[configName]?.mezmo?.host || 'logs.mezmo.com');
+      // For custom config, get fresh values from server
+      let currentMezmoKey = '';
+      let currentMezmoHost = 'logs.mezmo.com';
+      let currentMezmoTags = 'restaurant-app,demo';
+      
+      if (configName === 'custom') {
+        try {
+          const mezmoResponse = await fetch('/api/config/mezmo');
+          if (mezmoResponse.ok) {
+            const result = await mezmoResponse.json();
+            if (result.success && result.config) {
+              currentMezmoKey = result.config.ingestionKey || '';
+              currentMezmoHost = result.config.host || 'logs.mezmo.com';
+              currentMezmoTags = result.config.tags || 'restaurant-app,demo';
+            }
+          }
+        } catch (error) {
+          console.error('Error loading Mezmo config for restart:', error);
+        }
+      } else {
+        currentMezmoKey = availableConfigs[configName]?.mezmo?.ingestionKey || '';
+        currentMezmoHost = availableConfigs[configName]?.mezmo?.host || 'logs.mezmo.com';
+        currentMezmoTags = availableConfigs[configName]?.mezmo?.tags || 'restaurant-app,demo';
+      }
 
       if (wasRunning.mezmo && currentMezmoKey && currentMezmoHost) {
         console.log('Restarting Mezmo agent with new configuration');
         setOperationInProgress(prev => ({ ...prev, mezmo: true }));
         try {
-          await handleStartMezmoAgent();
+          // Use the new function with explicit config values (tags already retrieved above)
+          await startMezmoAgentWithConfig(currentMezmoKey, currentMezmoHost, currentMezmoTags);
           // Update the toggle state to reflect that the agent is running
           setMezmoEnabled(true);
-          console.log('✅ Mezmo agent restarted successfully, toggle state updated');
+          console.log('✅ Mezmo agent restarted successfully with new config, toggle state updated');
         } catch (error: any) {
           console.error('Failed to restart Mezmo agent:', error);
           // Ensure toggle is off if restart failed
@@ -581,10 +621,19 @@ const Agents = () => {
         console.log('Restarting OTEL collector with new configuration');
         setOperationInProgress(prev => ({ ...prev, otel: true }));
         try {
-          await handleStartOtelCollector();
+          // Get the service name and tags from the configuration
+          const currentOtelServiceName = configName === 'custom' ?
+            (JSON.parse(localStorage.getItem('otel-config') || '{}').serviceName || 'restaurant-app-frontend') :
+            (availableConfigs[configName]?.otel?.serviceName || 'restaurant-app-frontend');
+          const currentOtelTags = configName === 'custom' ?
+            (JSON.parse(localStorage.getItem('otel-config') || '{}').tags || '') :
+            (availableConfigs[configName]?.otel?.tags || '');
+          
+          // Use the new function with explicit config values
+          await startOtelCollectorWithConfig(currentOtelServiceName, currentOtelTags, currentOtelPipelines);
           // Update the toggle state to reflect that the collector is running
           setOtelEnabled(true);
-          console.log('✅ OTEL collector restarted successfully, toggle state updated');
+          console.log('✅ OTEL collector restarted successfully with new config, toggle state updated');
         } catch (error: any) {
           console.error('Failed to restart OTEL collector:', error);
           // Ensure toggle is off if restart failed
@@ -611,7 +660,7 @@ const Agents = () => {
   };
 
   // Mezmo handlers
-  const saveMezmoConfig = () => {
+  const saveMezmoConfig = async () => {
     const config = {
       enabled: mezmoEnabled,
       ingestionKey: mezmoIngestionKey,
@@ -620,10 +669,20 @@ const Agents = () => {
     };
     
     try {
-      localStorage.setItem('mezmo-config', JSON.stringify(config));
+      // Save to server instead of localStorage
+      const response = await fetch('/api/config/mezmo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to save configuration to server');
+      }
+      
       toast({
         title: "Mezmo Configuration Saved",
-        description: "Your Mezmo settings have been saved locally."
+        description: "Your Mezmo settings have been saved on the server."
       });
     } catch (error) {
       toast({
@@ -660,7 +719,7 @@ const Agents = () => {
       setMezmoEnabled(enabled);
       
       if (enabled && mezmoIngestionKey) {
-        saveMezmoConfig();
+        await saveMezmoConfig();
         await handleStartMezmoAgent();
         
         // Wait 4 seconds then validate the agent is still running
@@ -739,6 +798,55 @@ const Agents = () => {
     }
     
     return true;
+  };
+
+  // Start Mezmo agent with specific configuration (used for config changes)
+  const startMezmoAgentWithConfig = async (ingestionKey: string, host: string, tags: string) => {
+    setMezmoStatus('connecting');
+    
+    try {
+      // Configure the agent with provided values
+      const configResponse = await fetch('/api/mezmo/configure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ingestionKey,
+          host,
+          tags,
+          enabled: true
+        })
+      });
+      
+      if (!configResponse.ok) {
+        throw new Error('Failed to configure agent');
+      }
+      
+      // Start the agent
+      const startResponse = await fetch('/api/mezmo/start', {
+        method: 'POST'
+      });
+      
+      const result = await startResponse.json();
+      
+      if (startResponse.ok) {
+        setMezmoStatus('connected');
+        setMezmoLastSync(new Date().toISOString());
+        setMezmoPid(result.pid);
+        toast({
+          title: "Mezmo Agent Started",
+          description: `LogDNA agent is now forwarding logs (PID: ${result.pid}).`
+        });
+      } else {
+        throw new Error(result.error || 'Failed to start agent');
+      }
+    } catch (error: any) {
+      setMezmoStatus('error');
+      setMezmoStats(prev => ({ 
+        ...prev, 
+        errors: [...prev.errors.slice(-9), error.message] 
+      }));
+      throw error;
+    }
   };
 
   const handleStartMezmoAgent = async () => {
@@ -998,6 +1106,66 @@ const Agents = () => {
       }
     } finally {
       setOperationInProgress(prev => ({ ...prev, otel: false }));
+    }
+  };
+
+  // Start OTEL collector with specific configuration (used for config changes)
+  const startOtelCollectorWithConfig = async (serviceName: string, tags: string, pipelines: any) => {
+    setOtelStatus('connecting');
+    
+    try {
+      // Configure the collector with provided values
+      const configResponse = await fetch('/api/otel/configure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serviceName,
+          tags,
+          // Convert pipelines object to individual parameters expected by server
+          logsEnabled: pipelines.logs.enabled,
+          logsIngestionKey: pipelines.logs.ingestionKey,
+          logsPipelineId: pipelines.logs.pipelineId,
+          logsHost: pipelines.logs.host,
+          metricsEnabled: pipelines.metrics.enabled,
+          metricsIngestionKey: pipelines.metrics.ingestionKey,
+          metricsPipelineId: pipelines.metrics.pipelineId,
+          metricsHost: pipelines.metrics.host,
+          tracesEnabled: pipelines.traces.enabled,
+          tracesIngestionKey: pipelines.traces.ingestionKey,
+          tracesPipelineId: pipelines.traces.pipelineId,
+          tracesHost: pipelines.traces.host
+        })
+      });
+      
+      if (!configResponse.ok) {
+        throw new Error('Failed to configure collector');
+      }
+      
+      // Start the collector
+      const startResponse = await fetch('/api/otel/start', {
+        method: 'POST'
+      });
+      
+      const result = await startResponse.json();
+      
+      if (startResponse.ok) {
+        setOtelStatus('connected');
+        setOtelLastSync(new Date().toISOString());
+        setOtelPid(result.pid);
+        toast({
+          title: "OTEL Collector Started",
+          description: `OpenTelemetry collector is now running (PID: ${result.pid}).`
+        });
+      } else {
+        throw new Error(result.error || 'Failed to start collector');
+      }
+    } catch (error: any) {
+      setOtelStatus('error');
+      setOtelStats(prev => ({ 
+        ...prev, 
+        errors: [...prev.errors.slice(-9), error.message] 
+      }));
+      throw error;
     }
   };
 
@@ -1397,16 +1565,7 @@ const Agents = () => {
                       value={mezmoIngestionKey}
                       onChange={(e) => {
                         setMezmoIngestionKey(e.target.value);
-                        // Auto-save only for custom configuration
-                        if (activeConfig === 'custom') {
-                          const updatedConfig = {
-                            enabled: mezmoEnabled,
-                            ingestionKey: e.target.value,
-                            host: mezmoHost,
-                            tags: mezmoTags
-                          };
-                          localStorage.setItem('mezmo-config', JSON.stringify(updatedConfig));
-                        }
+                        // Config will be saved to server when user clicks Save button
                       }}
                       placeholder={isPresetConfiguration ? "Configured from file" : "Enter your Mezmo ingestion key"}
                       className={`pr-10 ${isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''}`}
@@ -1465,16 +1624,7 @@ const Agents = () => {
                         onChange={(e) => {
                           setMezmoCustomHost(e.target.value);
                           setMezmoHost(e.target.value);
-                          // Auto-save only for custom configuration
-                          if (activeConfig === 'custom') {
-                            const updatedConfig = {
-                              enabled: mezmoEnabled,
-                              ingestionKey: mezmoIngestionKey,
-                              host: e.target.value,
-                              tags: mezmoTags
-                            };
-                            localStorage.setItem('mezmo-config', JSON.stringify(updatedConfig));
-                          }
+                          // Config will be saved to server when user clicks Save button
                         }}
                         placeholder={isPresetConfiguration ? "Configured from file" : "Enter custom host URL"}
                         className={isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''}
@@ -1502,16 +1652,7 @@ const Agents = () => {
                     value={mezmoTags}
                     onChange={(e) => {
                       setMezmoTags(e.target.value);
-                      // Auto-save only for custom configuration
-                      if (activeConfig === 'custom') {
-                        const updatedConfig = {
-                          enabled: mezmoEnabled,
-                          ingestionKey: mezmoIngestionKey,
-                          host: mezmoHost,
-                          tags: e.target.value
-                        };
-                        localStorage.setItem('mezmo-config', JSON.stringify(updatedConfig));
-                      }
+                      // Config will be saved to server when user clicks Save button
                     }}
                     placeholder={isPresetConfiguration ? "Configured from file" : "restaurant-app,demo,production"}
                     className={isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''}
