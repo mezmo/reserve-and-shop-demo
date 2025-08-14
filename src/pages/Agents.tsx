@@ -112,7 +112,11 @@ const Agents = () => {
 
   // Configuration management state
   const [availableConfigs, setAvailableConfigs] = useState<Record<string, AgentConfiguration>>({});
-  const [activeConfig, setActiveConfig] = useState<string>('custom');
+  // Load saved active config on initialization, defaulting to 'custom' if not found
+  const [activeConfig, setActiveConfig] = useState<string>(() => {
+    const saved = localStorage.getItem('agents-active-config');
+    return saved || 'custom';
+  });
   const [hasFileConfig, setHasFileConfig] = useState(false);
 
   // Mezmo configuration state
@@ -261,11 +265,21 @@ const Agents = () => {
             
             // Check for saved active config first, then use default
             const savedActiveConfig = localStorage.getItem('agents-active-config');
-            let configToApply = data.defaultConfig;
+            let configToApply = savedActiveConfig;
             
+            // If saved config exists and is available in file configs, use it
             if (savedActiveConfig && data.configurations[savedActiveConfig]) {
               configToApply = savedActiveConfig;
-            } else if (data.defaultConfig && data.configurations[data.defaultConfig]) {
+            } 
+            // If saved config is 'custom', keep it as custom
+            else if (savedActiveConfig === 'custom') {
+              configToApply = 'custom';
+              setActiveConfig('custom');
+              // Don't apply configuration for custom, let localStorage values be used
+              return;
+            }
+            // Otherwise fall back to default from file
+            else if (data.defaultConfig && data.configurations[data.defaultConfig]) {
               configToApply = data.defaultConfig;
             }
             
