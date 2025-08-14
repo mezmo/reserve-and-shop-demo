@@ -96,37 +96,38 @@ export abstract class BaseLogger {
     this.logBuffer = [];
 
     try {
-      // Store logs in localStorage for persistence and debugging
-      this.storeInLocalStorage(content);
+      // Send logs to server instead of localStorage
+      this.sendToServerLog(content);
       
-      // Try to write using navigator.sendBeacon for reliable delivery  
+      // Also try sendBeacon for reliability (backup method)
       this.sendToServer(content);
     } catch (error) {
       console.warn(`Could not flush ${this.getLoggerType()} log buffer:`, error);
     }
   }
 
-  private storeInLocalStorage(content: string): void {
+  private sendToServerLog(content: string): void {
     try {
-      const storageKey = `${this.getLoggerType()}-logs`;
-      const existingLogs = localStorage.getItem(storageKey) || '[]';
-      const logs = JSON.parse(existingLogs);
-      
-      logs.push({
+      const logEntry = {
         timestamp: new Date().toISOString(),
         content,
         session: this.sessionId,
-        loggerType: this.getLoggerType()
+        loggerType: this.getLoggerType(),
+        type: this.getLoggerType()
+      };
+      
+      // Send to appropriate server endpoint based on logger type
+      const endpoint = this.getLoggerType() === 'event' ? 'events' : this.getLoggerType();
+      
+      fetch(`${window.location.origin.replace(':8080', ':3001')}/api/logs/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(logEntry)
+      }).catch(error => {
+        console.warn(`Could not send ${this.getLoggerType()} log to server:`, error);
       });
-      
-      // Keep only last 100 logs to prevent storage overflow
-      if (logs.length > 100) {
-        logs.splice(0, logs.length - 100);
-      }
-      
-      localStorage.setItem(storageKey, JSON.stringify(logs));
     } catch (error) {
-      console.warn(`Could not store ${this.getLoggerType()} logs in localStorage:`, error);
+      console.warn(`Error preparing ${this.getLoggerType()} log for server:`, error);
     }
   }
 
@@ -161,23 +162,27 @@ export abstract class BaseLogger {
     return { ...this.config };
   }
 
-  // Get stored logs from localStorage
-  getStoredLogs(): any[] {
+  // Get stored logs from server
+  async getStoredLogs(): Promise<any[]> {
     try {
-      const storageKey = `${this.getLoggerType()}-logs`;
-      const logs = localStorage.getItem(storageKey);
-      return logs ? JSON.parse(logs) : [];
-    } catch {
-      return [];
+      const endpoint = this.getLoggerType() === 'event' ? 'events' : this.getLoggerType();
+      const response = await fetch(`${window.location.origin.replace(':8080', ':3001')}/api/logs/recent/${endpoint}`);
+      
+      if (response.ok) {
+        const result = await response.json();
+        return result.success ? result.logs : [];
+      }
+    } catch (error) {
+      console.error(`Error fetching ${this.getLoggerType()} logs from server:`, error);
     }
+    return [];
   }
 
-  // Clear stored logs
-  clearStoredLogs(): void {
+  // Clear stored logs (server memory buffer only)
+  async clearStoredLogs(): Promise<void> {
     try {
-      const storageKey = `${this.getLoggerType()}-logs`;
-      localStorage.removeItem(storageKey);
-      console.log(`🧹 ${this.getLoggerType()} logs cleared from localStorage`);
+      console.log(`🧹 ${this.getLoggerType()} logs clear requested (server-side memory buffer only)`);
+      // Server doesn't implement clear functionality yet, but logs are rotated automatically
     } catch (error) {
       console.error(`Error clearing ${this.getLoggerType()} logs:`, error);
     }

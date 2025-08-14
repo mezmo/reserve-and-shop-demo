@@ -355,30 +355,93 @@ const Config = () => {
     window.location.reload();
   };
 
-  const handleRefreshLocalStorage = () => {
-    const dataStore = DataStore.getInstance();
-    dataStore.refreshFromDefaults();
-    toast({
-      title: "Local Storage Refreshed",
-      description: "All cached data has been refreshed with latest defaults."
-    });
-    // Refresh the page to show updated data
-    window.location.reload();
+  const handleResetToDefaults = async () => {
+    try {
+      const dataStore = DataStore.getInstance();
+      dataStore.refreshFromDefaults();
+      
+      // Manually trigger summary refresh without page reload
+      setSummaryRefresh(prev => prev + 1);
+      
+      toast({
+        title: "Data Reset to Defaults",
+        description: "All data has been reset to default values (products, empty orders/reservations)."
+      });
+    } catch (error) {
+      console.error('Error resetting data:', error);
+      toast({
+        title: "Reset Failed",
+        description: "Failed to reset data. Please try again.",
+        variant: "destructive"
+      });
+    }
   };
 
   const [summaryRefresh, setSummaryRefresh] = useState(0);
 
-  const getCurrentDataSummary = () => {
-    const dataStore = DataStore.getInstance();
-    const data = dataStore.getAllData();
-    return {
-      products: data.products.length,
-      reservations: data.reservations.length,
-      orders: data.orders.length
-    };
+  const getCurrentDataSummary = async () => {
+    try {
+      // Fetch data directly from server endpoints to ensure real-time accuracy
+      const baseUrl = window.location.origin.replace(':8080', ':3001');
+      
+      const [productsResponse, reservationsResponse, ordersResponse] = await Promise.all([
+        fetch(`${baseUrl}/api/products`),
+        fetch(`${baseUrl}/api/reservations`),
+        fetch(`${baseUrl}/api/orders`)
+      ]);
+
+      const products = productsResponse.ok ? await productsResponse.json() : [];
+      const reservations = reservationsResponse.ok ? await reservationsResponse.json() : [];
+      const orders = ordersResponse.ok ? await ordersResponse.json() : [];
+
+      return {
+        products: products?.length || 0,
+        reservations: reservations?.length || 0,
+        orders: orders?.length || 0
+      };
+    } catch (error) {
+      console.error('Error getting data summary from server:', error);
+      
+      // Fallback to DataStore cache if server requests fail
+      try {
+        const dataStore = DataStore.getInstance();
+        const data = await dataStore.getAllData();
+        return {
+          products: data.products?.length || 0,
+          reservations: data.reservations?.length || 0,
+          orders: data.orders?.length || 0
+        };
+      } catch (fallbackError) {
+        console.error('Error getting data summary from fallback:', fallbackError);
+        return {
+          products: 0,
+          reservations: 0,
+          orders: 0
+        };
+      }
+    }
   };
 
-  const summary = useMemo(() => getCurrentDataSummary(), [summaryRefresh]);
+  const [summary, setSummary] = useState({ products: 0, reservations: 0, orders: 0 });
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  useEffect(() => {
+    const loadSummary = async () => {
+      const newSummary = await getCurrentDataSummary();
+      setSummary(newSummary);
+      setLastUpdated(new Date());
+    };
+    
+    // Initial load
+    loadSummary();
+    
+    // Set up polling every 5 seconds to keep data in sync with server
+    const summaryInterval = setInterval(loadSummary, 5000);
+    
+    return () => {
+      clearInterval(summaryInterval);
+    };
+  }, [summaryRefresh]);
 
   const handlePerformanceConfigChange = (key: string, value: any) => {
     updateConfig({ [key]: value });
@@ -606,7 +669,7 @@ const Config = () => {
       try {
         const customer = generateRandomCustomer();
         const paymentInfo = generateRandomPaymentInfo();
-        const orderData = generateRandomOrder(customer, sampleOrdersType);
+        const orderData = await generateRandomOrder(customer, sampleOrdersType);
 
         // Create order using DataStore (like CheckoutDialog does)
         const dataStore = DataStore.getInstance();
@@ -1040,9 +1103,9 @@ const Config = () => {
     };
   };
 
-  const generateRandomOrder = (customer: any, orderType: string) => {
+  const generateRandomOrder = async (customer: any, orderType: string) => {
     const dataStore = DataStore.getInstance();
-    const availableProducts = dataStore.getProducts().filter(p => p.available);
+    const availableProducts = (await dataStore.getProducts()).filter(p => p.available);
     
     if (availableProducts.length === 0) {
       throw new Error('No available products to create orders');
@@ -1259,18 +1322,19 @@ const Config = () => {
 
   // Initialize traffic manager and poll stats
   useEffect(() => {
-    let trafficManager: any = null;
     let statsInterval: NodeJS.Timeout | null = null;
 
     const initTraffic = async () => {
       try {
-        console.log('🔧 Initializing Traffic Manager...');
-        const { TrafficManager } = await import('@/lib/tracing/trafficManager');
-        trafficManager = TrafficManager.getInstance();
+        console.log('🔧 Initializing Traffic Manager via API...');
         
-        // Load saved configuration
-        const config = trafficManager.getConfig();
-        console.log('📋 Loaded traffic config:', config);
+        // Load saved configuration from server
+        const configResponse = await fetch('/api/traffic/config');
+        if (!configResponse.ok) {
+          throw new Error(`Failed to fetch config: ${configResponse.statusText}`);
+        }
+        const { config } = await configResponse.json();
+        console.log('📋 Loaded traffic config from server:', config);
         
         setTrafficEnabled(config.enabled);
         setTrafficTargetUsers(config.targetConcurrentUsers);
@@ -1279,20 +1343,19 @@ const Config = () => {
         
         console.log(`🎛️ UI State set - Enabled: ${config.enabled}, Users: ${config.targetConcurrentUsers}, Pattern: ${config.journeyPattern}, Timing: ${config.trafficTiming}`);
         
-        // Start traffic if enabled
-        if (config.enabled) {
-          console.log('▶️ Auto-starting traffic manager...');
-          trafficManager.start();
-        } else {
-          console.log('⏸️ Traffic manager disabled, not starting');
-        }
-
         // Poll stats every 5 seconds
-        const updateStats = () => {
-          const stats = trafficManager.getStats();
-          setTrafficStats(stats);
-          if (stats.activeUsers > 0) {
-            console.log('📊 Traffic stats:', stats);
+        const updateStats = async () => {
+          try {
+            const statsResponse = await fetch('/api/traffic/status');
+            if (statsResponse.ok) {
+              const { stats } = await statsResponse.json();
+              setTrafficStats(stats);
+              if (stats.activeUsers > 0) {
+                console.log('📊 Traffic stats from server:', stats);
+              }
+            }
+          } catch (error) {
+            console.warn('Failed to fetch traffic stats:', error);
           }
         };
 
@@ -1310,7 +1373,6 @@ const Config = () => {
       if (statsInterval) {
         clearInterval(statsInterval);
       }
-      // Don't destroy the traffic manager - let it persist globally
     };
   }, []);
 
@@ -1318,8 +1380,6 @@ const Config = () => {
   const handleTrafficToggle = async (enabled: boolean) => {
     try {
       console.log(`🔄 Toggling traffic: ${enabled ? 'ON' : 'OFF'}`);
-      const { TrafficManager } = await import('@/lib/tracing/trafficManager');
-      const trafficManager = TrafficManager.getInstance();
       
       setTrafficEnabled(enabled);
       
@@ -1330,8 +1390,21 @@ const Config = () => {
         trafficTiming: trafficTiming
       };
 
-      console.log('🔧 Updating traffic config:', config);
-      trafficManager.updateConfig(config);
+      console.log('🔧 Updating traffic config via API:', config);
+      
+      const endpoint = enabled ? '/api/traffic/start' : '/api/traffic/stop';
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to ${enabled ? 'start' : 'stop'} traffic: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('✅ Traffic toggle response:', result);
 
       toast({
         title: enabled ? "Virtual Traffic Started" : "Virtual Traffic Stopped",
@@ -1342,6 +1415,8 @@ const Config = () => {
 
     } catch (error) {
       console.error('❌ Error toggling traffic:', error);
+      // Revert the UI state on error
+      setTrafficEnabled(!enabled);
       toast({
         title: "Error",
         description: "Failed to toggle virtual traffic",
@@ -1352,16 +1427,24 @@ const Config = () => {
 
   const handleTrafficUsersChange = async (users: number) => {
     try {
-      const { TrafficManager } = await import('@/lib/tracing/trafficManager');
-      const trafficManager = TrafficManager.getInstance();
-      
       setTrafficTargetUsers(users);
       
-      trafficManager.updateConfig({
+      const config = {
+        enabled: trafficEnabled,
         targetConcurrentUsers: users,
         journeyPattern: trafficPattern,
         trafficTiming: trafficTiming
+      };
+
+      const response = await fetch('/api/traffic/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
       });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update traffic users: ${response.statusText}`);
+      }
 
     } catch (error) {
       console.error('Error updating traffic users:', error);
@@ -1370,17 +1453,24 @@ const Config = () => {
 
   const handleTrafficPatternChange = async (pattern: 'mixed' | 'buyers' | 'browsers' | 'researchers') => {
     try {
-      const { TrafficManager } = await import('@/lib/tracing/trafficManager');
-      const trafficManager = TrafficManager.getInstance();
-      
       setTrafficPattern(pattern);
       
-      trafficManager.updateConfig({
+      const config = {
         enabled: trafficEnabled,
         targetConcurrentUsers: trafficTargetUsers,
         journeyPattern: pattern,
         trafficTiming: trafficTiming
+      };
+
+      const response = await fetch('/api/traffic/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
       });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update traffic pattern: ${response.statusText}`);
+      }
 
     } catch (error) {
       console.error('Error updating traffic pattern:', error);
@@ -1389,17 +1479,24 @@ const Config = () => {
 
   const handleTrafficTimingChange = async (timing: 'steady' | 'normal' | 'peak' | 'low' | 'burst') => {
     try {
-      const { TrafficManager } = await import('@/lib/tracing/trafficManager');
-      const trafficManager = TrafficManager.getInstance();
-      
       setTrafficTiming(timing);
       
-      trafficManager.updateConfig({
+      const config = {
         enabled: trafficEnabled,
         targetConcurrentUsers: trafficTargetUsers,
         journeyPattern: trafficPattern,
         trafficTiming: timing
+      };
+
+      const response = await fetch('/api/traffic/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
       });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update traffic timing: ${response.statusText}`);
+      }
 
     } catch (error) {
       console.error('Error updating traffic timing:', error);
@@ -1437,17 +1534,32 @@ const Config = () => {
                 <div className="text-sm text-muted-foreground">Orders</div>
               </div>
             </div>
-            <div className="flex justify-center">
-              <Button 
-                onClick={handleRefreshLocalStorage}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
-              >
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Refresh Local Storage
-              </Button>
+            <div className="flex flex-col items-center space-y-3">
+              {lastUpdated && (
+                <p className="text-xs text-muted-foreground">
+                  Last updated: {lastUpdated.toLocaleTimeString()} (auto-updates every 5s)
+                </p>
+              )}
+              <div className="flex gap-2">
+                <Button 
+                  onClick={() => setSummaryRefresh(prev => prev + 1)}
+                  variant="outline"
+                  size="sm"
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Refresh Now
+                </Button>
+                <Button 
+                  onClick={handleResetToDefaults}
+                  variant="destructive"
+                  size="sm"
+                >
+                  Reset to Defaults
+                </Button>
+              </div>
             </div>
             <p className="text-sm text-muted-foreground text-center">
-              Clears cached data and reloads with latest defaults (including updated menu images)
+              Data refreshes automatically every 5 seconds to stay in sync with server
             </p>
           </CardContent>
         </Card>

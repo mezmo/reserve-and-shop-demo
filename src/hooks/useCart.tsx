@@ -1,6 +1,6 @@
 import React, { useState, useContext, createContext, ReactNode } from 'react';
 import { useToast } from '@/hooks/use-toast';
-import { usePerformance } from '@/hooks/usePerformance';
+import { useCartTracking } from '@/hooks/useServerTracking';
 
 interface Product {
   id: string;
@@ -24,7 +24,7 @@ export const CartProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [cart, setCart] = useState<{ [key: string]: number }>({});
   const [cartProducts, setCartProducts] = useState<{ [key: string]: Product }>({});
   const { toast } = useToast();
-  const { logCartAction } = usePerformance();
+  const { trackAddToCart, trackRemoveFromCart } = useCartTracking();
 
   const addToCart = (product: Product) => {
     const startTime = performance.now();
@@ -50,10 +50,8 @@ export const CartProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return total + (prod ? prod.price * qty : 0);
     }, 0);
     
-    const duration = performance.now() - startTime;
-    
-    // Log the cart action with detailed information
-    logCartAction('ADD', product, quantityBefore, quantityAfter, cartTotal, duration);
+    // Log cart action with server-side tracking (matches virtual user logging)
+    trackAddToCart(product.id, product.name, 1, product.price, cartTotal);
     
     toast({
       title: "Added to cart",
@@ -93,10 +91,8 @@ export const CartProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return total + (prod ? prod.price * qty : 0);
     }, 0);
     
-    const duration = performance.now() - startTime;
-    
-    // Log the cart action with detailed information
-    logCartAction('REMOVE', product, quantityBefore, quantityAfter, cartTotal, duration);
+    // Log cart removal with server-side tracking (matches virtual user logging)
+    trackRemoveFromCart(product.id, product.name, 1, product.price, cartTotal);
   };
 
   const clearCart = () => {

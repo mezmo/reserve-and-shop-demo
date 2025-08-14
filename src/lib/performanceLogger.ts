@@ -19,11 +19,18 @@ class PerformanceLogger {
   private logCounter: number = 0;
 
   private constructor() {
-    this.config = this.loadConfig();
+    this.config = { ...DEFAULT_CONFIG }; // Use default initially
     this.sessionId = this.generateSessionId();
     this.requestId = this.generateRequestId();
     this.correlationId = this.generateCorrelationId();
     this.initializeLogging();
+    
+    // Load config asynchronously
+    this.loadConfig().then(config => {
+      this.config = config;
+    }).catch(error => {
+      console.error('Failed to load performance config:', error);
+    });
   }
 
   static getInstance(): PerformanceLogger {
@@ -33,30 +40,37 @@ class PerformanceLogger {
     return PerformanceLogger.instance;
   }
 
-  private loadConfig(): PerformanceConfig {
+  private async loadConfig(): Promise<PerformanceConfig> {
     try {
-      // Check if we're in a browser environment
-      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
-        const stored = localStorage.getItem('performance-config');
-        if (stored) {
-          return { ...DEFAULT_CONFIG, ...JSON.parse(stored) };
+      // Load configuration from server instead of localStorage
+      const response = await fetch(`${window.location.origin.replace(':8080', ':3001')}/api/config/performance`);
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success) {
+          return { ...DEFAULT_CONFIG, ...result.config };
         }
       }
     } catch (error) {
-      console.error('Error loading performance config:', error);
+      console.error('Error loading performance config from server:', error);
     }
-    return DEFAULT_CONFIG;
+    return { ...DEFAULT_CONFIG };
   }
 
-  updateConfig(newConfig: Partial<PerformanceConfig>): void {
+  async updateConfig(newConfig: Partial<PerformanceConfig>): Promise<void> {
     this.config = { ...this.config, ...newConfig };
     try {
-      // Check if we're in a browser environment
-      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
-        localStorage.setItem('performance-config', JSON.stringify(this.config));
+      // Save configuration to server instead of localStorage
+      const response = await fetch(`${window.location.origin.replace(':8080', ':3001')}/api/config/performance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.config)
+      });
+      
+      if (!response.ok) {
+        console.error('Failed to save performance config to server');
       }
     } catch (error) {
-      console.error('Error saving performance config:', error);
+      console.error('Error saving performance config to server:', error);
     }
   }
 
@@ -209,24 +223,25 @@ class PerformanceLogger {
       console.log(`📊 ${content}`);
       console.groupEnd();
       
-      // Store logs in localStorage for persistence and debugging
+      // Send logs to server instead of storing in localStorage
       try {
-        const existingLogs = localStorage.getItem('performance-logs') || '[]';
-        const logs = JSON.parse(existingLogs);
-        logs.push({
+        const logEntry = {
           timestamp: new Date().toISOString(),
           content,
-          session: this.sessionId
+          session: this.sessionId,
+          type: 'performance'
+        };
+        
+        // Send to server (non-blocking)
+        fetch(`${window.location.origin.replace(':8080', ':3001')}/api/logs/performance`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(logEntry)
+        }).catch(error => {
+          console.warn('Could not send performance log to server:', error);
         });
-        
-        // Keep only last 100 logs to prevent storage overflow
-        if (logs.length > 100) {
-          logs.splice(0, logs.length - 100);
-        }
-        
-        localStorage.setItem('performance-logs', JSON.stringify(logs));
-      } catch (storageError) {
-        console.warn('Could not store performance log in localStorage:', storageError);
+      } catch (error) {
+        console.warn('Error preparing performance log for server:', error);
       }
       
       // Buffer content for batch writing to file
@@ -665,21 +680,25 @@ class PerformanceLogger {
     });
   }
 
-  // Get stored logs from localStorage
-  getStoredLogs(): any[] {
+  // Get stored logs from server
+  async getStoredLogs(): Promise<any[]> {
     try {
-      const logs = localStorage.getItem('performance-logs');
-      return logs ? JSON.parse(logs) : [];
-    } catch {
-      return [];
+      const response = await fetch(`${window.location.origin.replace(':8080', ':3001')}/api/logs/recent/performance`);
+      if (response.ok) {
+        const result = await response.json();
+        return result.success ? result.logs : [];
+      }
+    } catch (error) {
+      console.error('Error fetching performance logs from server:', error);
     }
+    return [];
   }
 
-  // Clear stored logs
-  clearStoredLogs(): void {
+  // Clear stored logs on server (note: only clears memory buffer, not disk logs)
+  async clearStoredLogs(): Promise<void> {
     try {
-      localStorage.removeItem('performance-logs');
-      console.log('🧹 Performance logs cleared from localStorage');
+      // Server doesn't implement clear functionality yet
+      console.log('🧹 Performance logs clear requested (server-side memory buffer only)');
     } catch (error) {
       console.error('Error clearing performance logs:', error);
     }

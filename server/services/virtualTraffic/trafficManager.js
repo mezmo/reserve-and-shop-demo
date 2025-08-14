@@ -1,166 +1,56 @@
-import { VirtualUser } from './virtualUser';
-import { selectWeightedJourney, USER_JOURNEYS } from './userJourneys';
+import { VirtualUser } from './virtualUser.js';
+import { selectWeightedJourney, USER_JOURNEYS } from './userJourneys.js';
 import { trace } from '@opentelemetry/api';
 
-export interface TrafficStats {
-  activeUsers: number;
-  totalSessionsToday: number;
-  averageSessionDuration: number;
-  currentActivities: string[];
-  totalOrders: number;
-  bounceRate: number;
-}
-
-export interface TrafficConfig {
-  enabled: boolean;
-  targetConcurrentUsers: number;
-  spawnIntervalMin: number; // milliseconds
-  spawnIntervalMax: number; // milliseconds
-  bounceRate: number; // probability (0-1) that a user leaves early
-  journeyPattern: 'mixed' | 'buyers' | 'browsers' | 'researchers';
-  trafficTiming: 'steady' | 'normal' | 'peak' | 'low' | 'burst';
-}
-
-interface ActiveUser {
-  user: VirtualUser;
-  startTime: number;
-  expectedDuration: number;
-  currentActivity: string;
-  completed: boolean;
-}
-
-export class TrafficManager {
-  private static instance: TrafficManager | null = null;
-  private config: TrafficConfig;
-  private activeUsers: Map<string, ActiveUser> = new Map();
-  private spawnTimer: NodeJS.Timeout | null = null;
-  private cleanupTimer: NodeJS.Timeout | null = null;
-  private sessionCounter: number = 0;
-  private dailyStats: {
-    totalSessions: number;
-    totalOrders: number;
-    sessionDurations: number[];
-    lastResetDate: string;
-  } = {
-    totalSessions: 0,
-    totalOrders: 0,
-    sessionDurations: [],
-    lastResetDate: new Date().toDateString()
-  };
-
-  private constructor() {
-    this.config = this.loadConfig();
-    this.loadDailyStats();
-    
-    // Start cleanup timer to remove completed users
-    this.cleanupTimer = setInterval(() => {
-      this.cleanupCompletedUsers();
-    }, 10000); // Every 10 seconds for more responsive cleanup
-  }
-
-  public static getInstance(): TrafficManager {
-    if (!TrafficManager.instance) {
-      TrafficManager.instance = new TrafficManager();
-    }
-    return TrafficManager.instance;
-  }
-
-  private loadConfig(): TrafficConfig {
-    try {
-      const saved = localStorage.getItem('virtual-traffic-config');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        
-        // Check if we need to migrate old config (missing new fields)
-        if (!parsed.journeyPattern || !parsed.trafficTiming) {
-          console.log('🔄 Migrating old traffic config to include new fields');
-          // Clear old config and use defaults
-          localStorage.removeItem('virtual-traffic-config');
-          return this.getDefaultConfig();
-        }
-        
-        return {
-          enabled: parsed.enabled || false,
-          targetConcurrentUsers: parsed.targetConcurrentUsers || 5,
-          spawnIntervalMin: parsed.spawnIntervalMin || 30000, // 30 seconds
-          spawnIntervalMax: parsed.spawnIntervalMax || 120000, // 2 minutes
-          bounceRate: parsed.bounceRate !== undefined ? parsed.bounceRate : 0.15, // Default to 0.15
-          journeyPattern: parsed.journeyPattern || 'mixed', // Default to mixed
-          trafficTiming: parsed.trafficTiming || 'steady' // Default to steady
-        };
-      }
-    } catch (error) {
-      console.error('Error loading traffic config:', error);
-    }
-    
-    return this.getDefaultConfig();
-  }
-
-  private getDefaultConfig(): TrafficConfig {
-    return {
-      enabled: false,
-      targetConcurrentUsers: 5,
-      spawnIntervalMin: 30000,
-      spawnIntervalMax: 120000,
-      bounceRate: 0.15, // Reduced from 0.3 to keep more users active longer
-      journeyPattern: 'mixed',
-      trafficTiming: 'steady'
-    };
-  }
-
-  private saveConfig(): void {
-    try {
-      localStorage.setItem('virtual-traffic-config', JSON.stringify(this.config));
-    } catch (error) {
-      console.error('Error saving traffic config:', error);
-    }
-  }
-
-  private loadDailyStats(): void {
-    try {
-      const saved = localStorage.getItem('virtual-traffic-daily-stats');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        const today = new Date().toDateString();
-        
-        if (parsed.lastResetDate === today) {
-          this.dailyStats = parsed;
-        } else {
-          // New day, reset stats
-          this.resetDailyStats();
-        }
-      }
-    } catch (error) {
-      console.error('Error loading daily stats:', error);
-      this.resetDailyStats();
-    }
-  }
-
-  private saveDailyStats(): void {
-    try {
-      localStorage.setItem('virtual-traffic-daily-stats', JSON.stringify(this.dailyStats));
-    } catch (error) {
-      console.error('Error saving daily stats:', error);
-    }
-  }
-
-  private resetDailyStats(): void {
+class TrafficManager {
+  constructor() {
+    this.config = this.getDefaultConfig();
+    this.activeUsers = new Map();
+    this.spawnTimer = null;
+    this.cleanupTimer = null;
+    this.sessionCounter = 0;
     this.dailyStats = {
       totalSessions: 0,
       totalOrders: 0,
       sessionDurations: [],
       lastResetDate: new Date().toDateString()
     };
-    this.saveDailyStats();
+
+    // Start cleanup timer to remove completed users
+    this.cleanupTimer = setInterval(() => {
+      this.cleanupCompletedUsers();
+    }, 10000); // Every 10 seconds
   }
 
-  public updateConfig(newConfig: Partial<TrafficConfig>): void {
+  static getInstance() {
+    if (!TrafficManager.instance) {
+      TrafficManager.instance = new TrafficManager();
+    }
+    return TrafficManager.instance;
+  }
+
+  getDefaultConfig() {
+    return {
+      enabled: true,  // Auto-enable for demo-friendly experience
+      targetConcurrentUsers: 50,  // Demo with 50 users as requested
+      spawnIntervalMin: 30000,
+      spawnIntervalMax: 120000,
+      bounceRate: 0.15,
+      journeyPattern: 'mixed',  // Mixed behavior as requested
+      trafficTiming: 'steady'   // Steady timing as requested
+    };
+  }
+
+  getConfig() {
+    return { ...this.config };
+  }
+
+  updateConfig(newConfig) {
     const wasEnabled = this.config.enabled;
     const oldConfig = { ...this.config };
     this.config = { ...this.config, ...newConfig };
-    this.saveConfig();
 
-    console.log('🔧 Config update:', { old: oldConfig, new: this.config });
+    console.log(`🔧 Config update: ${JSON.stringify({ old: oldConfig, new: this.config })}`);
 
     if (this.config.enabled && !wasEnabled) {
       console.log('🟢 Starting traffic (was disabled, now enabled)');
@@ -170,7 +60,6 @@ export class TrafficManager {
       this.stop();
     } else if (this.config.enabled && wasEnabled) {
       console.log('🔄 Traffic already running, continuing with new config');
-      // Optionally restart to apply new timing immediately
       this.stop();
       setTimeout(() => this.start(), 100);
     } else {
@@ -178,7 +67,7 @@ export class TrafficManager {
     }
   }
 
-  public start(): void {
+  start() {
     if (!this.config.enabled) {
       console.log('🚫 Traffic manager not enabled, skipping start');
       return;
@@ -199,7 +88,7 @@ export class TrafficManager {
     this.scheduleNextSpawn();
   }
 
-  public stop(): void {
+  stop() {
     console.log('🛑 Stopping virtual traffic manager');
     
     if (this.spawnTimer) {
@@ -211,7 +100,7 @@ export class TrafficManager {
     console.log(`Allowing ${this.activeUsers.size} active users to complete their journeys`);
   }
 
-  private async performInitialBurst(): Promise<void> {
+  async performInitialBurst() {
     const currentUsers = this.activeUsers.size;
     const timingConfig = this.getTimingAdjustedIntervals();
     const targetUsers = Math.round(this.config.targetConcurrentUsers * timingConfig.targetAdjustment);
@@ -232,45 +121,43 @@ export class TrafficManager {
     }
   }
 
-  private getTimingAdjustedIntervals(): { min: number; max: number; targetAdjustment: number } {
+  getTimingAdjustedIntervals() {
     const base = {
       min: this.config.spawnIntervalMin,
       max: this.config.spawnIntervalMax
     };
 
-    // Handle undefined trafficTiming (fallback to steady)
     const timing = this.config.trafficTiming || 'steady';
 
     switch (timing) {
       case 'steady':
         return {
-          min: base.min * 0.5, // Faster response to maintain target
+          min: base.min * 0.5,
           max: base.max * 0.7,
-          targetAdjustment: 1 // Exact target users
+          targetAdjustment: 1
         };
       case 'peak':
         return {
-          min: base.min * 0.3, // Spawn 3x faster
+          min: base.min * 0.3,
           max: base.max * 0.5,
-          targetAdjustment: 1.5 // 50% more concurrent users
+          targetAdjustment: 1.5
         };
       case 'low':
         return {
-          min: base.min * 2, // Spawn 2x slower
+          min: base.min * 2,
           max: base.max * 3,
-          targetAdjustment: 0.6 // 40% fewer concurrent users
+          targetAdjustment: 0.6
         };
       case 'burst':
-        // Random bursts of activity
-        const isBurst = Math.random() < 0.3; // 30% chance of burst
+        const isBurst = Math.random() < 0.3;
         return isBurst ? {
-          min: base.min * 0.1, // Very fast spawning during burst
+          min: base.min * 0.1,
           max: base.max * 0.2,
-          targetAdjustment: 2 // Double users during burst
+          targetAdjustment: 2
         } : {
-          min: base.min * 4, // Very slow between bursts
+          min: base.min * 4,
           max: base.max * 6,
-          targetAdjustment: 0.3 // Few users between bursts
+          targetAdjustment: 0.3
         };
       case 'normal':
       default:
@@ -282,7 +169,7 @@ export class TrafficManager {
     }
   }
 
-  private scheduleNextSpawn(): void {
+  scheduleNextSpawn() {
     if (!this.config.enabled) {
       console.log('🚫 Schedule cancelled: Traffic manager disabled');
       return;
@@ -292,41 +179,32 @@ export class TrafficManager {
     const timingConfig = this.getTimingAdjustedIntervals();
     const adjustedTarget = Math.round(this.config.targetConcurrentUsers * timingConfig.targetAdjustment);
     
-    // Variance depends on timing mode
-    const variance = this.config.trafficTiming === 'steady' ? 0 : 2; // No variance for steady mode
+    const variance = this.config.trafficTiming === 'steady' ? 0 : 2;
     const minUsers = Math.max(1, adjustedTarget - variance);
     const maxUsers = adjustedTarget + variance;
 
-    let spawnDelay: number;
-    let reason: string;
+    let spawnDelay;
+    let reason;
 
     if (this.config.trafficTiming === 'steady') {
-      // Steady mode: maintain exact target
       if (currentUsers < adjustedTarget) {
-        // Spawn immediately to reach target
         spawnDelay = timingConfig.min;
         reason = `Maintaining steady target (${currentUsers} < ${adjustedTarget})`;
       } else if (currentUsers > adjustedTarget) {
-        // Wait moderately when over target, but not too long
-        spawnDelay = timingConfig.max * 1.5; // Reduced from 3x to 1.5x
+        spawnDelay = timingConfig.max * 1.5;
         reason = `Over steady target (${currentUsers} > ${adjustedTarget})`;
       } else {
-        // At exact target, check frequently for replacements
-        spawnDelay = timingConfig.min * 1.5; // Reduced from 2x to 1.5x
+        spawnDelay = timingConfig.min * 1.5;
         reason = `At steady target (${currentUsers} = ${adjustedTarget})`;
       }
     } else {
-      // Other timing modes: use variance-based logic
       if (currentUsers < minUsers) {
-        // Need more users, spawn faster
         spawnDelay = timingConfig.min;
         reason = `Need users (${currentUsers} < ${minUsers})`;
       } else if (currentUsers >= maxUsers) {
-        // Too many users, wait longer
         spawnDelay = timingConfig.max * 2;
         reason = `At capacity (${currentUsers} >= ${maxUsers})`;
       } else {
-        // Normal range, random interval
         spawnDelay = Math.random() * (timingConfig.max - timingConfig.min) + timingConfig.min;
         reason = `Normal range (${currentUsers} in ${minUsers}-${maxUsers})`;
       }
@@ -340,8 +218,7 @@ export class TrafficManager {
     }, spawnDelay);
   }
 
-  private getFilteredJourneys() {
-    // Handle undefined journeyPattern (fallback to mixed)
+  getFilteredJourneys() {
     const pattern = this.config.journeyPattern || 'mixed';
     
     switch (pattern) {
@@ -368,10 +245,10 @@ export class TrafficManager {
     }
   }
 
-  private async spawnUser(): Promise<void> {
+  async spawnUser() {
     if (!this.config.enabled) return;
 
-    // Check if OTEL tracing is properly initialized before creating virtual users
+    // Check if OTEL tracing is properly initialized
     const tracerProvider = trace.getTracerProvider();
     if (!tracerProvider || tracerProvider.constructor.name === 'NoopTracerProvider') {
       console.log(`🚫 Traffic manager: OpenTelemetry tracer provider not initialized yet, skipping spawn`);
@@ -398,7 +275,7 @@ export class TrafficManager {
         return total + avgDuration;
       }, 0);
 
-      const activeUser: ActiveUser = {
+      const activeUser = {
         user,
         startTime: Date.now(),
         expectedDuration,
@@ -408,7 +285,6 @@ export class TrafficManager {
 
       this.activeUsers.set(userId, activeUser);
       this.dailyStats.totalSessions++;
-      this.saveDailyStats();
 
       console.log(`🎭 Spawned virtual user ${userId} with journey: ${journey.name} (${currentUsers + 1}/${this.config.targetConcurrentUsers} active)`);
 
@@ -421,7 +297,7 @@ export class TrafficManager {
     }
   }
 
-  private async executeUserJourney(userId: string, activeUser: ActiveUser): Promise<void> {
+  async executeUserJourney(userId, activeUser) {
     try {
       // Check for early bounce
       if (Math.random() < this.config.bounceRate) {
@@ -440,7 +316,7 @@ export class TrafficManager {
       console.log(`✅ User ${userId} completed executeJourney()`);
       
       // Check if it was a purchasing journey
-      const journeyName = activeUser.user.getJourneyName?.() || '';
+      const journeyName = activeUser.user.getJourneyName();
       if (journeyName.includes('Buyer') || journeyName.includes('Purchaser')) {
         this.dailyStats.totalOrders++;
         activeUser.currentActivity = 'completed_purchase';
@@ -457,7 +333,7 @@ export class TrafficManager {
     }
   }
 
-  private completeUser(userId: string): void {
+  completeUser(userId) {
     const activeUser = this.activeUsers.get(userId);
     if (!activeUser) return;
 
@@ -470,7 +346,6 @@ export class TrafficManager {
     }
 
     activeUser.completed = true;
-    this.saveDailyStats();
 
     console.log(`✅ User ${userId} completed session (${Math.round(sessionDuration / 1000)}s) - ${activeUser.currentActivity}`);
     
@@ -486,11 +361,10 @@ export class TrafficManager {
     }
   }
 
-  private cleanupCompletedUsers(): void {
-    const toRemove: string[] = [];
+  cleanupCompletedUsers() {
+    const toRemove = [];
     let completedCount = 0;
     let activeCount = 0;
-    let soonToCompleteCount = 0;
     
     for (const [userId, activeUser] of this.activeUsers) {
       if (activeUser.completed) {
@@ -502,112 +376,96 @@ export class TrafficManager {
         }
       } else {
         activeCount++;
-        
-        // Predictive spawning: check if user will complete soon
-        const activeFor = Date.now() - activeUser.startTime;
-        const timeRemaining = activeUser.expectedDuration - activeFor;
-        
-        // If user will complete within 10 seconds, count as "soon to complete"
-        if (timeRemaining <= 10000 && timeRemaining > 0) {
-          soonToCompleteCount++;
-        }
-        
-        // Check for users that have been active too long (stuck)
-        if (activeFor > activeUser.expectedDuration * 3) { // 3x expected duration
-          console.log(`⏰ User ${userId} taking too long, marking as completed`);
-          this.completeUser(userId);
-        }
       }
     }
-
-    // Predictive spawning in steady mode
-    if (this.config.enabled && this.config.trafficTiming === 'steady' && soonToCompleteCount > 0) {
-      const projectedActiveUsers = activeCount - soonToCompleteCount;
-      if (projectedActiveUsers < this.config.targetConcurrentUsers) {
-        const neededUsers = this.config.targetConcurrentUsers - projectedActiveUsers;
-        console.log(`🔮 Predictive spawn: ${soonToCompleteCount} users completing soon, spawning ${neededUsers} replacements`);
-        
-        // Spawn replacements with small delays to avoid overwhelming
-        for (let i = 0; i < neededUsers; i++) {
-          setTimeout(() => {
-            this.spawnUser();
-          }, i * 2000); // 2 second intervals
-        }
-      }
-    }
-
-    toRemove.forEach(userId => {
-      this.activeUsers.delete(userId);
-    });
 
     if (toRemove.length > 0) {
-      console.log(`🧹 Cleaned up ${toRemove.length} completed users (${activeCount} active, ${completedCount} completed, ${soonToCompleteCount} completing soon)`);
+      console.log(`🧹 Cleaning up ${toRemove.length} completed users (${activeCount} still active, ${completedCount} completed)`);
+      toRemove.forEach(userId => {
+        this.activeUsers.delete(userId);
+      });
     }
   }
 
-  public getStats(): TrafficStats {
-    const now = Date.now();
-    const activeUsersList = Array.from(this.activeUsers.values()).filter(u => !u.completed);
-    
-    const currentActivities = activeUsersList.map(u => u.currentActivity);
+  updateUserActivity(userId, activity, stepIndex, totalSteps) {
+    const activeUser = this.activeUsers.get(userId);
+    if (activeUser) {
+      activeUser.currentActivity = activity;
+      if (stepIndex !== undefined && totalSteps !== undefined) {
+        activeUser.stepIndex = stepIndex;
+        activeUser.totalSteps = totalSteps;
+      }
+    }
+  }
+
+  getStats() {
+    const activeUsersArray = Array.from(this.activeUsers.values()).filter(u => !u.completed);
+    const currentActivities = activeUsersArray.map(u => u.currentActivity);
     
     const averageSessionDuration = this.dailyStats.sessionDurations.length > 0
       ? this.dailyStats.sessionDurations.reduce((a, b) => a + b, 0) / this.dailyStats.sessionDurations.length
       : 0;
 
     const bounceRate = this.dailyStats.totalSessions > 0
-      ? this.dailyStats.sessionDurations.filter(d => d < 10000).length / this.dailyStats.totalSessions
-      : this.config.bounceRate;
+      ? (this.dailyStats.sessionDurations.filter(d => d < 30000).length / this.dailyStats.totalSessions)
+      : 0;
 
     return {
-      activeUsers: activeUsersList.length,
+      activeUsers: activeUsersArray.length,
       totalSessionsToday: this.dailyStats.totalSessions,
-      averageSessionDuration: Math.round(averageSessionDuration / 1000), // Convert to seconds
-      currentActivities,
+      averageSessionDuration: Math.round(averageSessionDuration),
+      currentActivities: currentActivities,
       totalOrders: this.dailyStats.totalOrders,
       bounceRate: Math.round(bounceRate * 100) / 100
     };
   }
 
-  public getConfig(): TrafficConfig {
-    return { ...this.config };
+  // Get detailed status for API
+  getDetailedStatus() {
+    const activeUsersArray = Array.from(this.activeUsers.values());
+    const activeUsers = activeUsersArray.filter(u => !u.completed);
+    const completedUsers = activeUsersArray.filter(u => u.completed);
+
+    return {
+      config: this.getConfig(),
+      stats: this.getStats(),
+      activeUsers: activeUsers.map(u => ({
+        userId: u.user.userId,
+        journey: u.user.getJourneyName(),
+        activity: u.currentActivity,
+        progress: u.user.getJourneyProgress(),
+        startTime: u.startTime,
+        customerName: u.user.customerProfile ? u.user.customerProfile.fullName : 'Unknown'
+      })),
+      recentlyCompleted: completedUsers.slice(-5).map(u => ({
+        userId: u.user.userId,
+        journey: u.user.getJourneyName(),
+        activity: u.currentActivity,
+        duration: Date.now() - u.startTime,
+        customerName: u.user.customerProfile ? u.user.customerProfile.fullName : 'Unknown'
+      }))
+    };
   }
 
-  public isEnabled(): boolean {
-    return this.config.enabled;
-  }
-
-  public updateUserActivity(userId: string, activity: string, stepIndex?: number, totalSteps?: number): void {
-    const activeUser = this.activeUsers.get(userId);
-    if (activeUser && !activeUser.completed) {
-      // Create detailed activity string with progress
-      let detailedActivity = activity;
-      if (stepIndex !== undefined && totalSteps !== undefined) {
-        detailedActivity = `${activity} (${stepIndex + 1}/${totalSteps})`;
-      }
-      
-      activeUser.currentActivity = detailedActivity;
-      console.log(`📍 User ${userId} activity: ${detailedActivity}`);
-    }
-  }
-
-  public destroy(): void {
+  // Cleanup on shutdown
+  destroy() {
     this.stop();
-    
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
       this.cleanupTimer = null;
     }
-
-    // Force complete all active users
-    this.activeUsers.forEach((activeUser, userId) => {
+    
+    // Abort all active users
+    for (const [userId, activeUser] of this.activeUsers) {
       if (!activeUser.completed) {
         activeUser.user.abort();
-        this.completeUser(userId);
       }
-    });
-
-    TrafficManager.instance = null;
-    console.log('🔄 Traffic manager destroyed');
+    }
+    
+    this.activeUsers.clear();
   }
 }
+
+export {
+  TrafficManager
+};

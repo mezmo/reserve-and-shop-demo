@@ -20,17 +20,28 @@ const Menu = () => {
   const { cart, addToCart, removeFromCart } = useCart();
 
   useEffect(() => {
-    const endTracking = trackDataFetch('Load menu products');
-    const dataStore = DataStore.getInstance();
-    setProducts(dataStore.getProducts());
-    endTracking();
+    const loadProducts = async () => {
+      const endTracking = trackDataFetch('Load menu products');
+      try {
+        const dataStore = DataStore.getInstance();
+        const productsData = await dataStore.getProducts();
+        setProducts(productsData);
+      } catch (error) {
+        console.error('Error loading products:', error);
+        setProducts([]); // Set empty array as fallback
+      } finally {
+        endTracking();
+      }
+    };
+    
+    loadProducts();
   }, [trackDataFetch]);
 
 
-  const categories = ['All', ...Array.from(new Set(products.map(p => p.category)))];
+  const categories = ['All', ...Array.from(new Set(products?.map(p => p.category) || []))];
   const filteredProducts = selectedCategory === 'All' 
-    ? products 
-    : products.filter(p => p.category === selectedCategory);
+    ? (products || [])
+    : (products || []).filter(p => p.category === selectedCategory);
 
   return (
     <div className="container mx-auto px-4 py-8">

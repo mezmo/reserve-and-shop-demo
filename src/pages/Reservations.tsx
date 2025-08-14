@@ -35,10 +35,21 @@ const Reservations = () => {
   const { toast } = useToast();
 
   useEffect(() => {
-    const endTracking = trackDataFetch('Load reservations');
-    const dataStore = DataStore.getInstance();
-    setReservations(dataStore.getReservations());
-    endTracking();
+    const loadReservations = async () => {
+      const endTracking = trackDataFetch('Load reservations');
+      try {
+        const dataStore = DataStore.getInstance();
+        const reservationsData = await dataStore.getReservations();
+        setReservations(reservationsData);
+      } catch (error) {
+        console.error('Error loading reservations:', error);
+        setReservations([]); // Set empty array as fallback
+      } finally {
+        endTracking();
+      }
+    };
+    
+    loadReservations();
   }, [trackDataFetch]);
 
   const timeSlots = [
@@ -49,7 +60,7 @@ const Reservations = () => {
 
   const partySizes = Array.from({ length: 12 }, (_, i) => i + 1);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!selectedDate || !formData.customerName || !formData.customerEmail || 
@@ -64,20 +75,31 @@ const Reservations = () => {
 
     const newReservation: Reservation = {
       id: Date.now().toString(),
-      customerName: formData.customerName,
-      customerEmail: formData.customerEmail,
-      customerPhone: formData.customerPhone,
+      name: formData.customerName,
+      email: formData.customerEmail,
+      phone: formData.customerPhone,
       date: format(selectedDate, 'yyyy-MM-dd'),
       time: formData.time,
-      partySize: parseInt(formData.partySize),
+      guests: parseInt(formData.partySize),
       specialRequests: formData.specialRequests,
       status: 'confirmed',
       createdAt: new Date().toISOString()
     };
 
-    const dataStore = DataStore.getInstance();
-    dataStore.addReservation(newReservation);
-    setReservations(dataStore.getReservations());
+    try {
+      const dataStore = DataStore.getInstance();
+      await dataStore.addReservation(newReservation);
+      const updatedReservations = await dataStore.getReservations();
+      setReservations(updatedReservations);
+    } catch (error) {
+      console.error('Error adding reservation:', error);
+      toast({
+        title: "Error",
+        description: "Failed to create reservation. Please try again.",
+        variant: "destructive"
+      });
+      return;
+    }
     
     // Reset form
     setFormData({
@@ -107,17 +129,27 @@ const Reservations = () => {
     }
   };
 
-  const updateReservationStatus = (reservationId: string, newStatus: 'confirmed' | 'pending' | 'cancelled') => {
+  const updateReservationStatus = async (reservationId: string, newStatus: 'confirmed' | 'pending' | 'cancelled') => {
     const dataStore = DataStore.getInstance();
     const reservation = reservations.find(r => r.id === reservationId);
     if (reservation) {
-      const updatedReservation = { ...reservation, status: newStatus };
-      dataStore.updateReservation(updatedReservation);
-      setReservations(dataStore.getReservations());
-      toast({
-        title: "Status Updated",
-        description: `Reservation status changed to ${newStatus}.`
-      });
+      try {
+        const updatedReservation = { ...reservation, status: newStatus };
+        await dataStore.updateReservation(updatedReservation);
+        const updatedReservations = await dataStore.getReservations();
+        setReservations(updatedReservations);
+        toast({
+          title: "Status Updated",
+          description: `Reservation status changed to ${newStatus}.`
+        });
+      } catch (error) {
+        console.error('Error updating reservation status:', error);
+        toast({
+          title: "Error",
+          description: "Failed to update reservation status. Please try again.",
+          variant: "destructive"
+        });
+      }
     }
   };
 
@@ -282,7 +314,7 @@ const Reservations = () => {
                     <div className="flex flex-col md:flex-row md:items-center justify-between">
                       <div className="flex-1">
                         <div className="flex items-center space-x-2 mb-2">
-                          <h3 className="font-semibold text-lg">{reservation.customerName}</h3>
+                          <h3 className="font-semibold text-lg">{reservation.name}</h3>
                           {getStatusIcon(reservation.status)}
                           <span className="text-sm capitalize text-muted-foreground">
                             {reservation.status}
@@ -299,12 +331,12 @@ const Reservations = () => {
                           </div>
                           <div className="flex items-center space-x-1">
                             <Users className="h-4 w-4" />
-                            <span>{reservation.partySize} people</span>
+                            <span>{reservation.guests} people</span>
                           </div>
                         </div>
                         <div className="mt-2 text-sm">
-                          <p>Email: {reservation.customerEmail}</p>
-                          <p>Phone: {reservation.customerPhone}</p>
+                          <p>Email: {reservation.email}</p>
+                          <p>Phone: {reservation.phone}</p>
                           {reservation.specialRequests && (
                             <p className="mt-1">
                               <span className="font-medium">Special requests:</span> {reservation.specialRequests}

@@ -23,14 +23,20 @@ async function checkOTELCollectorHealth(): Promise<boolean> {
 
 export async function initializeTracing() {
   try {
-    // Check if OTEL is enabled in config
-    const otelConfig = localStorage.getItem('otel-config');
-    if (!otelConfig) {
-      console.log('OTEL tracing not initialized: No configuration found');
+    // Check if OTEL is enabled in config from server
+    const response = await fetch(`${window.location.origin.replace(':8080', ':3001')}/api/config/otel`);
+    if (!response.ok) {
+      console.log('OTEL tracing not initialized: No configuration found on server');
       return null;
     }
     
-    const config = JSON.parse(otelConfig);
+    const result = await response.json();
+    if (!result.success) {
+      console.log('OTEL tracing not initialized: Failed to load configuration');
+      return null;
+    }
+    
+    const config = result.config;
     if (!config.enabled || !config.pipelines?.traces?.enabled) {
       console.log('OTEL tracing not initialized: Disabled in configuration');
       return null;
@@ -179,12 +185,15 @@ export async function initializeTracing() {
 }
 
 // Helper to check if tracing is enabled
-export function isTracingEnabled(): boolean {
+export async function isTracingEnabled(): Promise<boolean> {
   try {
-    const otelConfig = localStorage.getItem('otel-config');
-    if (!otelConfig) return false;
+    const response = await fetch(`${window.location.origin.replace(':8080', ':3001')}/api/config/otel`);
+    if (!response.ok) return false;
     
-    const config = JSON.parse(otelConfig);
+    const result = await response.json();
+    if (!result.success) return false;
+    
+    const config = result.config;
     return config.enabled && config.pipelines?.traces?.enabled;
   } catch {
     return false;

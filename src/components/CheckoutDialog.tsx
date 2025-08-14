@@ -16,7 +16,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useSessionTracker } from '@/hooks/useSessionTracker';
 import { DataStore } from '@/stores/dataStore';
 import { Order, OrderItem, Product } from '@/types';
-import PerformanceLogger from '@/lib/performanceLogger';
+import { usePaymentTracking, useFormTracking } from '@/hooks/useServerTracking';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { 
   formatCardNumber, 
@@ -58,6 +58,7 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
   
   const { toast } = useToast();
   const sessionTracker = useSessionTracker();
+  const { trackPaymentAttempt } = usePaymentTracking();
 
   const calculateTotal = () => {
     return Object.entries(cart).reduce((total, [productId, qty]) => {
@@ -122,15 +123,7 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
     }
     
     setIsLoading(true);
-    const performanceLogger = PerformanceLogger.getInstance();
     const startTime = Date.now();
-
-    // Debug: Check if performance logging is enabled
-    console.log('🔧 CheckoutDialog: Starting payment process', {
-      performanceLoggerEnabled: performanceLogger.getConfig().enabled,
-      customerName,
-      totalAmount: calculateTotal()
-    });
 
     // Start checkout tracing span
     const orderId = `order-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -154,7 +147,8 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
         });
       }
 
-      performanceLogger.logPaymentAttempt(
+      // Track payment initiation with server-side logging (includes sensitive data for Mezmo filtering tests)
+      await trackPaymentAttempt(
         {
           cardNumber,
           expiryDate,
@@ -170,20 +164,18 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
           orderId,
           amount: totalAmount,
           currency: 'USD',
-          orderType,
-          traceId: checkoutSpan?.spanContext().traceId,
-          spanId: checkoutSpan?.spanContext().spanId
+          orderType
         },
         'initiated'
       );
-      console.log('🔧 CheckoutDialog: Logged payment initiated for', orderId);
 
       // Log payment processing start
       if (checkoutSpan) {
         checkoutSpan.addEvent('payment_processing');
       }
 
-      performanceLogger.logPaymentAttempt(
+      // Track payment processing with server-side logging
+      await trackPaymentAttempt(
         {
           cardNumber,
           expiryDate,
@@ -199,9 +191,7 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
           orderId,
           amount: totalAmount,
           currency: 'USD',
-          orderType,
-          traceId: checkoutSpan?.spanContext().traceId,
-          spanId: checkoutSpan?.spanContext().spanId
+          orderType
         },
         'processing'
       );
@@ -248,7 +238,8 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
         checkoutSpan.setStatus({ code: SpanStatusCode.OK });
       }
 
-      performanceLogger.logPaymentAttempt(
+      // Track successful payment with server-side logging
+      await trackPaymentAttempt(
         {
           cardNumber,
           expiryDate,
@@ -264,12 +255,9 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
           orderId,
           amount: totalAmount,
           currency: 'USD',
-          orderType,
-          traceId: checkoutSpan?.spanContext().traceId,
-          spanId: checkoutSpan?.spanContext().spanId
+          orderType
         },
-        'success',
-        endTime - startTime
+        'successful'
       );
 
       toast({
@@ -296,7 +284,8 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
         });
       }
 
-      performanceLogger.logPaymentAttempt(
+      // Track failed payment with server-side logging
+      await trackPaymentAttempt(
         {
           cardNumber,
           expiryDate,
@@ -312,12 +301,9 @@ const CheckoutDialog = ({ open, onOpenChange, cart, products, onOrderComplete }:
           orderId: orderId || 'unknown',
           amount: totalAmount,
           currency: 'USD',
-          orderType,
-          traceId: checkoutSpan?.spanContext().traceId,
-          spanId: checkoutSpan?.spanContext().spanId
+          orderType
         },
-        'failed',
-        endTime - startTime
+        'failed'
       );
 
       toast({

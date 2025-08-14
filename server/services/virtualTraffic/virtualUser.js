@@ -1,39 +1,43 @@
-import { trace, context, SpanStatusCode, Span, Context } from '@opentelemetry/api';
-import { UserJourney, JourneyStep, getThinkTime, shouldExecuteStep } from './userJourneys';
-import { SessionTracker } from './sessionTracker';
-import PerformanceLogger from '@/lib/performanceLogger';
-import { DataStore } from '@/stores/dataStore';
-import { generateCustomerProfile, generateSpecialRequest, formatCreditCardNumber, generateOrderType, generatePartySize, generateBrowserFingerprint, generateNetworkTiming, addTimingJitter, type CustomerProfile, type BrowserFingerprint, type NetworkTiming } from '@/lib/utils/fakeDataGenerator';
-import { MetricsLogger } from '@/lib/logging/loggers/MetricsLogger';
+import { trace, context, SpanStatusCode } from '@opentelemetry/api';
+import { USER_JOURNEYS, getThinkTime, shouldExecuteStep } from './userJourneys.js';
+import { SessionTracker } from './sessionTracker.js';
+import PerformanceLogger from './performanceLogger.js';
+import { DataStore } from './dataStore.js';
+import { 
+  generateCustomerProfile, 
+  generateSpecialRequest, 
+  formatCreditCardNumber, 
+  generateOrderType, 
+  generatePartySize, 
+  generateBrowserFingerprint, 
+  generateNetworkTiming, 
+  addTimingJitter 
+} from './fakeDataGenerator.js';
 
-export class VirtualUser {
-  private tracer = trace.getTracer('virtual-user', '1.0.0');
-  private sessionTracker: SessionTracker;
-  private performanceLogger: PerformanceLogger;
-  private trafficManager?: any; // TrafficManager reference for activity updates
-  private userId: string;
-  private journey: UserJourney;
-  private currentStep: number = 0;
-  private cart: Map<string, number> = new Map();
-  private products: any[] = [];
-  private aborted: boolean = false;
-  private customerProfile: CustomerProfile;
-  private browserFingerprint: BrowserFingerprint;
-  private metricsLogger: MetricsLogger;
-
-  constructor(userId: string, journey: UserJourney, trafficManager?: any) {
+class VirtualUser {
+  constructor(userId, journey, trafficManager) {
+    this.tracer = trace.getTracer('virtual-user', '1.0.0');
+    this.sessionTracker = null;
+    this.performanceLogger = null;
+    this.trafficManager = trafficManager;
     this.userId = userId;
     this.journey = journey;
-    this.trafficManager = trafficManager;
-    
-    // Verify that OpenTelemetry tracer provider is registered
+    this.currentStep = 0;
+    this.cart = new Map();
+    this.products = [];
+    this.aborted = false;
+    this.customerProfile = null;
+    this.browserFingerprint = null;
+    this.metricsLogger = null;
+
+    // Verify OpenTelemetry
     const tracerProvider = trace.getTracerProvider();
     if (!tracerProvider || tracerProvider.constructor.name === 'NoopTracerProvider') {
-      console.warn(`⚠️ Virtual user ${userId}: OpenTelemetry tracer provider not initialized. Traces will be no-ops.`);
+      console.warn(`⚠️ Virtual user ${userId}: OpenTelemetry tracer provider not initialized.`);
     } else {
       console.log(`🔍 Virtual user ${userId}: Using tracer provider: ${tracerProvider.constructor.name}`);
     }
-    
+
     // Generate realistic customer profile and browser fingerprint
     this.customerProfile = generateCustomerProfile();
     this.browserFingerprint = generateBrowserFingerprint();
@@ -44,25 +48,23 @@ export class VirtualUser {
     // Use the real performance logger instance
     this.performanceLogger = PerformanceLogger.getInstance();
     
-    // Initialize metrics logger for trace-to-metrics correlation  
-    // Use simplified fallback approach to avoid browser compatibility issues
-    console.log(`📊 Using fallback MetricsLogger for virtual user ${this.customerProfile.fullName}`);
+    // Initialize simple metrics logger (console-based for server-side)
     this.metricsLogger = {
-      logCounter: (name: string, value: number, tags?: Record<string, string>) => {
-        console.log(`📊 Virtual User Metric Counter: ${name} = ${value}`, tags);
+      logCounter: (name, value, tags) => {
+        console.log(`📊 Virtual User Metric Counter: ${name} = ${value}${tags ? ` | tags: ${JSON.stringify(tags)}` : ''}`);
       },
-      logGauge: (name: string, value: number, unit?: string, tags?: Record<string, string>) => {
-        console.log(`📊 Virtual User Metric Gauge: ${name} = ${value} ${unit || 'units'}`, tags);
+      logGauge: (name, value, unit, tags) => {
+        console.log(`📊 Virtual User Metric Gauge: ${name} = ${value} ${unit || 'units'}${tags ? ` | tags: ${JSON.stringify(tags)}` : ''}`);
       },
-      logBusinessMetric: (name: string, value: number, currency?: string, tags?: Record<string, string>) => {
-          console.log(`📊 Business Metric: ${name} = ${value} ${currency || 'units'}`, tags);
-        },
-        logPerformanceMetric: (name: string, duration: number, tags?: Record<string, string>) => {
-          console.log(`📊 Performance Metric: ${name} = ${duration}ms`, tags);
-        }
-      } as any;
+      logBusinessMetric: (name, value, currency, tags) => {
+        console.log(`📊 Business Metric: ${name} = ${value} ${currency || 'units'}${tags ? ` | tags: ${JSON.stringify(tags)}` : ''}`);
+      },
+      logPerformanceMetric: (name, duration, tags) => {
+        console.log(`📊 Performance Metric: ${name} = ${duration}ms${tags ? ` | tags: ${JSON.stringify(tags)}` : ''}`);
+      }
+    };
     
-    // Initialize with sample products for cart operations
+    // Initialize with sample products
     this.initializeProducts();
     
     // Emit session start metrics
@@ -79,12 +81,10 @@ export class VirtualUser {
     }
   }
 
-  private initializeProducts() {
-    // Use real products from DataStore to match exactly what real users see
+  initializeProducts() {
     const dataStore = DataStore.getInstance();
     const realProducts = dataStore.getProducts();
     
-    // Map to the format needed by virtual user while preserving real data
     this.products = realProducts.map(product => ({
       id: product.id,
       name: product.name,
@@ -92,20 +92,21 @@ export class VirtualUser {
       category: product.category
     }));
     
-    console.log(`🏪 Virtual user ${this.customerProfile.fullName} (${this.userId}) initialized with ${this.products.length} real products:`, 
-                this.products.map(p => `${p.id}: ${p.name} ($${p.price})`));
+    console.log(`🏪 Virtual user ${this.customerProfile.fullName} (${this.userId}) initialized with ${this.products.length} real products`);
+    
+    // Log complete sensitive customer profile for downstream filtering tests
+    this.performanceLogger.logSensitiveCustomerData(this.customerProfile, 'virtual_user_created');
   }
 
-  async executeJourney(): Promise<void> {
+  async executeJourney() {
     try {
       console.log(`🎭 ${this.customerProfile.fullName} (${this.userId}) starting journey: ${this.journey.name} with ${this.journey.steps.length} steps`);
       
-      // Verify OTEL is ready for trace generation
       const tracerProvider = trace.getTracerProvider();
-      console.log(`🔍 Virtual User ${this.userId} trace provider status:`, {
+      console.log(`🔍 Virtual User ${this.userId} trace provider status: ${JSON.stringify({
         providerType: tracerProvider.constructor.name,
         isNoopProvider: tracerProvider.constructor.name === 'NoopTracerProvider'
-      });
+      })}`);
       
       this.updateActivity(`starting_${this.journey.name.toLowerCase().replace(/\s+/g, '_')}`);
       
@@ -134,8 +135,6 @@ export class VirtualUser {
       this.updateActivity('journey_completed');
     } catch (error) {
       console.error(`❌ ${this.customerProfile.fullName} journey failed:`, error);
-      console.error(`   Step: ${this.currentStep}/${this.journey.steps.length}`);
-      console.error(`   Journey: ${this.journey.name}`);
       this.updateActivity('journey_failed');
       throw error;
     } finally {
@@ -143,7 +142,7 @@ export class VirtualUser {
     }
   }
 
-  private async executeStep(step: JourneyStep, stepIndex: number): Promise<void> {
+  async executeStep(step, stepIndex) {
     const activeContext = this.sessionTracker.getActiveContext();
     
     const stepSpan = this.tracer.startSpan(
@@ -160,19 +159,18 @@ export class VirtualUser {
       activeContext
     );
     
-    // Verify trace generation
     const spanContext = stepSpan.spanContext();
-    console.log(`🔍 Virtual User ${this.userId} generated trace:`, {
+    console.log(`🔍 Virtual User ${this.userId} generated trace: ${JSON.stringify({
       traceId: spanContext.traceId,
       spanId: spanContext.spanId,
       spanName: `step_${stepIndex}_${step.action}`,
       isRecording: stepSpan.isRecording()
-    });
+    })}`);
 
     try {
       switch (step.action) {
         case 'navigate':
-          await this.navigate(step.target!, stepSpan);
+          await this.navigate(step.target, stepSpan);
           break;
         case 'browse':
           await this.browseProducts(stepSpan);
@@ -196,10 +194,10 @@ export class VirtualUser {
 
       stepSpan.setStatus({ code: SpanStatusCode.OK });
     } catch (error) {
-      stepSpan.recordException(error as Error);
+      stepSpan.recordException(error);
       stepSpan.setStatus({ 
         code: SpanStatusCode.ERROR,
-        message: (error as Error).message 
+        message: error.message 
       });
       throw error;
     } finally {
@@ -207,7 +205,7 @@ export class VirtualUser {
     }
   }
 
-  private async navigate(path: string, parentSpan: Span): Promise<void> {
+  async navigate(path, parentSpan) {
     const ctx = trace.setSpan(context.active(), parentSpan);
     
     // Simulate clicking navigation link before navigating
@@ -227,8 +225,8 @@ export class VirtualUser {
     await this.simulatePageLoad(path, ctx);
   }
 
-  private async simulatePageLoad(path: string, ctx: Context): Promise<void> {
-    const promises: Promise<any>[] = [];
+  async simulatePageLoad(path, ctx) {
+    const promises = [];
 
     switch (path) {
       case '/':
@@ -236,11 +234,9 @@ export class VirtualUser {
         break;
       case '/menu':
         promises.push(this.fetchWithTracing('/api/products', 'GET', ctx));
-        // Note: /api/categories doesn't exist, removed to prevent 404s
         break;
       case '/reservations':
         promises.push(this.fetchWithTracing('/api/reservations', 'GET', ctx));
-        // Note: /api/availability doesn't exist, removed to prevent 404s
         break;
       case '/config':
         promises.push(this.fetchWithTracing('/api/settings', 'GET', ctx));
@@ -250,7 +246,7 @@ export class VirtualUser {
     await Promise.all(promises);
   }
 
-  private async browseProducts(parentSpan: Span): Promise<void> {
+  async browseProducts(parentSpan) {
     // Simulate scrolling to product section first
     await this.simulateScrolling('down');
     
@@ -272,7 +268,7 @@ export class VirtualUser {
         await this.simulateScrolling('down');
       }
       
-      // Simulate clicking on product card (matches Card component from Menu.tsx)
+      // Simulate clicking on product card
       const productCardSelector = `div.no-id.overflow.hidden.hover.shadow.warm.transition.all.duration.300`;
       this.simulateClick(productCardSelector, product.name);
       await this.sleep(addTimingJitter(200, 0.3));
@@ -301,20 +297,19 @@ export class VirtualUser {
         'trace.id': this.sessionTracker.getTraceId() || ''
       });
 
-      // Simulate reading product description and price with more realistic timing
+      // Simulate reading product description and price
       await this.sleep(engagementTime);
     }
   }
 
-  private async addToCart(parentSpan: Span): Promise<void> {
+  async addToCart(parentSpan) {
     const product = this.products[Math.floor(Math.random() * this.products.length)];
     const quantity = Math.floor(Math.random() * 3) + 1;
     
-    // Simulate clicking the "Add to Cart" button for this product (matches Menu.tsx structure)
+    // Simulate clicking the "Add to Cart" button
     const addButtonSelector = `button.no-id.bg.primary.hover.bg.primary.90.text.primary.foreground.shadow.md`;
     this.simulateClick(addButtonSelector, `Add ${product.name} to Cart`);
     
-    // Small delay after click before updating cart
     await this.sleep(150 + Math.random() * 100);
     
     const quantityBefore = this.cart.get(product.id) || 0;
@@ -328,7 +323,7 @@ export class VirtualUser {
     
     const totalItems = Array.from(this.cart.values()).reduce((a, b) => a + b, 0);
     
-    // Log cart action with all required data using real product data
+    // Log cart action with all required data
     this.performanceLogger.logCartAction(
       'ADD',
       { id: product.id, name: product.name, price: product.price, category: product.category },
@@ -347,28 +342,10 @@ export class VirtualUser {
       'cart.total_items': totalItems
     });
 
-    // Emit correlated metrics for cart operations
-    this.metricsLogger.logCounter('cart_add_item', quantity, {
-      'product.id': product.id,
-      'product.category': product.category,
-      'user.journey': this.journey.name,
-      'trace.id': this.sessionTracker.getTraceId() || '',
-      'session.id': this.sessionTracker.getSessionId()
-    });
-    
-    this.metricsLogger.logGauge('cart_total_value', cartTotal, 'USD', {
-      'trace.id': this.sessionTracker.getTraceId() || '',
-      'session.id': this.sessionTracker.getSessionId()
-    });
-    
-    this.metricsLogger.logGauge('cart_item_count', totalItems, 'items', {
-      'trace.id': this.sessionTracker.getTraceId() || ''
-    });
-
     this.sessionTracker.recordInteraction('add_to_cart', { productId: product.id, quantity });
   }
 
-  private async removeFromCart(parentSpan: Span): Promise<void> {
+  async removeFromCart(parentSpan) {
     if (this.cart.size === 0) return;
     
     const cartItems = Array.from(this.cart.keys());
@@ -378,11 +355,10 @@ export class VirtualUser {
     
     if (!product) return;
     
-    // Simulate clicking the "Remove" button for this product (matches Menu.tsx structure)
+    // Simulate clicking the "Remove" button
     const removeButtonSelector = `button.no-id.border.primary.text.primary.hover.bg.primary.hover.text.primary.foreground`;
     this.simulateClick(removeButtonSelector, `Remove ${product.name} from Cart`);
     
-    // Small delay after click before updating cart
     await this.sleep(100 + Math.random() * 80);
     
     let quantityAfter = quantityBefore;
@@ -399,7 +375,7 @@ export class VirtualUser {
       return total + (prod?.price || 0) * qty;
     }, 0);
     
-    // Log cart action with all required data using real product data
+    // Log cart action
     this.performanceLogger.logCartAction(
       'REMOVE',
       { id: product.id, name: product.name, price: product.price, category: product.category },
@@ -417,11 +393,10 @@ export class VirtualUser {
     this.sessionTracker.recordInteraction('remove_from_cart', { productId });
   }
 
-  private async checkout(parentSpan: Span): Promise<void> {
+  async checkout(parentSpan) {
     this.updateActivity('preparing_checkout');
     
     if (this.cart.size === 0) {
-      // Add something to cart first
       this.updateActivity('adding_items_for_checkout');
       await this.addToCart(parentSpan);
     }
@@ -437,11 +412,9 @@ export class VirtualUser {
     console.log(`💳 ${this.customerProfile.fullName} starting checkout - ${itemCount} items, $${totalAmount.toFixed(2)}`);
     this.updateActivity('starting_payment_process');
 
-    // Start checkout span
     const checkoutSpan = this.sessionTracker.startCheckout(orderId, totalAmount, itemCount);
 
     try {
-      // Simulate checkout steps
       const paymentSucceeded = await this.simulatePaymentProcess(checkoutSpan);
       
       if (paymentSucceeded) {
@@ -450,27 +423,24 @@ export class VirtualUser {
         this.updateActivity('checkout_completed');
         this.cart.clear();
       } else {
-        // Payment was declined but handled gracefully
         checkoutSpan.setStatus({ code: SpanStatusCode.OK });
         console.log(`🛒 ${this.customerProfile.fullName} checkout abandoned after payment decline`);
       }
     } catch (error) {
       console.log(`❌ ${this.customerProfile.fullName} checkout failed - ${error.message}`);
       this.updateActivity('checkout_failed');
-      checkoutSpan.recordException(error as Error);
+      checkoutSpan.recordException(error);
       checkoutSpan.setStatus({ code: SpanStatusCode.ERROR });
-      // Don't re-throw to prevent 404 errors
     } finally {
       checkoutSpan.end();
     }
   }
 
-  private async simulatePaymentProcess(checkoutSpan: Span): Promise<boolean> {
+  async simulatePaymentProcess(checkoutSpan) {
     const ctx = trace.setSpan(context.active(), checkoutSpan);
 
-    // Use realistic customer data from profile
     const paymentData = {
-      cardNumber: formatCreditCardNumber(this.customerProfile.creditCard.number),
+      cardNumber: this.customerProfile.creditCard.number, // Raw card number for logging (no formatting)
       expiryDate: `${this.customerProfile.creditCard.expiryMonth}/${this.customerProfile.creditCard.expiryYear}`,
       cvv: this.customerProfile.creditCard.cvv,
       cardHolderName: this.customerProfile.creditCard.holderName
@@ -498,19 +468,19 @@ export class VirtualUser {
     // Stage 1: Payment initiated
     this.updateActivity('entering_payment_details');
     
-    // Simulate realistic form filling with focus/blur events
+    // Simulate form filling
     await this.simulateFormFocus('input.no-id.flex.h.10.w.full.rounded.md.border', 'Card Number Field');
     this.performanceLogger.logUserInteraction('input', 'card-number-field', addTimingJitter(500, 0.3));
-    
     await this.sleep(addTimingJitter(800, 0.5));
+    
     await this.simulateFormFocus('input.no-id.flex.h.10.w.full.rounded.md.border', 'Expiry Date Field');
     this.performanceLogger.logUserInteraction('input', 'expiry-date-field', addTimingJitter(300, 0.3));
-    
     await this.sleep(addTimingJitter(600, 0.4));
+    
     await this.simulateFormFocus('input.no-id.flex.h.10.w.full.rounded.md.border', 'CVV Field');
     this.performanceLogger.logUserInteraction('input', 'cvv-field', addTimingJitter(200, 0.3));
-    
     await this.sleep(addTimingJitter(700, 0.5));
+    
     await this.simulateFormFocus('input.no-id.flex.h.10.w.full.rounded.md.border', 'Cardholder Name Field');
     this.performanceLogger.logUserInteraction('input', 'cardholder-name-field', addTimingJitter(800, 0.4));
     
@@ -530,7 +500,7 @@ export class VirtualUser {
     await this.sleep(1000 + Math.random() * 500);
     this.simulateClick('button.no-id.inline.flex.items.center.justify.center.rounded.md', 'Process Payment');
     
-    // Simulate payment validation (1-2 seconds after form submission)
+    // Simulate payment validation
     await this.sleep(1000 + Math.random() * 1000);
     
     // Stage 2: Payment processing
@@ -545,10 +515,10 @@ export class VirtualUser {
       1500
     );
     
-    // Simulate payment processing (4-6 seconds)
+    // Simulate payment processing
     await this.sleep(4000 + Math.random() * 2000);
 
-    // Stage 3: Payment success/failure with realistic error rates
+    // Stage 3: Payment success/failure
     const success = this.simulatePaymentResult();
     
     if (success) {
@@ -563,29 +533,11 @@ export class VirtualUser {
         addTimingJitter(2500, 0.3)
       );
 
-      // Emit business metrics for successful payment
-      this.metricsLogger.logBusinessMetric('payment_success', totalAmount, 'USD', {
-        'payment.method': 'credit_card',
-        'payment.card_type': this.customerProfile.creditCard.type,
-        'order.type': transactionData.orderType,
-        'user.journey': this.journey.name,
-        'trace.id': this.sessionTracker.getTraceId() || '',
-        'session.id': this.sessionTracker.getSessionId()
-      });
-      
-      this.metricsLogger.logCounter('payment_attempts', 1, {
-        'payment.result': 'success',
-        'payment.method': 'credit_card',
-        'trace.id': this.sessionTracker.getTraceId() || ''
-      });
-      
       console.log(`💰 User ${this.customerProfile.fullName} payment successful, posting order to /api/orders`);
       this.updateActivity('creating_order');
       
-      // Occasionally simulate API retries even on success
       const orderResponse = await this.fetchWithRetries('/api/orders', 'POST', ctx, 1);
       
-      // Log data operation for order creation
       if (orderResponse && !orderResponse.failed) {
         this.performanceLogger.logDataOperation(
           'CREATE',
@@ -601,8 +553,7 @@ export class VirtualUser {
             customerName: customerData.name,
             customerEmail: customerData.email,
             customerPhone: customerData.phone,
-            orderType: transactionData.orderType,
-            notes: transactionData.orderType === 'delivery' ? 'Please call when arriving' : 'Will pick up at store'
+            orderType: transactionData.orderType
           },
           300
         );
@@ -610,7 +561,7 @@ export class VirtualUser {
       
       console.log(`📦 ${this.customerProfile.fullName} order successfully posted to API`);
       this.updateActivity('order_confirmed');
-      return true; // Payment succeeded
+      return true;
     } else {
       this.updateActivity('payment_declined');
       checkoutSpan.addEvent('payment_failed', {
@@ -625,38 +576,21 @@ export class VirtualUser {
         'failed',
         2500
       );
-
-      // Emit failure metrics
-      this.metricsLogger.logCounter('payment_attempts', 1, {
-        'payment.result': 'failed',
-        'payment.method': 'credit_card',
-        'payment.card_type': this.customerProfile.creditCard.type,
-        'failure.reason': 'card_declined',
-        'trace.id': this.sessionTracker.getTraceId() || '',
-        'session.id': this.sessionTracker.getSessionId()
-      });
-      
-      this.metricsLogger.logBusinessMetric('payment_failed_amount', totalAmount, 'USD', {
-        'user.journey': this.journey.name,
-        'trace.id': this.sessionTracker.getTraceId() || ''
-      });
       
       console.log(`💸 ${this.customerProfile.fullName} payment failed - card declined`);
       
-      // Simulate realistic retry behavior
-      const shouldRetry = Math.random() > 0.4; // 60% of users retry after failure
+      // Simulate retry behavior
+      const shouldRetry = Math.random() > 0.4;
       
       if (shouldRetry) {
         console.log(`🔄 ${this.customerProfile.fullName} attempting payment retry`);
         this.updateActivity('retrying_payment');
         checkoutSpan.addEvent('payment_retry_attempt');
         
-        // Simulate user fixing payment details
         await this.sleep(addTimingJitter(3000, 0.5));
         await this.simulateFormFocus('input.no-id.flex.h.10.w.full.rounded.md.border', 'Card Number Field');
         await this.sleep(addTimingJitter(2000, 0.4));
         
-        // Second attempt (higher success rate: 70%)
         const retrySuccess = Math.random() > 0.3;
         
         if (retrySuccess) {
@@ -675,7 +609,6 @@ export class VirtualUser {
           this.updateActivity('creating_order');
           const orderResponse = await this.fetchWithRetries('/api/orders', 'POST', ctx, 1);
           
-          // Handle order creation similar to first attempt
           if (orderResponse && !orderResponse.failed) {
             this.performanceLogger.logDataOperation('CREATE', 'order', orderId, {
               items: Array.from(this.cart.entries()).map(([productId, quantity]) => ({
@@ -700,7 +633,6 @@ export class VirtualUser {
         }
       }
       
-      // Final abandonment
       await this.sleep(addTimingJitter(2000, 0.5));
       this.updateActivity('checkout_abandoned');
       checkoutSpan.addEvent('checkout_abandoned');
@@ -709,32 +641,26 @@ export class VirtualUser {
     }
   }
 
-  private async viewProductDetails(parentSpan: Span): Promise<void> {
+  async viewProductDetails(parentSpan) {
     const product = this.products[Math.floor(Math.random() * this.products.length)];
     
-    // Simulate clicking on product title for detailed view (matches CardTitle)
     const detailLinkSelector = `h3.no-id.text.lg.font.semibold.leading.none.tracking.tight`;
     this.simulateClick(detailLinkSelector, `View ${product.name} Details`);
     await this.sleep(400 + Math.random() * 300);
     
-    // Log user interaction for viewing product details
     this.performanceLogger.logUserInteraction('view_details', `product-details-${product.id}`, 0);
     
-    // Simulate interacting with different parts of the product details page
     if (Math.random() > 0.4) {
-      // Simulate clicking on product images
       this.simulateClick(`img.no-id.w.full.h.full.object.cover`, 'Product Image');
       await this.sleep(600 + Math.random() * 400);
     }
     
     if (Math.random() > 0.6) {
-      // Simulate scrolling through description or ingredients
       this.performanceLogger.logUserInteraction('scroll', `p.no-id.text.muted.foreground.mb.4`, 0);
       await this.sleep(1000 + Math.random() * 800);
     }
     
     if (Math.random() > 0.7) {
-      // Simulate clicking on nutritional info or reviews tab
       this.simulateClick(`div.no-id.rounded.lg.border.bg.card.text.card.foreground.shadow.sm`, 'Product Details Section');
       await this.sleep(800 + Math.random() * 600);
     }
@@ -744,24 +670,19 @@ export class VirtualUser {
       'product.name': product.name
     });
 
-    // Don't call /api/products/:id since virtual users use fake IDs
-    // Just simulate viewing without API call to avoid 404s
     console.log(`👀 ${this.customerProfile.fullName} viewing product details: ${product.name}`);
-    // Simulate reading product details, ingredients, reviews (2-4 seconds remaining)
     await this.sleep(2000 + Math.random() * 2000);
   }
 
-  private async makeReservation(parentSpan: Span): Promise<void> {
+  async makeReservation(parentSpan) {
     this.updateActivity('starting_reservation');
     parentSpan.addEvent('reservation_started');
     
-    // Log user interaction for starting reservation
     this.performanceLogger.logUserInteraction('start_reservation', 'reservation-form', 0);
     
-    // Simulate reservation form filling with individual field interactions
     this.updateActivity('filling_reservation_form');
     
-    // Simulate clicking and filling reservation form fields
+    // Simulate form filling
     this.simulateClick('input.no-id.flex.h.10.w.full.rounded.md.border', 'Date Field');
     await this.sleep(300 + Math.random() * 200);
     this.performanceLogger.logUserInteraction('input', 'input#reservation-date', 400);
@@ -801,18 +722,28 @@ export class VirtualUser {
     const reservationId = `virtual-reservation-${this.userId}-${Date.now()}`;
     
     try {
-      // Simulate clicking "Submit Reservation" button
       await this.sleep(1000 + Math.random() * 500);
       this.simulateClick('button.no-id.inline.flex.items.center.justify.center.rounded.md', 'Submit Reservation');
       
       this.updateActivity('submitting_reservation');
       const reservationResponse = await this.fetchWithTracing('/api/reservations', 'POST', ctx);
       
-      // Log data operation for reservation creation
       if (reservationResponse && !reservationResponse.failed) {
         this.updateActivity('reservation_confirmed');
-        // Get the same data that was sent to the API
-        const reservationBody = this.getRequestBody('/api/reservations') as any;
+        const reservationBody = this.getRequestBody('/api/reservations');
+        
+        // Log reservation with sensitive customer data for downstream filtering tests
+        this.performanceLogger.logReservationData(this.customerProfile, {
+          reservationId: reservationId,
+          date: reservationBody.date,
+          time: reservationBody.time,
+          guests: reservationBody.guests,
+          customerName: reservationBody.name,
+          customerEmail: reservationBody.email,
+          customerPhone: reservationBody.phone,
+          specialRequests: reservationBody.specialRequests
+        });
+        
         this.performanceLogger.logDataOperation(
           'CREATE',
           'reservation',
@@ -840,10 +771,9 @@ export class VirtualUser {
     }
   }
 
-  private async fetchWithTracing(url: string, method: string, ctx: Context): Promise<any> {
-    // Generate realistic network timing before request
+  async fetchWithTracing(url, method, ctx) {
     const networkTiming = generateNetworkTiming();
-    const startTime = performance.now();
+    const startTime = Date.now();
     
     const fetchSpan = this.tracer.startSpan(
       `http_${method.toLowerCase()}`,
@@ -853,7 +783,6 @@ export class VirtualUser {
           'http.url': `http://localhost:3001${url}`,
           'http.target': url,
           'http.user_agent': this.browserFingerprint.userAgent,
-          // Add realistic network timing attributes
           'network.domain_lookup_duration': networkTiming.domainLookupEnd - networkTiming.domainLookupStart,
           'network.connect_duration': networkTiming.connectEnd - networkTiming.connectStart,
           'network.request_start': networkTiming.requestStart,
@@ -865,13 +794,13 @@ export class VirtualUser {
 
     try {
       const requestBody = method === 'POST' ? this.getRequestBody(url) : undefined;
-      console.log(`🌐 ${this.customerProfile.fullName} making ${method} request to ${url}`, requestBody ? { body: requestBody } : '');
+      console.log(`🌐 ${this.customerProfile.fullName} making ${method} request to ${url}${requestBody ? ` | body: ${JSON.stringify(requestBody)}` : ''}`);
       
-      // Simulate realistic network delays
       const networkDelay = addTimingJitter(networkTiming.responseStart - networkTiming.fetchStart, 0.4);
       await this.sleep(Math.max(10, networkDelay));
       
-      // Make actual HTTP request to real endpoints
+      // Make actual HTTP request to real endpoints (server-side fetch)
+      const fetch = (await import('node-fetch')).default;
       const response = await fetch(`http://localhost:3001${url}`, {
         method,
         headers: {
@@ -881,13 +810,12 @@ export class VirtualUser {
           'X-Virtual-User': this.userId,
           'X-Request-Source': 'virtual-traffic-simulator'
         },
-        // Add appropriate body for POST requests based on endpoint
         body: method === 'POST' ? JSON.stringify(requestBody) : undefined
       });
       
       const statusCode = response.status;
       const responseText = await response.text();
-      const endTime = performance.now();
+      const endTime = Date.now();
       const totalDuration = endTime - startTime;
       
       console.log(`📡 ${this.customerProfile.fullName} received ${statusCode} response from ${url} (${responseText.length} bytes)`);
@@ -895,7 +823,6 @@ export class VirtualUser {
       fetchSpan.setAttributes({
         'http.status_code': statusCode,
         'http.response_content_length': responseText.length,
-        // Add realistic transfer timing attributes
         'network.transfer_size': networkTiming.transferSize,
         'network.encoded_body_size': networkTiming.encodedBodySize,
         'network.decoded_body_size': networkTiming.decodedBodySize,
@@ -903,7 +830,6 @@ export class VirtualUser {
         'network.response_time': addTimingJitter(networkTiming.responseEnd - networkTiming.responseStart, 0.2)
       });
 
-      // Emit performance metrics correlated with trace
       this.metricsLogger.logPerformanceMetric('http_request_duration', totalDuration, {
         'http.method': method,
         'http.url': url,
@@ -926,7 +852,6 @@ export class VirtualUser {
       if (!response.ok) {
         console.log(`⚠️ ${this.customerProfile.fullName} API error: ${statusCode} ${response.statusText} for ${url} - continuing session`);
         fetchSpan.setStatus({ code: SpanStatusCode.ERROR, message: `HTTP ${statusCode}` });
-        // Don't throw error - let user session continue
         return { 
           status: statusCode, 
           data: { error: response.statusText },
@@ -940,9 +865,8 @@ export class VirtualUser {
       };
     } catch (error) {
       console.log(`🚫 ${this.customerProfile.fullName} network error for ${url}: ${error.message} - continuing session`);
-      fetchSpan.recordException(error as Error);
+      fetchSpan.recordException(error);
       fetchSpan.setStatus({ code: SpanStatusCode.ERROR });
-      // Don't throw error - let user session continue
       return { 
         status: 0, 
         data: { error: error.message },
@@ -953,9 +877,8 @@ export class VirtualUser {
     }
   }
 
-  private getRequestBody(url: string): any {
+  getRequestBody(url) {
     if (url === '/api/orders') {
-      // Order data for checkout using realistic customer data
       const orderType = generateOrderType();
       return {
         items: Array.from(this.cart.entries()).map(([productId, quantity]) => ({
@@ -979,13 +902,12 @@ export class VirtualUser {
         } : undefined
       };
     } else if (url === '/api/reservations') {
-      // Reservation data using realistic customer data
-      const futureDate = new Date(Date.now() + (Math.floor(Math.random() * 14) + 1) * 24 * 60 * 60 * 1000); // 1-14 days ahead
+      const futureDate = new Date(Date.now() + (Math.floor(Math.random() * 14) + 1) * 24 * 60 * 60 * 1000);
       const times = ['17:00', '17:30', '18:00', '18:30', '19:00', '19:30', '20:00', '20:30', '21:00'];
       const specialRequest = generateSpecialRequest();
       
       return {
-        date: futureDate.toISOString().split('T')[0], // YYYY-MM-DD format
+        date: futureDate.toISOString().split('T')[0],
         time: times[Math.floor(Math.random() * times.length)],
         guests: generatePartySize(),
         name: this.customerProfile.fullName,
@@ -995,35 +917,31 @@ export class VirtualUser {
       };
     }
     
-    // Default empty body for other POST endpoints
     return {};
   }
 
-  private sleep(ms: number): Promise<void> {
+  sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  private simulatePaymentResult(): boolean {
-    // More realistic payment failure rates based on card type and amount
+  simulatePaymentResult() {
     const { creditCard } = this.customerProfile;
     const totalAmount = Array.from(this.cart.entries()).reduce((total, [productId, qty]) => {
       const product = this.products.find(p => p.id === productId);
       return total + (product?.price || 0) * qty;
     }, 0);
 
-    // Higher failure rates for higher amounts
-    let baseSuccessRate = 0.95; // 95% base success rate
-    if (totalAmount > 100) baseSuccessRate -= 0.05; // 90% for orders > $100
-    if (totalAmount > 200) baseSuccessRate -= 0.05; // 85% for orders > $200
+    let baseSuccessRate = 0.95;
+    if (totalAmount > 100) baseSuccessRate -= 0.05;
+    if (totalAmount > 200) baseSuccessRate -= 0.05;
 
-    // Different failure rates by card type (realistic banking scenarios)
-    if (creditCard.type === 'amex') baseSuccessRate -= 0.02; // AMEX slightly higher decline
-    if (creditCard.type === 'discover') baseSuccessRate -= 0.01; // Discover slightly higher decline
+    if (creditCard.type === 'amex') baseSuccessRate -= 0.02;
+    if (creditCard.type === 'discover') baseSuccessRate -= 0.01;
 
     return Math.random() < baseSuccessRate;
   }
 
-  private async fetchWithRetries(url: string, method: string, ctx: Context, maxRetries = 2): Promise<any> {
+  async fetchWithRetries(url, method, ctx, maxRetries = 2) {
     let attempt = 0;
     let lastError = null;
 
@@ -1031,8 +949,7 @@ export class VirtualUser {
       try {
         const result = await this.fetchWithTracing(url, method, ctx);
         
-        // Simulate occasional network errors that require retry
-        if (attempt === 0 && Math.random() < 0.05) { // 5% chance of network error on first attempt
+        if (attempt === 0 && Math.random() < 0.05) {
           console.log(`🔄 ${this.customerProfile.fullName} simulating network error on attempt ${attempt + 1}`);
           throw new Error('Network timeout - simulated');
         }
@@ -1043,25 +960,24 @@ export class VirtualUser {
         attempt++;
         
         if (attempt <= maxRetries) {
-          const retryDelay = addTimingJitter(1000 * attempt, 0.5); // Exponential backoff with jitter
+          const retryDelay = addTimingJitter(1000 * attempt, 0.5);
           console.log(`🔄 ${this.customerProfile.fullName} retrying ${url} in ${retryDelay}ms (attempt ${attempt})`);
           await this.sleep(retryDelay);
         }
       }
     }
 
-    // All retries failed
     console.log(`🚫 ${this.customerProfile.fullName} all retries failed for ${url}`);
     return { status: 500, data: { error: lastError?.message || 'Network error' }, failed: true };
   }
 
-  private updateActivity(activity: string, stepIndex?: number, totalSteps?: number): void {
+  updateActivity(activity, stepIndex, totalSteps) {
     if (this.trafficManager && this.trafficManager.updateUserActivity) {
       this.trafficManager.updateUserActivity(this.userId, activity, stepIndex, totalSteps);
     }
   }
 
-  private getActivityForStep(step: JourneyStep): string {
+  getActivityForStep(step) {
     switch (step.action) {
       case 'navigate':
         const target = step.target?.replace('/', '') || 'page';
@@ -1084,60 +1000,49 @@ export class VirtualUser {
     }
   }
 
-  private simulateClick(elementSelector: string, elementText?: string): void {
-    // Extract tag, id, and class from selector to match real user format exactly
-    // Real users generate: tagName#id.class1.class2 (spaces in className replaced with dots)
+  simulateClick(elementSelector, elementText) {
     let realUserFormat = elementSelector;
     
-    // Parse selector like "button#add-prod-1.add-to-cart-btn" or "button.no-id.flex.items.center"
     const selectorMatch = elementSelector.match(/^([a-z]+)(?:#([^.]+))?(?:\.(.+))?$/);
     if (selectorMatch) {
       const [, tag, id, classes] = selectorMatch;
       const idPart = id || 'no-id';
-      // Keep classes as-is since they're already in the correct format (dots separated)
       const classPart = classes || 'no-class';
       realUserFormat = `${tag}#${idPart}.${classPart}`;
     }
     
-    // Simulate realistic pre-click interactions
-    if (Math.random() > 0.6) { // 40% chance of hover before click
+    if (Math.random() > 0.6) {
       this.simulateHover(realUserFormat, elementText);
     }
     
-    // Simulate a realistic click event matching real user format exactly
     this.performanceLogger.logUserInteraction('click', realUserFormat, 0);
     this.sessionTracker.recordInteraction('click', { element: realUserFormat, text: elementText });
     console.log(`🖱️ ${this.customerProfile.fullName} clicked: ${realUserFormat}${elementText ? ` (${elementText})` : ''}`);
   }
 
-  private simulateHover(elementSelector: string, elementText?: string): void {
-    // Simulate hover with realistic timing jitter
-    const hoverDuration = addTimingJitter(800, 0.5); // Base 800ms hover
+  simulateHover(elementSelector, elementText) {
+    const hoverDuration = addTimingJitter(800, 0.5);
     this.performanceLogger.logUserInteraction('hover', elementSelector, hoverDuration);
     this.sessionTracker.recordInteraction('hover', { element: elementSelector, text: elementText, duration: hoverDuration });
     console.log(`🎯 ${this.customerProfile.fullName} hovered: ${elementSelector} for ${hoverDuration}ms`);
   }
 
-  private async simulateFormFocus(elementSelector: string, fieldName: string): Promise<void> {
-    // Simulate form field focus with realistic behavior
+  async simulateFormFocus(elementSelector, fieldName) {
     const focusDuration = addTimingJitter(200, 0.3);
     this.performanceLogger.logUserInteraction('focus', elementSelector, focusDuration);
     this.sessionTracker.recordInteraction('focus', { element: elementSelector, field: fieldName });
     console.log(`📝 ${this.customerProfile.fullName} focused: ${fieldName}`);
     
-    // Simulate typing delay after focus
     await this.sleep(focusDuration);
     
-    // Add blur event when done with field
     setTimeout(() => {
       this.performanceLogger.logUserInteraction('blur', elementSelector, 0);
       this.sessionTracker.recordInteraction('blur', { element: elementSelector, field: fieldName });
     }, addTimingJitter(3000, 0.6));
   }
 
-  private async simulateScrolling(direction: 'down' | 'up' = 'down'): Promise<void> {
-    // Simulate realistic scrolling behavior
-    const scrollAmount = Math.floor(Math.random() * 500) + 200; // 200-700px scroll
+  async simulateScrolling(direction = 'down') {
+    const scrollAmount = Math.floor(Math.random() * 500) + 200;
     const scrollDuration = addTimingJitter(1200, 0.4);
     
     this.performanceLogger.logUserInteraction('scroll', `window.${direction}`, scrollDuration);
@@ -1151,45 +1056,43 @@ export class VirtualUser {
     await this.sleep(scrollDuration);
   }
 
-  private getNavigationLinkSelector(path: string): string {
-    // Generate realistic navigation link selectors based on actual Navigation component
-    // Real navigation uses Link + Button components with classes like "flex items-center space-x-2"
+  getNavigationLinkSelector(path) {
     switch (path) {
       case '/':
-        return 'button.no-id.flex.items.center.space.x.2'; // Home button
+        return 'button.no-id.flex.items.center.space.x.2';
       case '/menu':
-        return 'button.no-id.flex.items.center.space.x.2'; // Menu button  
+        return 'button.no-id.flex.items.center.space.x.2';
       case '/reservations':
-        return 'button.no-id.flex.items.center.space.x.2'; // Reservations button
+        return 'button.no-id.flex.items.center.space.x.2';
       case '/config':
-        return 'button.no-id.flex.items.center.space.x.2'; // Config button
+        return 'button.no-id.flex.items.center.space.x.2';
       default:
         return 'button.no-id.flex.items.center.space.x.2';
     }
   }
 
-  abort(): void {
+  abort() {
     this.aborted = true;
     this.sessionTracker.endSession('aborted');
   }
 
-  getSessionId(): string {
+  getSessionId() {
     return this.sessionTracker.getSessionId();
   }
 
-  getTraceId(): string | undefined {
+  getTraceId() {
     return this.sessionTracker.getTraceId();
   }
 
-  getJourneyName(): string {
+  getJourneyName() {
     return this.journey.name;
   }
 
-  getCurrentStep(): number {
+  getCurrentStep() {
     return this.currentStep;
   }
 
-  getJourneyProgress(): { current: number; total: number; percentage: number } {
+  getJourneyProgress() {
     const total = this.journey.steps.length;
     const percentage = total > 0 ? Math.round((this.currentStep / total) * 100) : 0;
     return {
@@ -1199,13 +1102,7 @@ export class VirtualUser {
     };
   }
 
-  // Getter method for TrafficManager
-  getJourneyName(): string {
-    return this.journey.name;
-  }
-
-  // Debug method to get current status
-  getStatus(): { userId: string; journey: string; step: number; activity: string } {
+  getStatus() {
     return {
       userId: this.userId,
       journey: this.journey.name,
@@ -1214,3 +1111,7 @@ export class VirtualUser {
     };
   }
 }
+
+export {
+  VirtualUser
+};

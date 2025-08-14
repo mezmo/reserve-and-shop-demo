@@ -2,11 +2,14 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import { execSync, spawn } from 'child_process';
+import os from 'os';
 import yaml from 'js-yaml';
 import { loggingMiddleware, errorLoggingMiddleware, logBusinessEvent, logPerformanceTiming } from './middleware/logging-middleware.js';
 import { updateLogFormat, getLogFormats } from './logging/winston-config.js';
 import { appLogger, serverLogger, updateLogLevel, getLogLevels } from './logging/winston-config.js';
 import { startFailure, stopFailure, getFailureStatus, isFailureActive } from './services/failureSimulator.js';
+// Import TrafficManager using dynamic import since it uses CommonJS
+let TrafficManager = null;
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -29,6 +32,28 @@ app.use((req, res, next) => {
   }
 });
 
+// Order counter for sequential order numbers
+let orderCounter = 1;
+
+// Function to generate sequential order numbers
+const generateOrderNumber = () => {
+  const orderNumber = orderCounter.toString().padStart(7, '0');
+  orderCounter++;
+  return orderNumber;
+};
+
+// Initialize order counter based on existing orders
+const initializeOrderCounter = () => {
+  if (data.orders && data.orders.length > 0) {
+    // Find the highest existing order number and set counter to next value
+    const maxOrderNumber = Math.max(...data.orders
+      .map(order => parseInt(order.id))
+      .filter(num => !isNaN(num))
+    );
+    orderCounter = maxOrderNumber + 1;
+  }
+};
+
 // In-memory data store (simulating a database)
 let data = {
   products: [
@@ -38,7 +63,7 @@ let data = {
       description: 'Fresh tomato sauce, mozzarella, and basil',
       price: 18.99,
       category: 'Pizza',
-      image: '/placeholder.svg',
+      image: 'https://images.unsplash.com/photo-1604382354936-07c5d9983bd3?w=400&h=300&fit=crop&crop=center',
       available: true
     },
     {
@@ -47,7 +72,7 @@ let data = {
       description: 'Crisp romaine lettuce with parmesan and croutons',
       price: 14.99,
       category: 'Salads',
-      image: '/placeholder.svg',
+      image: 'https://images.unsplash.com/photo-1546793665-c74683f339c1?w=400&h=300&fit=crop&crop=center',
       available: true
     },
     {
@@ -56,7 +81,7 @@ let data = {
       description: 'Atlantic salmon with lemon herb seasoning',
       price: 28.99,
       category: 'Main Course',
-      image: '/placeholder.svg',
+      image: 'https://images.unsplash.com/photo-1467003909585-2f8a72700288?w=400&h=300&fit=crop&crop=center',
       available: true
     },
     {
@@ -65,7 +90,7 @@ let data = {
       description: 'Warm chocolate brownie with vanilla ice cream',
       price: 8.99,
       category: 'Desserts',
-      image: '/placeholder.svg',
+      image: 'https://images.unsplash.com/photo-1606313564200-e75d5e30476c?w=400&h=300&fit=crop&crop=center',
       available: true
     }
   ],
@@ -247,7 +272,7 @@ app.post('/api/orders', async (req, res) => {
   }
 
   const order = {
-    id: `order-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    id: generateOrderNumber(),
     ...req.body,
     createdAt: new Date().toISOString(),
     status: 'payment_pending'
@@ -256,64 +281,87 @@ app.post('/api/orders', async (req, res) => {
   // Calculate order total for business metrics
   const total = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   
-  // Check for payment gateway failure
-  if (isFailureActive('payment')) {
-    const paymentStartTime = Date.now();
-    
-    // Simulate payment attempt with timeout
-    await new Promise(resolve => setTimeout(resolve, 8000));
-    
-    // Log payment failure
-    logBusinessEvent('payment_failed', 'error', {
-      orderId: order.id,
-      amount: total,
-      errorCode: 'GATEWAY_TIMEOUT',
-      gatewayResponse: null,
-      attemptDuration: Date.now() - paymentStartTime
-    }, req);
-    
-    appLogger.error('Payment processing failed - gateway timeout', {
-      requestId: req.requestId,
-      orderId: order.id,
-      error: 'Connection timeout after 8000ms',
-      gateway: 'stripe',
-      customerId: customerEmail,
-      amount: total,
-      currency: 'USD'
-    });
-    
-    // Save order in failed payment state
-    order.status = 'payment_failed';
-    order.paymentError = 'Payment gateway timeout';
-    order.paymentErrorCode = 'GATEWAY_TIMEOUT';
-    data.orders.push(order);
-    
-    return res.status(502).json({
-      error: 'Payment processing failed - gateway timeout',
-      code: 'PAYMENT_GATEWAY_ERROR',
-      orderId: order.id,
-      retryable: true,
-      details: 'Payment gateway is currently unavailable'
-    });
-  }
+  // Ensure totalAmount is set correctly (use calculated total or fallback to req.body.total)
+  order.totalAmount = total;
   
-  // Normal order processing
-  order.status = 'confirmed';
+  // Save order immediately in payment_pending status
   data.orders.push(order);
   
-  // Log successful business event
-  logBusinessEvent('order_created', 'create', {
-    orderId: order.id,
-    customerEmail: customerEmail,
-    itemCount: items.length,
-    value: total,
-    unit: 'USD'
-  }, req);
+  // Return order ID immediately, then process payment asynchronously
+  res.json({ 
+    orderId: order.id, 
+    status: 'payment_pending',
+    message: 'Order created, processing payment...' 
+  });
   
+  // Process payment asynchronously to allow orders to be visible in payment_pending state
+  setTimeout(async () => {
+    try {
+      // Add realistic payment processing delay (2-5 seconds)
+      const paymentDelay = 2000 + Math.random() * 3000;
+      await new Promise(resolve => setTimeout(resolve, paymentDelay));
+      
+      // Random payment failures for realistic demo (10% failure rate)
+      const shouldFailPayment = Math.random() < 0.1;
+      
+      // Check for payment gateway failure (either simulated failure or random failure)
+      if (isFailureActive('payment') || shouldFailPayment) {
+        const paymentStartTime = Date.now();
+        
+        // Simulate payment attempt with timeout
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Log payment failure
+        logBusinessEvent('payment_failed', 'error', {
+          orderId: order.id,
+          amount: total,
+          errorCode: shouldFailPayment ? 'RANDOM_PAYMENT_FAILURE' : 'GATEWAY_TIMEOUT',
+          gatewayResponse: null,
+          attemptDuration: Date.now() - paymentStartTime
+        }, req);
+        
+        appLogger.error('Payment processing failed', {
+          requestId: req.requestId,
+          orderId: order.id,
+          error: shouldFailPayment ? 'Random payment failure for demo' : 'Connection timeout',
+          gateway: 'stripe',
+          customerId: customerEmail,
+          amount: total,
+          currency: 'USD'
+        });
+        
+        // Update order to failed payment state
+        order.status = 'payment_failed';
+        order.paymentError = shouldFailPayment ? 'Payment declined' : 'Payment gateway timeout';
+        order.paymentErrorCode = shouldFailPayment ? 'CARD_DECLINED' : 'GATEWAY_TIMEOUT';
+        
+        console.log(`💳❌ Payment failed for order ${order.id} - ${order.paymentError}`);
+      } else {
+        // Payment successful
+        order.status = 'confirmed';
+        
+        // Log successful business event
+        logBusinessEvent('order_created', 'create', {
+          orderId: order.id,
+          customerEmail: customerEmail,
+          totalAmount: total,
+          itemCount: items.length,
+          orderType: order.orderType || 'takeout'
+        }, req);
+        
+        console.log(`💳✅ Payment confirmed for order ${order.id} - $${total}`);
+      }
+    } catch (error) {
+      console.error(`💳⚠️ Error processing payment for order ${order.id}:`, error);
+      order.status = 'payment_failed';
+      order.paymentError = 'Payment processing error';
+      order.paymentErrorCode = 'PROCESSING_ERROR';
+    }
+  }, 100); // Small delay to ensure order is saved first
+  
+  // Log initial order creation event (payment processing will be logged separately)
   const duration = Date.now() - startTime;
-  logPerformanceTiming('order_processing', duration, 'orders', { orderId: order.id, itemCount: items.length }, req);
-  
-  res.status(201).json(order);
+  logPerformanceTiming('order_creation', duration, 'orders', { orderId: order.id, itemCount: items.length }, req);
 });
 
 app.put('/api/orders/:id', (req, res) => {
@@ -437,13 +485,155 @@ app.put('/api/settings', (req, res) => {
   res.json(data.settings);
 });
 
+// DELETE endpoints for complete CRUD operations
+app.delete('/api/products/:id', (req, res) => {
+  const index = data.products.findIndex(p => p.id === req.params.id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Product not found' });
+  }
+  
+  const deletedProduct = data.products.splice(index, 1)[0];
+  
+  appLogger.info('Product deleted', {
+    requestId: req.requestId,
+    productId: req.params.id,
+    productName: deletedProduct.name
+  });
+  
+  res.json({ 
+    success: true, 
+    message: 'Product deleted successfully',
+    product: deletedProduct 
+  });
+});
+
+app.delete('/api/orders/:id', (req, res) => {
+  const index = data.orders.findIndex(o => o.id === req.params.id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Order not found' });
+  }
+  
+  const deletedOrder = data.orders.splice(index, 1)[0];
+  
+  appLogger.info('Order deleted', {
+    requestId: req.requestId,
+    orderId: req.params.id,
+    orderTotal: deletedOrder.total
+  });
+  
+  res.json({ 
+    success: true, 
+    message: 'Order deleted successfully',
+    order: deletedOrder 
+  });
+});
+
+app.delete('/api/reservations/:id', (req, res) => {
+  const index = data.reservations.findIndex(r => r.id === req.params.id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Reservation not found' });
+  }
+  
+  const deletedReservation = data.reservations.splice(index, 1)[0];
+  
+  appLogger.info('Reservation deleted', {
+    requestId: req.requestId,
+    reservationId: req.params.id,
+    guestName: deletedReservation.name
+  });
+  
+  res.json({ 
+    success: true, 
+    message: 'Reservation deleted successfully',
+    reservation: deletedReservation 
+  });
+});
+
+// Get all data (for DataStore compatibility)
+app.get('/api/data', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      products: data.products,
+      orders: data.orders,
+      reservations: data.reservations,
+      settings: data.settings
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Reset all data to defaults
+app.post('/api/data/reset', (req, res) => {
+  const originalData = {
+    products: [
+      {
+        id: '1',
+        name: 'Margherita Pizza',
+        description: 'Fresh tomato sauce, mozzarella, and basil',
+        price: 18.99,
+        category: 'Pizza',
+        image: 'https://images.unsplash.com/photo-1604382354936-07c5d9983bd3?w=400&h=300&fit=crop&crop=center',
+        available: true
+      },
+      {
+        id: '2',
+        name: 'Caesar Salad',
+        description: 'Crisp romaine lettuce with parmesan and croutons',
+        price: 14.99,
+        category: 'Salads',
+        image: 'https://images.unsplash.com/photo-1546793665-c74683f339c1?w=400&h=300&fit=crop&crop=center',
+        available: true
+      },
+      {
+        id: '3',
+        name: 'Grilled Salmon',
+        description: 'Atlantic salmon with lemon herb seasoning',
+        price: 28.99,
+        category: 'Main Course',
+        image: 'https://images.unsplash.com/photo-1467003909585-2f8a72700288?w=400&h=300&fit=crop&crop=center',
+        available: true
+      },
+      {
+        id: '4',
+        name: 'Chocolate Brownie',
+        description: 'Warm chocolate brownie with vanilla ice cream',
+        price: 8.99,
+        category: 'Desserts',
+        image: 'https://images.unsplash.com/photo-1606313564200-e75d5e30476c?w=400&h=300&fit=crop&crop=center',
+        available: true
+      }
+    ],
+    reservations: [],
+    orders: [],
+    settings: {
+      restaurantName: 'Bella Vista Restaurant',
+      contactEmail: 'info@bellavista.com',
+      contactPhone: '+1 (555) 123-4567'
+    }
+  };
+  
+  data = { ...originalData };
+  
+  appLogger.info('Data reset to defaults', {
+    requestId: req.requestId
+  });
+  
+  res.json({
+    success: true,
+    message: 'Data reset to defaults successfully',
+    data,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // LogDNA Agent Management
-app.get('/api/mezmo/status', (req, res) => {
+app.get('/api/mezmo/status', async (req, res) => {
   try {
     // Check if agent is running
     const pidFile = '/tmp/codeuser/logdna-agent.pid';
@@ -452,38 +642,84 @@ app.get('/api/mezmo/status', (req, res) => {
     let status = 'disconnected';
     let pid = null;
     let hasConfig = false;
+    let configValid = false;
+    let health = null;
     
-    // Safely check if config file exists
+    // Safely check if config file exists and is valid
     try {
       if (fs.existsSync(configFile)) {
         hasConfig = true;
+        
+        // Validate configuration
+        const envContent = fs.readFileSync(configFile, 'utf8');
+        const configValidation = validateLogDNAConfig(envContent);
+        configValid = configValidation.isValid;
       }
     } catch (configError) {
       console.warn('Error checking config file:', configError);
       hasConfig = false;
+      configValid = false;
     }
     
-    // Safely check PID file and process status
+    // Safely check PID file and process status with health validation
     try {
       if (fs.existsSync(pidFile)) {
         const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
         pid = parseInt(pidContent);
         
         if (!isNaN(pid)) {
-          // Check if PID is still running
-          process.kill(pid, 0); // This throws if process doesn't exist
-          status = 'connected';
+          try {
+            // Check if PID is still running
+            process.kill(pid, 0); // This throws if process doesn't exist
+            status = 'connected';
+            
+            // Perform quick health check on running process
+            try {
+              const healthCheck = await checkAgentHealth(pid, 1500);
+              health = {
+                healthy: healthCheck.healthy,
+                reason: healthCheck.reason,
+                timestamp: new Date().toISOString()
+              };
+              
+              // Update status based on health
+              if (healthCheck.healthy === false) {
+                status = 'error';
+              } else if (healthCheck.healthy === null) {
+                status = 'connecting'; // Status unclear
+              }
+            } catch (healthError) {
+              console.warn('Health check failed:', healthError);
+              health = {
+                healthy: null,
+                reason: 'Health check failed',
+                error: healthError.message,
+                timestamp: new Date().toISOString()
+              };
+            }
+            
+          } catch (killError) {
+            // Process not running, clean up stale PID file
+            console.log('🧹 Cleaning up stale PID file for non-running process');
+            fs.unlinkSync(pidFile);
+            status = 'disconnected';
+            pid = null;
+            health = null;
+          }
         } else {
           // Invalid PID in file, clean up
+          console.log('🧹 Cleaning up invalid PID file');
           fs.unlinkSync(pidFile);
           status = 'disconnected';
           pid = null;
+          health = null;
         }
       }
     } catch (pidError) {
-      // Process not running or other error, clean up stale PID file
+      // Error reading PID file or other error, clean up
       try {
         if (fs.existsSync(pidFile)) {
+          console.log('🧹 Cleaning up PID file after error:', pidError.message);
           fs.unlinkSync(pidFile);
         }
       } catch (cleanupError) {
@@ -491,12 +727,15 @@ app.get('/api/mezmo/status', (req, res) => {
       }
       status = 'disconnected';
       pid = null;
+      health = null;
     }
     
     const response = {
       status,
       pid,
       hasConfig,
+      configValid,
+      health,
       timestamp: new Date().toISOString()
     };
     
@@ -566,11 +805,11 @@ app.post('/api/mezmo/configure', (req, res) => {
     };
     
     const hostConfig = getHostConfig(host);
-    console.log(`🌐 Mezmo host configuration:`, {
+    console.log(`🌐 Mezmo host configuration: ${JSON.stringify({
       host: host || 'logs.mezmo.com',
       type: hostConfig.type,
       endpoint: hostConfig.endpoint
-    });
+    })}`);
     
     // Create environment file with both LOGDNA_ and MZ_ prefixed variables
     const envContent = `
@@ -578,7 +817,6 @@ app.post('/api/mezmo/configure', (req, res) => {
 LOGDNA_INGESTION_KEY=${ingestionKey}
 LOGDNA_HOST=${host || 'logs.mezmo.com'}
 LOGDNA_DB_PATH=/var/lib/logdna
-LOGDNA_LOG_DIRS=/tmp/codeuser
 LOGDNA_LOOKBACK=start
 LOGDNA_LOG_LEVEL=info
 
@@ -587,16 +825,20 @@ MZ_INGESTION_KEY=${ingestionKey}
 MZ_HOST=${host || 'logs.mezmo.com'}
 MZ_ENDPOINT=${hostConfig.endpoint}
 MZ_DB_PATH=/var/lib/logdna
-MZ_LOG_DIRS=/tmp/codeuser
 MZ_LOOKBACK=start
 MZ_LOG_LEVEL=info
 MZ_HOSTNAME=restaurant-app-container
 MZ_BODY_SIZE=2097152
 MZ_USE_SSL=${hostConfig.ssl ? 'true' : 'false'}
 MZ_TIMEOUT=${hostConfig.timeout}
+MZ_TAGS=${tags || 'restaurant-app,demo'}
+
+# Specify log directories - CRITICAL for finding our application logs
+LOGDNA_LOGDIR=/tmp/codeuser
+MZ_LOGDIR=/tmp/codeuser
 `.trim();
     
-    // Create YAML configuration
+    // Create YAML configuration that explicitly targets our application logs
     const yamlContent = `
 http:
   endpoint: ${hostConfig.endpoint}
@@ -618,9 +860,16 @@ log:
   metrics_port: 9898
   include:
     glob:
+      - "*.log"
       - "/tmp/codeuser/*.log"
-      - "/tmp/codeuser/restaurant-performance.log"
+      - "/tmp/codeuser/server.log"
       - "/tmp/codeuser/app.log"
+      - "/tmp/codeuser/access.log"
+      - "/tmp/codeuser/events.log"
+      - "/tmp/codeuser/metrics.log"
+      - "/tmp/codeuser/errors.log"
+      - "/tmp/codeuser/performance.log"
+      - "/tmp/codeuser/restaurant-performance.log"
     regex: []
   exclude:
     glob:
@@ -668,162 +917,343 @@ startup: {}
   }
 });
 
+// Helper function to validate environment configuration
+const validateLogDNAConfig = (envContent) => {
+  const mzHostMatch = envContent.match(/MZ_HOST=([^\n]+)/);
+  const mzKeyMatch = envContent.match(/MZ_INGESTION_KEY=([^\n]+)/);
+  const logdnaHostMatch = envContent.match(/LOGDNA_HOST=([^\n]+)/);
+  const logdnaKeyMatch = envContent.match(/LOGDNA_INGESTION_KEY=([^\n]+)/);
+
+  const hasMzConfig = mzHostMatch && mzKeyMatch && mzKeyMatch[1].length >= 16;
+  const hasLogdnaConfig = logdnaHostMatch && logdnaKeyMatch && logdnaKeyMatch[1].length >= 16;
+  
+  return {
+    isValid: hasMzConfig || hasLogdnaConfig,
+    hasMzConfig,
+    hasLogdnaConfig,
+    host: (mzHostMatch && mzHostMatch[1]) || (logdnaHostMatch && logdnaHostMatch[1]),
+    keyLength: (mzKeyMatch && mzKeyMatch[1].length) || (logdnaKeyMatch && logdnaKeyMatch[1].length) || 0
+  };
+};
+
+// Helper function to check agent health by testing log forwarding
+const checkAgentHealth = async (pid, timeoutMs = 5000) => {
+  return new Promise((resolve) => {
+    const logFile = '/tmp/codeuser/logdna-agent.log';
+    let healthCheckTimer;
+    
+    // Test if process is running
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      return resolve({ healthy: false, reason: 'Process not running' });
+    }
+    
+    // Check logs for health indicators
+    const checkLogs = () => {
+      try {
+        if (fs.existsSync(logFile)) {
+          const logContent = fs.readFileSync(logFile, 'utf8');
+          const recentLogs = logContent.split('\n').slice(-20).join('\n');
+          
+          // Positive indicators - match actual LogDNA agent v3.x output patterns
+          if (recentLogs.match(/Enabling filesystem|initializing middleware|watching.*tmp.*codeuser|files_tracked.*[1-9]/i)) {
+            clearTimeout(healthCheckTimer);
+            return resolve({ healthy: true, reason: 'Agent logs show filesystem monitoring active' });
+          }
+          
+          // Negative indicators
+          if (recentLogs.match(/authentication.*failed|invalid.*key|connection.*refused|unable.*connect/i)) {
+            clearTimeout(healthCheckTimer);
+            return resolve({ healthy: false, reason: 'Authentication or connection error detected' });
+          }
+        }
+      } catch (error) {
+        // Continue checking
+      }
+    };
+    
+    // Check immediately and then periodically
+    checkLogs();
+    const logCheckInterval = setInterval(checkLogs, 500);
+    
+    // Timeout after specified time
+    healthCheckTimer = setTimeout(() => {
+      clearInterval(logCheckInterval);
+      resolve({ healthy: null, reason: 'Health check timeout - agent status unclear' });
+    }, timeoutMs);
+  });
+};
+
 app.post('/api/mezmo/start', (req, res) => {
   try {
     const pidFile = '/tmp/codeuser/logdna-agent.pid';
     const logFile = '/tmp/codeuser/logdna-agent.log';
     const envFile = '/etc/logdna/logdna.env';
     
-    // Check if already running
+    console.log('🚀 Starting LogDNA agent via API...');
+    
+    // Check if already running and validate health
     if (fs.existsSync(pidFile)) {
-      const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
-      try {
-        process.kill(pid, 0);
-        return res.json({ message: 'LogDNA agent is already running', pid });
-      } catch (error) {
-        // Process not running, clean up
+      const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
+      const pid = parseInt(pidContent);
+      
+      if (!isNaN(pid)) {
+        try {
+          process.kill(pid, 0);
+          console.log(`⚠️  Agent already running (PID: ${pid}), checking health...`);
+          
+          // Check if the running agent is healthy
+          checkAgentHealth(pid, 3000).then(healthCheck => {
+            if (healthCheck.healthy === true) {
+              console.log('✅ Running agent is healthy, no restart needed');
+              if (!res.headersSent) {
+                res.json({ 
+                  message: 'LogDNA agent is already running and healthy', 
+                  pid,
+                  health: healthCheck.reason,
+                  timestamp: new Date().toISOString()
+                });
+              }
+            } else if (healthCheck.healthy === false) {
+              console.log(`❌ Running agent is unhealthy: ${healthCheck.reason}`);
+              console.log('🔄 Attempting to restart agent...');
+              
+              // Kill unhealthy agent and restart
+              try {
+                process.kill(pid, 'SIGTERM');
+                setTimeout(() => {
+                  try { process.kill(pid, 'SIGKILL'); } catch(e) {}
+                }, 2000);
+              } catch (killError) {
+                console.log('Agent process already dead');
+              }
+              
+              // Clean up and restart
+              fs.unlinkSync(pidFile);
+              // Continue to restart logic below
+              startNewAgent();
+            } else {
+              console.log(`⚠️  Agent health unclear: ${healthCheck.reason}`);
+              if (!res.headersSent) {
+                res.json({ 
+                  message: 'LogDNA agent is running but health status unclear', 
+                  pid,
+                  health: healthCheck.reason,
+                  timestamp: new Date().toISOString()
+                });
+              }
+            }
+          }).catch(healthError => {
+            console.error('Health check failed:', healthError);
+            if (!res.headersSent) {
+              res.json({ 
+                message: 'LogDNA agent is running but health check failed', 
+                pid,
+                error: healthError.message,
+                timestamp: new Date().toISOString()
+              });
+            }
+          });
+          
+          return; // Exit early, health check will handle response
+          
+        } catch (error) {
+          // Process not running, clean up
+          console.log('🧹 Cleaning up stale PID file');
+          fs.unlinkSync(pidFile);
+        }
+      } else {
+        console.log('🧹 Cleaning up invalid PID file');
         fs.unlinkSync(pidFile);
       }
     }
     
-    // Check if configuration exists
-    if (!fs.existsSync(envFile)) {
-      return res.status(400).json({ error: 'LogDNA not configured. Please configure first.' });
-    }
-    
-    // Check if LogDNA agent binary exists
-    if (!fs.existsSync('/usr/bin/logdna-agent')) {
-      return res.status(500).json({ 
-        error: 'LogDNA agent binary not found',
-        details: 'The LogDNA agent is not installed in this container. Install it first or use OTEL Collector instead.'
-      });
-    }
-    
-    try {
-      // Read and validate environment configuration
-      const envContent = fs.readFileSync(envFile, 'utf8');
-      
-      // Check for both MZ_ and LOGDNA_ prefixed variables separately
-      const mzHostMatch = envContent.match(/MZ_HOST=([^\n]+)/);
-      const mzKeyMatch = envContent.match(/MZ_INGESTION_KEY=([^\n]+)/);
-      const logdnaHostMatch = envContent.match(/LOGDNA_HOST=([^\n]+)/);
-      const logdnaKeyMatch = envContent.match(/LOGDNA_INGESTION_KEY=([^\n]+)/);
-
-      const hasMzConfig = mzHostMatch && mzKeyMatch;
-      const hasLogdnaConfig = logdnaHostMatch && logdnaKeyMatch;
-      
-      console.log('🔍 Pre-start validation:');
-      console.log(`   Environment file: ${fs.existsSync(envFile) ? '✅' : '❌'}`);
-      console.log(`   MZ_HOST: ${mzHostMatch ? mzHostMatch[1] : 'Not found'}`);
-      console.log(`   MZ_INGESTION_KEY: ${mzKeyMatch ? mzKeyMatch[1].substring(0, 8) + '...' : 'Not found'}`);
-      console.log(`   LOGDNA_HOST: ${logdnaHostMatch ? logdnaHostMatch[1] : 'Not found'}`);
-      console.log(`   LOGDNA_INGESTION_KEY: ${logdnaKeyMatch ? logdnaKeyMatch[1].substring(0, 8) + '...' : 'Not found'}`);
-      console.log(`   Has complete MZ config: ${hasMzConfig ? '✅' : '❌'}`);
-      console.log(`   Has complete LOGDNA config: ${hasLogdnaConfig ? '✅' : '❌'}`);
-
-      if (!hasMzConfig && !hasLogdnaConfig) {
-        return res.status(400).json({ 
-          error: 'Invalid environment configuration',
-          details: 'Need either (MZ_HOST + MZ_INGESTION_KEY) or (LOGDNA_HOST + LOGDNA_INGESTION_KEY)'
-        });
+    // Function to start new agent
+    const startNewAgent = () => {
+      // Check if configuration exists
+      if (!fs.existsSync(envFile)) {
+        return res.status(400).json({ error: 'LogDNA not configured. Please configure first.' });
       }
       
-      // Source environment variables and start agent
-      // Note: LogDNA agent might need elevated privileges
-      const startCommand = `
-set -a
-source ${envFile}
-set +a
-echo "Starting LogDNA agent with host: $MZ_HOST"
-nohup /usr/bin/logdna-agent > ${logFile} 2>&1 & echo $! > ${pidFile}
-`;
-      
-      console.log('▶️ Starting LogDNA agent...');
-      execSync(startCommand, { shell: '/bin/bash' });
-      
-      // Give it more time to start and verify (increased from 1s to 3s)
-      setTimeout(() => {
-        // Check if response hasn't been sent yet
-        if (res.headersSent) {
-          return; // Response already sent, nothing to do
-        }
+      // Check if LogDNA agent binary exists
+      if (!fs.existsSync('/usr/bin/logdna-agent')) {
+        return res.status(500).json({ 
+          error: 'LogDNA agent binary not found',
+          details: 'The LogDNA agent is not installed in this container. Install it first or use OTEL Collector instead.'
+        });
+      }
+    
+      try {
+        // Read and validate environment configuration
+        const envContent = fs.readFileSync(envFile, 'utf8');
+        const configValidation = validateLogDNAConfig(envContent);
         
-        if (fs.existsSync(pidFile)) {
-          const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
-          const pid = parseInt(pidContent);
-          
-          if (!isNaN(pid)) {
-            try {
-              // Check if process is actually running
-              process.kill(pid, 0);
-              console.log('✅ LogDNA agent started with PID:', pid);
-              return res.json({ 
-                success: true,
-                message: 'LogDNA agent started successfully', 
-                pid,
-                timestamp: new Date().toISOString()
-              });
-            } catch (killError) {
-              // Process not running - read logs for details
-              let logContent = 'No log content available';
-              try {
-                if (fs.existsSync(logFile)) {
-                  logContent = fs.readFileSync(logFile, 'utf8').slice(-500); // Last 500 chars
-                }
-              } catch (logError) {
-                logContent = `Error reading logs: ${logError.message}`;
-              }
-              
-              console.log('❌ LogDNA agent startup failed. Log content:');
-              console.log(logContent);
-              
-              return res.status(500).json({ 
-                error: 'LogDNA agent failed to start',
-                details: 'Process started but died immediately. Check logs for connection errors.',
-                logs: logContent,
-                pid: pid
-              });
-            }
-          } else {
-            return res.status(500).json({ 
-              error: 'Invalid PID in pid file',
-              details: `PID file contains: ${pidContent}`
-            });
-          }
-        } else {
-          // No PID file - agent failed to start at all
-          let logContent = 'No log content available';
-          try {
-            if (fs.existsSync(logFile)) {
-              logContent = fs.readFileSync(logFile, 'utf8').slice(-500);
-            }
-          } catch (logError) {
-            logContent = `Error reading logs: ${logError.message}`;
-          }
-          
-          console.log('❌ LogDNA agent failed to create PID file. Logs:');
-          console.log(logContent);
-          
-          return res.status(500).json({ 
-            error: 'Failed to start LogDNA agent',
-            details: 'PID file was not created. Check if the binary exists and has proper permissions.'
+        console.log('🔍 Pre-start validation:');
+        console.log(`   Environment file: ${fs.existsSync(envFile) ? '✅' : '❌'}`);
+        console.log(`   Configuration valid: ${configValidation.isValid ? '✅' : '❌'}`);
+        console.log(`   Host: ${configValidation.host || 'Not found'}`);
+        console.log(`   Ingestion key length: ${configValidation.keyLength || 0} chars`);
+        console.log(`   Has MZ config: ${configValidation.hasMzConfig ? '✅' : '❌'}`);
+        console.log(`   Has LOGDNA config: ${configValidation.hasLogdnaConfig ? '✅' : '❌'}`);
+
+        if (!configValidation.isValid) {
+          return res.status(400).json({ 
+            error: 'Invalid environment configuration',
+            details: 'Need either (MZ_HOST + MZ_INGESTION_KEY) or (LOGDNA_HOST + LOGDNA_INGESTION_KEY) with valid ingestion key',
+            validation: configValidation
           });
         }
-      }, 3000); // Increased from 1s to 3s for better startup reliability
       
-    } catch (execError) {
-      return res.status(500).json({ 
-        error: 'Failed to execute start command',
-        details: execError.message
-      });
-    }
+        // Create a more robust startup script
+        const startupScript = `/tmp/start-logdna-api.sh`;
+        const startupScriptContent = `#!/bin/bash
+set -e
+echo "🚀 Starting LogDNA agent via API..."
+source ${envFile}
+echo "📡 Connecting to host: \${MZ_HOST:-\$LOGDNA_HOST}"
+exec /usr/bin/logdna-agent
+`;
+        
+        fs.writeFileSync(startupScript, startupScriptContent);
+        fs.chmodSync(startupScript, 0o755);
+        
+        console.log('▶️ Starting LogDNA agent with enhanced monitoring...');
+        
+        // Start agent in background with better error handling
+        const child = spawn(startupScript, [], {
+          detached: true,
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        
+        // Write PID immediately
+        fs.writeFileSync(pidFile, child.pid.toString());
+        
+        // Set up log capture
+        let logBuffer = '';
+        const appendToLog = (data) => {
+          const content = data.toString();
+          logBuffer += content;
+          try {
+            fs.appendFileSync(logFile, content);
+          } catch (logWriteError) {
+            console.warn('Failed to write to log file:', logWriteError.message);
+          }
+        };
+        
+        child.stdout.on('data', appendToLog);
+        child.stderr.on('data', appendToLog);
+        
+        // Handle process exit
+        child.on('exit', (code, signal) => {
+          console.log(`LogDNA agent process exited with code ${code}, signal ${signal}`);
+          // Clean up PID file if agent exits
+          try {
+            if (fs.existsSync(pidFile)) {
+              fs.unlinkSync(pidFile);
+            }
+          } catch (cleanupError) {
+            console.warn('Failed to clean up PID file:', cleanupError.message);
+          }
+        });
+        
+        // Allow process to run independently
+        child.unref();
+        
+        console.log(`⏳ LogDNA agent starting with PID: ${child.pid}...`);
+        
+        // Enhanced validation with health checking
+        setTimeout(async () => {
+          // Check if response hasn't been sent yet
+          if (res.headersSent) {
+            return; // Response already sent, nothing to do
+          }
+          
+          try {
+            // Verify process is still running
+            process.kill(child.pid, 0);
+            
+            // Perform health check
+            const healthCheck = await checkAgentHealth(child.pid, 2000);
+            
+            if (healthCheck.healthy === true) {
+              console.log('✅ LogDNA agent started successfully and is healthy');
+              return res.json({ 
+                success: true,
+                message: 'LogDNA agent started successfully and is forwarding logs', 
+                pid: child.pid,
+                health: healthCheck.reason,
+                timestamp: new Date().toISOString()
+              });
+            } else if (healthCheck.healthy === false) {
+              console.log(`❌ LogDNA agent unhealthy: ${healthCheck.reason}`);
+              
+              // Get recent logs for debugging
+              const recentLogs = logBuffer.split('\n').slice(-10).join('\n');
+              
+              return res.status(500).json({ 
+                error: 'LogDNA agent started but is not healthy',
+                details: healthCheck.reason,
+                logs: recentLogs,
+                pid: child.pid,
+                timestamp: new Date().toISOString()
+              });
+            } else {
+              console.log(`⚠️  LogDNA agent health status unclear: ${healthCheck.reason}`);
+              return res.json({ 
+                success: true,
+                message: 'LogDNA agent started but health status unclear',
+                pid: child.pid,
+                health: healthCheck.reason,
+                warning: 'Monitor agent logs to verify log forwarding',
+                timestamp: new Date().toISOString()
+              });
+            }
+            
+          } catch (pidError) {
+            // Process died during startup
+            console.log('❌ LogDNA agent process died during startup');
+            
+            const recentLogs = logBuffer || 'No log content captured';
+            
+            // Clean up PID file
+            try {
+              if (fs.existsSync(pidFile)) {
+                fs.unlinkSync(pidFile);
+              }
+            } catch (cleanupError) {
+              console.warn('Failed to clean up PID file:', cleanupError.message);
+            }
+            
+            return res.status(500).json({ 
+              error: 'LogDNA agent failed to start',
+              details: 'Process died immediately after startup. Check configuration and connectivity.',
+              logs: recentLogs,
+              timestamp: new Date().toISOString()
+            });
+          }
+        }, 4000); // Wait 4 seconds for thorough validation
+      
+      } catch (execError) {
+        console.error('Failed to execute start command:', execError);
+        return res.status(500).json({ 
+          error: 'Failed to execute start command',
+          details: execError.message
+        });
+      }
+    };
+    
+    // Start new agent if we reached here
+    startNewAgent();
     
   } catch (error) {
     console.error('Error starting LogDNA agent:', error);
-    return res.status(500).json({ 
-      error: 'Failed to start LogDNA agent',
-      details: error.message
-    });
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Failed to start LogDNA agent',
+        details: error.message
+      });
+    }
   }
 });
 
@@ -900,21 +1330,90 @@ app.get('/api/mezmo/logs', (req, res) => {
     const envFile = '/etc/logdna/logdna.env';
     const pidFile = '/tmp/codeuser/logdna-agent.pid';
     
-    // Gather debug information
+    // Gather comprehensive debug information
     const debugInfo = {
       logFileExists: fs.existsSync(logFile),
       envFileExists: fs.existsSync(envFile),
       pidFileExists: fs.existsSync(pidFile),
-      agentBinaryExists: fs.existsSync('/usr/bin/logdna-agent')
+      agentBinaryExists: fs.existsSync('/usr/bin/logdna-agent'),
+      configValidation: null,
+      processStatus: null,
+      logFileAge: null,
+      systemInfo: {
+        timestamp: new Date().toISOString(),
+        hostname: os.hostname(),
+        platform: os.platform(),
+        userInfo: (() => {
+          try {
+            return os.userInfo();
+          } catch (error) {
+            return { username: 'unknown', uid: -1, gid: -1, shell: null, homedir: null };
+          }
+        })()
+      }
     };
     
+    // Check file ages to understand startup sequence
+    if (fs.existsSync(logFile)) {
+      const stats = fs.statSync(logFile);
+      debugInfo.logFileAge = {
+        created: stats.birthtime.toISOString(),
+        modified: stats.mtime.toISOString(),
+        ageMinutes: Math.round((Date.now() - stats.mtime) / 60000)
+      };
+    }
+    
+    // Validate configuration if env file exists
     if (fs.existsSync(envFile)) {
       try {
         const envContent = fs.readFileSync(envFile, 'utf8');
-        const hostMatch = envContent.match(/(?:MZ_HOST|LOGDNA_HOST)=([^\n]+)/);
-        debugInfo.configuredHost = hostMatch ? hostMatch[1] : 'Not found';
+        const configValidation = validateLogDNAConfig(envContent);
+        
+        debugInfo.configValidation = {
+          isValid: configValidation.isValid,
+          hasMzConfig: configValidation.hasMzConfig,
+          hasLogdnaConfig: configValidation.hasLogdnaConfig,
+          host: configValidation.host || 'Not found',
+          keyLength: configValidation.keyLength
+        };
+        
+        debugInfo.configuredHost = configValidation.host || 'Not found';
       } catch (envError) {
         debugInfo.configuredHost = 'Error reading env file';
+        debugInfo.configValidation = { error: envError.message };
+      }
+    }
+    
+    // Check process status if PID file exists
+    if (fs.existsSync(pidFile)) {
+      try {
+        const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
+        const pid = parseInt(pidContent);
+        
+        if (!isNaN(pid)) {
+          try {
+            process.kill(pid, 0); // Test if process exists
+            debugInfo.processStatus = {
+              pid,
+              running: true,
+              pidFileAge: Math.round((Date.now() - fs.statSync(pidFile).mtime) / 60000)
+            };
+          } catch (killError) {
+            debugInfo.processStatus = {
+              pid,
+              running: false,
+              error: 'Process not found',
+              pidFileAge: Math.round((Date.now() - fs.statSync(pidFile).mtime) / 60000)
+            };
+          }
+        } else {
+          debugInfo.processStatus = { 
+            error: 'Invalid PID in file',
+            pidContent: pidContent.substring(0, 20)
+          };
+        }
+      } catch (pidError) {
+        debugInfo.processStatus = { error: pidError.message };
       }
     }
     
@@ -929,22 +1428,57 @@ app.get('/api/mezmo/logs', (req, res) => {
     const logs = fs.readFileSync(logFile, 'utf8');
     const lines = logs.split('\n').slice(-50); // Last 50 lines
     
-    // Enhanced error pattern detection with categorization
+    // Enhanced error pattern detection with categorization and startup sequence
     const errorPatterns = [
+      // Authentication issues
       { pattern: /403.*forbidden/i, category: 'authentication', severity: 'high' },
       { pattern: /bad.*request.*check.*configuration/i, category: 'authentication', severity: 'high' },
       { pattern: /unauthorized/i, category: 'authentication', severity: 'high' },
       { pattern: /invalid.*key/i, category: 'authentication', severity: 'medium' },
+      { pattern: /authentication.*failed/i, category: 'authentication', severity: 'high' },
+      
+      // Network connectivity
       { pattern: /connection.*refused/i, category: 'network', severity: 'high' },
       { pattern: /timeout/i, category: 'network', severity: 'medium' },
       { pattern: /dns.*resolution.*failed/i, category: 'network', severity: 'high' },
       { pattern: /host.*not.*found/i, category: 'network', severity: 'medium' },
+      { pattern: /unable.*connect/i, category: 'network', severity: 'high' },
+      { pattern: /network.*unreachable/i, category: 'network', severity: 'high' },
+      
+      // Security and SSL
       { pattern: /certificate/i, category: 'security', severity: 'medium' },
-      { pattern: /ssl.*error/i, category: 'security', severity: 'medium' }
+      { pattern: /ssl.*error/i, category: 'security', severity: 'medium' },
+      { pattern: /tls.*handshake.*failed/i, category: 'security', severity: 'medium' },
+      
+      // Configuration issues
+      { pattern: /missing.*configuration/i, category: 'configuration', severity: 'high' },
+      { pattern: /invalid.*format/i, category: 'configuration', severity: 'medium' },
+      { pattern: /config.*error/i, category: 'configuration', severity: 'medium' },
+      { pattern: /environment.*variable.*not.*set/i, category: 'configuration', severity: 'high' },
+      
+      // Startup sequence issues
+      { pattern: /failed.*to.*start/i, category: 'startup', severity: 'high' },
+      { pattern: /agent.*exited.*immediately/i, category: 'startup', severity: 'high' },
+      { pattern: /permission.*denied/i, category: 'startup', severity: 'high' },
+      { pattern: /binary.*not.*found/i, category: 'startup', severity: 'high' },
+      { pattern: /segmentation.*fault/i, category: 'startup', severity: 'high' },
+      
+      // Runtime issues
+      { pattern: /buffer.*full/i, category: 'runtime', severity: 'medium' },
+      { pattern: /memory.*error/i, category: 'runtime', severity: 'high' },
+      { pattern: /disk.*space/i, category: 'runtime', severity: 'medium' },
+      { pattern: /rate.*limit/i, category: 'runtime', severity: 'medium' }
     ];
     
     const detectedIssues = [];
-    const issueCategories = { authentication: [], network: [], security: [] };
+    const issueCategories = { 
+      authentication: [], 
+      network: [], 
+      security: [], 
+      configuration: [], 
+      startup: [], 
+      runtime: [] 
+    };
 
     lines.forEach(line => {
       errorPatterns.forEach(errorInfo => {
@@ -966,7 +1500,8 @@ app.get('/api/mezmo/logs', (req, res) => {
         solutions: [
           'Verify the ingestion key is valid for the configured host',
           'Check if the key is for the correct environment (dev/staging/prod)',
-          'Regenerate the ingestion key in your Mezmo account if needed'
+          'Regenerate the ingestion key in your Mezmo account if needed',
+          'Ensure the key format is correct (32+ characters)'
         ]
       });
     }
@@ -978,7 +1513,8 @@ app.get('/api/mezmo/logs', (req, res) => {
         solutions: [
           'Check internet connectivity',
           'Verify the host URL is correct for your environment',
-          'Check if corporate firewall is blocking connections'
+          'Check if corporate firewall is blocking connections',
+          'Test connectivity: ping logs.mezmo.com or curl -I https://logs.mezmo.com'
         ]
       });
     }
@@ -990,7 +1526,48 @@ app.get('/api/mezmo/logs', (req, res) => {
         solutions: [
           'Check system clock is accurate',
           'Verify SSL certificates are up to date',
-          'Try connecting from a different network'
+          'Try connecting from a different network',
+          'Update container base image if certificates are outdated'
+        ]
+      });
+    }
+    
+    if (issueCategories.configuration.length > 0) {
+      recommendations.push({
+        issue: 'Configuration Problems',
+        cause: 'Invalid or missing configuration settings',
+        solutions: [
+          'Check environment file exists: /etc/logdna/logdna.env',
+          'Verify all required variables are set (MZ_INGESTION_KEY, MZ_HOST)',
+          'Validate configuration format and values',
+          'Restart agent after configuration changes'
+        ]
+      });
+    }
+    
+    if (issueCategories.startup.length > 0) {
+      recommendations.push({
+        issue: 'Agent Startup Failed',
+        cause: 'LogDNA agent binary cannot start or initialize properly',
+        solutions: [
+          'Check if LogDNA agent is installed: ls -la /usr/bin/logdna-agent',
+          'Verify file permissions and execute rights',
+          'Check available disk space and memory',
+          'Review startup logs for specific error messages',
+          'Try manual agent start: /usr/bin/logdna-agent --help'
+        ]
+      });
+    }
+    
+    if (issueCategories.runtime.length > 0) {
+      recommendations.push({
+        issue: 'Runtime Performance Issues',
+        cause: 'Agent running but experiencing performance problems',
+        solutions: [
+          'Check system resources (CPU, memory, disk)',
+          'Monitor log buffer sizes and rates',
+          'Verify log file permissions in /tmp/codeuser/',
+          'Consider adjusting agent configuration parameters'
         ]
       });
     }
@@ -1487,12 +2064,12 @@ app.get('/api/otel/metrics', async (req, res) => {
 
 app.post('/api/otel/configure', (req, res) => {
   try {
-    console.log('🔧 OTEL Configure Request:', {
+    console.log(`🔧 OTEL Configure Request: ${JSON.stringify({
       timestamp: new Date().toISOString(),
       bodyKeys: Object.keys(req.body),
       hasBody: !!req.body,
       bodySize: JSON.stringify(req.body).length
-    });
+    })}`);
     
     const { 
       serviceName, 
@@ -1504,12 +2081,12 @@ app.post('/api/otel/configure', (req, res) => {
       tracesEnabled, tracesIngestionKey, tracesPipelineId, tracesHost
     } = req.body;
     
-    console.log('🔧 Extracted Parameters:', {
+    console.log(`🔧 Extracted Parameters: ${JSON.stringify({
       serviceName, tags, debugLevel,
       logsEnabled, hasLogsKey: !!logsIngestionKey,
       metricsEnabled, hasMetricsKey: !!metricsIngestionKey, 
       tracesEnabled, hasTracesKey: !!tracesIngestionKey
-    });
+    })}`);
     
     // Validate that at least one pipeline is enabled with a key
     const hasValidLogs = logsEnabled && logsIngestionKey;
@@ -2311,8 +2888,619 @@ app.post('/api/agents/save-custom', (req, res) => {
   }
 });
 
+// ========== VIRTUAL TRAFFIC CONTROL ENDPOINTS ==========
+
+// Initialize TrafficManager lazily
+let trafficManager = null;
+async function getTrafficManager() {
+  if (!trafficManager) {
+    try {
+      const { TrafficManager } = await import('./services/virtualTraffic/trafficManager.js');
+      trafficManager = TrafficManager.getInstance();
+      console.log('🚦 TrafficManager initialized for API endpoints');
+    } catch (error) {
+      console.error('❌ Failed to initialize TrafficManager:', error);
+      throw error;
+    }
+  }
+  return trafficManager;
+}
+
+// Start virtual traffic
+app.post('/api/traffic/start', async (req, res) => {
+  try {
+    const manager = await getTrafficManager();
+    const config = req.body || {};
+    
+    // Update config and start
+    manager.updateConfig({ ...config, enabled: true });
+    
+    res.json({
+      message: 'Virtual traffic started successfully',
+      config: manager.getConfig(),
+      status: manager.getDetailedStatus()
+    });
+  } catch (error) {
+    console.error('Error starting virtual traffic:', error);
+    res.status(500).json({ error: 'Failed to start virtual traffic' });
+  }
+});
+
+// Stop virtual traffic
+app.post('/api/traffic/stop', async (req, res) => {
+  try {
+    const manager = await getTrafficManager();
+    manager.updateConfig({ enabled: false });
+    
+    res.json({
+      message: 'Virtual traffic stopped successfully',
+      config: manager.getConfig(),
+      status: manager.getDetailedStatus()
+    });
+  } catch (error) {
+    console.error('Error stopping virtual traffic:', error);
+    res.status(500).json({ error: 'Failed to stop virtual traffic' });
+  }
+});
+
+// Update traffic configuration
+app.post('/api/traffic/config', async (req, res) => {
+  try {
+    const manager = await getTrafficManager();
+    const newConfig = req.body;
+    
+    manager.updateConfig(newConfig);
+    
+    res.json({
+      message: 'Traffic configuration updated successfully',
+      config: manager.getConfig(),
+      status: manager.getDetailedStatus()
+    });
+  } catch (error) {
+    console.error('Error updating traffic config:', error);
+    res.status(500).json({ error: 'Failed to update traffic configuration' });
+  }
+});
+
+// Get current traffic status
+app.get('/api/traffic/status', async (req, res) => {
+  try {
+    const manager = await getTrafficManager();
+    
+    res.json({
+      config: manager.getConfig(),
+      stats: manager.getStats(),
+      detailed: manager.getDetailedStatus()
+    });
+  } catch (error) {
+    console.error('Error getting traffic status:', error);
+    res.status(500).json({ error: 'Failed to get traffic status' });
+  }
+});
+
+// Get real-time activity feed for the UI
+app.get('/api/traffic/activities', async (req, res) => {
+  try {
+    const manager = await getTrafficManager();
+    const detailed = manager.getDetailedStatus();
+    
+    res.json({
+      activeUsers: detailed.activeUsers,
+      recentlyCompleted: detailed.recentlyCompleted,
+      stats: detailed.stats
+    });
+  } catch (error) {
+    console.error('Error getting traffic activities:', error);
+    res.status(500).json({ error: 'Failed to get traffic activities' });
+  }
+});
+
+// Get traffic configuration (for initialization)
+app.get('/api/traffic/config', async (req, res) => {
+  try {
+    const manager = await getTrafficManager();
+    
+    res.json({
+      config: manager.getConfig()
+    });
+  } catch (error) {
+    console.error('Error getting traffic config:', error);
+    res.status(500).json({ error: 'Failed to get traffic configuration' });
+  }
+});
+
 // Structured error handling middleware
 app.use(errorLoggingMiddleware);
+
+// =============================================================================
+// CONFIGURATION MANAGEMENT API - Replace localStorage with server-side storage
+// =============================================================================
+
+const configManager = ConfigManager.getInstance();
+
+// Get configuration by type
+app.get('/api/config/:type', (req, res) => {
+  try {
+    const { type } = req.params;
+    const config = configManager.getConfig(type);
+    
+    res.json({
+      success: true,
+      config,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error getting configuration', {
+      requestId: req.requestId,
+      configType: req.params.type,
+      error: error.message
+    });
+    
+    res.status(400).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Set configuration by type
+app.post('/api/config/:type', (req, res) => {
+  try {
+    const { type } = req.params;
+    const config = configManager.setConfig(type, req.body);
+    
+    appLogger.info('Configuration updated', {
+      requestId: req.requestId,
+      configType: type,
+      config: config
+    });
+    
+    res.json({
+      success: true,
+      config,
+      message: `${type} configuration updated successfully`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error setting configuration', {
+      requestId: req.requestId,
+      configType: req.params.type,
+      error: error.message,
+      requestBody: req.body
+    });
+    
+    res.status(400).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Get all configurations
+app.get('/api/config', (req, res) => {
+  try {
+    const configs = configManager.getAllConfigs();
+    
+    res.json({
+      success: true,
+      configs,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error getting all configurations', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve configurations',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Reset configuration by type
+app.delete('/api/config/:type', (req, res) => {
+  try {
+    const { type } = req.params;
+    const config = configManager.resetConfig(type);
+    
+    appLogger.info('Configuration reset', {
+      requestId: req.requestId,
+      configType: type
+    });
+    
+    res.json({
+      success: true,
+      config,
+      message: `${type} configuration reset to defaults`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error resetting configuration', {
+      requestId: req.requestId,
+      configType: req.params.type,
+      error: error.message
+    });
+    
+    res.status(400).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// =============================================================================
+// CLIENT LOG COLLECTION API - Replace localStorage logging with server storage
+// =============================================================================
+
+// Create log file writers for client logs
+import path from 'path';
+
+// Ensure log directory exists
+const logDir = '/tmp/codeuser';
+if (!fs.existsSync(logDir)) {
+  fs.mkdirSync(logDir, { recursive: true });
+}
+
+// Write log to disk and memory buffer
+function writeClientLog(logType, logEntry) {
+  try {
+    // Add to memory buffer for quick access
+    configManager.addLogToBuffer(logType, logEntry);
+    
+    // Write to disk for Mezmo Agent pickup
+    const logFile = path.join(logDir, `client-${logType}.log`);
+    const logLine = JSON.stringify(logEntry) + '\n';
+    fs.appendFileSync(logFile, logLine);
+    
+    return true;
+  } catch (error) {
+    console.error(`Error writing ${logType} log:`, error);
+    return false;
+  }
+}
+
+// Receive client performance logs
+app.post('/api/logs/performance', (req, res) => {
+  try {
+    const logs = Array.isArray(req.body) ? req.body : [req.body];
+    let successCount = 0;
+    
+    logs.forEach(logEntry => {
+      // Ensure required fields
+      if (!logEntry.timestamp) {
+        logEntry.timestamp = new Date().toISOString();
+      }
+      
+      if (writeClientLog('performance', logEntry)) {
+        successCount++;
+      }
+    });
+    
+    res.json({
+      success: true,
+      processed: logs.length,
+      successful: successCount,
+      message: `${successCount}/${logs.length} performance logs written to disk`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error processing client performance logs', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process performance logs',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Receive client event logs
+app.post('/api/logs/events', (req, res) => {
+  try {
+    const logs = Array.isArray(req.body) ? req.body : [req.body];
+    let successCount = 0;
+    
+    logs.forEach(logEntry => {
+      // Ensure required fields
+      if (!logEntry.timestamp) {
+        logEntry.timestamp = new Date().toISOString();
+      }
+      
+      if (writeClientLog('events', logEntry)) {
+        successCount++;
+      }
+    });
+    
+    res.json({
+      success: true,
+      processed: logs.length,
+      successful: successCount,
+      message: `${successCount}/${logs.length} event logs written to disk`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error processing client event logs', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process event logs',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Receive client trace logs
+app.post('/api/logs/traces', (req, res) => {
+  try {
+    const logs = Array.isArray(req.body) ? req.body : [req.body];
+    let successCount = 0;
+    
+    logs.forEach(logEntry => {
+      // Ensure required fields
+      if (!logEntry.timestamp) {
+        logEntry.timestamp = new Date().toISOString();
+      }
+      
+      if (writeClientLog('traces', logEntry)) {
+        successCount++;
+      }
+    });
+    
+    res.json({
+      success: true,
+      processed: logs.length,
+      successful: successCount,
+      message: `${successCount}/${logs.length} trace logs written to disk`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error processing client trace logs', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process trace logs',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Get recent logs from memory buffer (for debugging/UI)
+app.get('/api/logs/recent/:type', (req, res) => {
+  try {
+    const { type } = req.params;
+    const limit = parseInt(req.query.limit) || 100;
+    const logs = configManager.getRecentLogs(type, limit);
+    
+    res.json({
+      success: true,
+      type,
+      count: logs.length,
+      logs,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error getting recent logs', {
+      requestId: req.requestId,
+      logType: req.params.type,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve recent logs',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Get log buffer statistics
+app.get('/api/logs/stats', (req, res) => {
+  try {
+    const stats = configManager.getBufferStats();
+    
+    res.json({
+      success: true,
+      stats,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error getting log statistics', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve log statistics',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// =============================================================================
+// SESSION MANAGEMENT API - Replace localStorage auth with server sessions
+// =============================================================================
+
+// Login endpoint
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    // Simple auth check (same as client-side)
+    if (username === 'admin' && password === 'password') {
+      const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      configManager.createSession(sessionId, {
+        username,
+        loginTime: new Date(),
+        isAuthenticated: true
+      });
+      
+      res.json({
+        success: true,
+        sessionId,
+        message: 'Login successful',
+        timestamp: new Date().toISOString()
+      });
+      
+      appLogger.info('User logged in', {
+        requestId: req.requestId,
+        sessionId,
+        username
+      });
+    } else {
+      res.status(401).json({
+        success: false,
+        error: 'Invalid credentials',
+        timestamp: new Date().toISOString()
+      });
+      
+      appLogger.warn('Failed login attempt', {
+        requestId: req.requestId,
+        username
+      });
+    }
+  } catch (error) {
+    appLogger.error('Error during login', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Login failed',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Check session status
+app.get('/api/auth/status', (req, res) => {
+  try {
+    const sessionId = req.headers['x-session-id'] || req.headers['authorization']?.replace('Bearer ', '');
+    
+    if (!sessionId) {
+      return res.json({
+        success: true,
+        isAuthenticated: false,
+        message: 'No session ID provided',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    const session = configManager.getSession(sessionId);
+    
+    if (session && session.isAuthenticated) {
+      res.json({
+        success: true,
+        isAuthenticated: true,
+        session: {
+          username: session.username,
+          loginTime: session.createdAt,
+          lastAccess: session.lastAccess
+        },
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.json({
+        success: true,
+        isAuthenticated: false,
+        message: 'Invalid or expired session',
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error) {
+    appLogger.error('Error checking auth status', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check authentication status',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', (req, res) => {
+  try {
+    const sessionId = req.headers['x-session-id'] || req.headers['authorization']?.replace('Bearer ', '');
+    
+    if (sessionId) {
+      const destroyed = configManager.destroySession(sessionId);
+      
+      if (destroyed) {
+        appLogger.info('User logged out', {
+          requestId: req.requestId,
+          sessionId
+        });
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: 'Logged out successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error during logout', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Logout failed',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Get system status (including config manager stats)
+app.get('/api/system/status', (req, res) => {
+  try {
+    const status = configManager.getSystemStatus();
+    
+    res.json({
+      success: true,
+      system: {
+        ...status,
+        serverUptime: process.uptime(),
+        serverMemory: process.memoryUsage(),
+        nodeVersion: process.version
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    appLogger.error('Error getting system status', {
+      requestId: req.requestId,
+      error: error.message
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get system status',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
 
 // Final error handler
 app.use((err, req, res, next) => {
@@ -2327,18 +3515,553 @@ app.use((err, req, res, next) => {
   }
 });
 
+// =============================================================================
+// REAL USER ACTIVITY TRACKING API - Rich Logging Like Virtual Users
+// =============================================================================
+
+// Import performance logger for consistent logging format
+import PerformanceLogger from './services/virtualTraffic/performanceLogger.js';
+
+// Import simulator manager for cart checkout and stress test simulators
+import SimulatorManager from './services/simulators/simulatorManager.js';
+
+// Import configuration manager
+import ConfigManager from './services/configManager.js';
+
+// Create user session tracking
+const userSessions = new Map(); // sessionId -> { userId, startTime, lastActivity, customerProfile }
+
+// Generate user session ID
+function generateUserSessionId() {
+  return `real-user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
+// User session initialization
+app.post('/api/track/session/start', async (req, res) => {
+  try {
+    const sessionId = generateUserSessionId();
+    const { userAgent, viewport, language, timezone } = req.body;
+    
+    const performanceLogger = new PerformanceLogger();
+    
+    // Create user session tracking
+    const sessionData = {
+      sessionId,
+      userId: `real-user-${sessionId}`,
+      startTime: Date.now(),
+      lastActivity: Date.now(),
+      browserFingerprint: {
+        userAgent: userAgent || req.get('User-Agent'),
+        language: language || 'en-US',
+        viewport: viewport || { width: 1920, height: 1080 },
+        timezone: timezone || 'America/New_York'
+      },
+      performanceLogger,
+      interactions: 0,
+      pageViews: 0
+    };
+    
+    userSessions.set(sessionId, sessionData);
+    
+    // Log session start using same format as virtual users
+    performanceLogger.logSensitiveCustomerData({
+      fullName: 'Real User',
+      firstName: 'Real',
+      lastName: 'User',
+      email: 'real.user@example.com',
+      phone: '000-000-0000',
+      address: { street: 'Unknown', city: 'Unknown', state: 'Unknown', zipCode: '00000' },
+      creditCard: { number: '0000000000000000', type: 'unknown', expiryMonth: '00', expiryYear: '00', cvv: '000', holderName: 'Real User' },
+      sensitiveData: { ssn: '000-00-0000', driversLicense: 'UNKNOWN', bankAccount: { routingNumber: '000000000', accountNumber: '0000000000' } }
+    }, 'real_user_session_started');
+    
+    console.log(`🧑 Real user session started: ${sessionId}`);
+    
+    res.json({ 
+      sessionId,
+      message: 'Session tracking started',
+      userId: sessionData.userId
+    });
+  } catch (error) {
+    console.error('Error starting user session:', error);
+    res.status(500).json({ error: 'Failed to start session tracking' });
+  }
+});
+
+// User interaction tracking (clicks, hovers, etc.)
+app.post('/api/track/interaction', async (req, res) => {
+  try {
+    const { sessionId, interactionType, element, duration, metadata } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    session.interactions++;
+    
+    // Log interaction using same format as virtual users
+    session.performanceLogger.logUserInteraction(
+      interactionType || 'click',
+      element || 'unknown-element',
+      duration || 0
+    );
+    
+    console.log(`🖱️ Real user ${session.userId} ${interactionType}: ${element}`);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking interaction:', error);
+    res.status(500).json({ error: 'Failed to track interaction' });
+  }
+});
+
+// Page navigation tracking
+app.post('/api/track/navigation', async (req, res) => {
+  try {
+    const { sessionId, fromPath, toPath, loadTime } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    session.pageViews++;
+    
+    // Log navigation using same format as virtual users
+    session.performanceLogger.logUserInteraction(
+      'navigate',
+      `page-${toPath}`,
+      loadTime || 0
+    );
+    
+    console.log(`🔄 Real user ${session.userId} navigated: ${fromPath} → ${toPath}`);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking navigation:', error);
+    res.status(500).json({ error: 'Failed to track navigation' });
+  }
+});
+
+// Cart action tracking
+app.post('/api/track/cart', async (req, res) => {
+  try {
+    const { sessionId, action, productId, productName, quantity, price, cartTotal } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    
+    // Log cart action using same format as virtual users
+    session.performanceLogger.logCartAction(
+      action || 'add',
+      productId || 'unknown',
+      productName || 'Unknown Product',
+      quantity || 1,
+      cartTotal || 0,
+      0 // duration
+    );
+    
+    console.log(`🛒 Real user ${session.userId} ${action}: ${quantity}x ${productName} (cart total: ${cartTotal})`);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking cart action:', error);
+    res.status(500).json({ error: 'Failed to track cart action' });
+  }
+});
+
+// Customer profile capture (when user enters personal info)
+app.post('/api/track/customer-profile', async (req, res) => {
+  try {
+    const { sessionId, customerData } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    session.customerProfile = customerData;
+    
+    // Log customer profile with sensitive data using same format as virtual users
+    session.performanceLogger.logSensitiveCustomerData(customerData, 'real_user_profile_captured');
+    
+    console.log(`👤 Real user ${session.userId} profile captured: ${customerData.fullName}`);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking customer profile:', error);
+    res.status(500).json({ error: 'Failed to track customer profile' });
+  }
+});
+
+// Payment attempt tracking
+app.post('/api/track/payment', async (req, res) => {
+  try {
+    const { sessionId, paymentData, customerData, transactionData, status } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    
+    // Log payment attempt using same format as virtual users
+    session.performanceLogger.logPaymentAttempt(
+      paymentData,
+      customerData || session.customerProfile,
+      transactionData,
+      status || 'initiated',
+      0 // duration
+    );
+    
+    console.log(`💳 Real user ${session.userId} payment ${status}: $${transactionData?.amount || 0}`);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking payment:', error);
+    res.status(500).json({ error: 'Failed to track payment' });
+  }
+});
+
+// Reservation tracking
+app.post('/api/track/reservation', async (req, res) => {
+  try {
+    const { sessionId, reservationData } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    
+    // Log reservation using same format as virtual users
+    session.performanceLogger.logReservationData(
+      session.customerProfile || {
+        fullName: 'Real User',
+        email: 'real.user@example.com',
+        phone: '000-000-0000',
+        sensitiveData: { ssn: '000-00-0000', driversLicense: 'UNKNOWN' }
+      },
+      reservationData
+    );
+    
+    console.log(`📅 Real user ${session.userId} made reservation: ${reservationData.date} ${reservationData.time}`);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking reservation:', error);
+    res.status(500).json({ error: 'Failed to track reservation' });
+  }
+});
+
+// Form field focus/blur tracking
+app.post('/api/track/form-interaction', async (req, res) => {
+  try {
+    const { sessionId, fieldName, action, value, duration } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    
+    // Log form interaction using same format as virtual users
+    if (action === 'focus') {
+      console.log(`📝 Real user ${session.userId} focused: ${fieldName}`);
+    } else if (action === 'blur') {
+      console.log(`📤 Real user ${session.userId} completed: ${fieldName}`);
+    }
+    
+    session.performanceLogger.logUserInteraction(action, fieldName, duration || 0);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking form interaction:', error);
+    res.status(500).json({ error: 'Failed to track form interaction' });
+  }
+});
+
+// Session end tracking
+app.post('/api/track/session/end', async (req, res) => {
+  try {
+    const { sessionId, reason } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    const sessionDuration = Date.now() - session.startTime;
+    
+    console.log(`✅ Real user ${session.userId} session ended (${Math.round(sessionDuration / 1000)}s) - ${reason || 'unknown'}`);
+    
+    // Clean up session
+    userSessions.delete(sessionId);
+    
+    res.json({ 
+      success: true,
+      sessionDuration: sessionDuration,
+      totalInteractions: session.interactions,
+      totalPageViews: session.pageViews
+    });
+  } catch (error) {
+    console.error('Error ending user session:', error);
+    res.status(500).json({ error: 'Failed to end session' });
+  }
+});
+
+// Get active real user sessions (for monitoring)
+app.get('/api/track/sessions', async (req, res) => {
+  try {
+    const activeSessions = Array.from(userSessions.values()).map(session => ({
+      sessionId: session.sessionId,
+      userId: session.userId,
+      startTime: session.startTime,
+      lastActivity: session.lastActivity,
+      duration: Date.now() - session.startTime,
+      interactions: session.interactions,
+      pageViews: session.pageViews,
+      customerName: session.customerProfile?.fullName || 'Unknown'
+    }));
+    
+    res.json({
+      activeSessions: activeSessions.length,
+      sessions: activeSessions
+    });
+  } catch (error) {
+    console.error('Error getting active sessions:', error);
+    res.status(500).json({ error: 'Failed to get active sessions' });
+  }
+});
+
+// =============================================================================
+// SIMULATOR API ENDPOINTS - Cart Checkout & Stress Test Simulators
+// =============================================================================
+
+// Initialize simulator manager
+const simulatorManager = SimulatorManager.getInstance();
+
+// Cart Checkout Simulator APIs
+app.post('/api/simulator/cart-checkout/start', async (req, res) => {
+  try {
+    const config = req.body || {};
+    console.log(`🚀 Starting Cart Checkout Simulator with config: ${JSON.stringify(config)}`);
+    
+    await simulatorManager.startCartCheckoutSimulator(config);
+    
+    res.json({ 
+      success: true,
+      message: 'Cart Checkout Simulator started',
+      status: simulatorManager.getCartCheckoutStatus()
+    });
+  } catch (error) {
+    console.error('Error starting cart checkout simulator:', error);
+    res.status(500).json({ error: 'Failed to start cart checkout simulator' });
+  }
+});
+
+app.post('/api/simulator/cart-checkout/stop', (req, res) => {
+  try {
+    console.log('🛑 Stopping Cart Checkout Simulator');
+    simulatorManager.stopCartCheckoutSimulator();
+    
+    res.json({ 
+      success: true,
+      message: 'Cart Checkout Simulator stopped',
+      status: simulatorManager.getCartCheckoutStatus()
+    });
+  } catch (error) {
+    console.error('Error stopping cart checkout simulator:', error);
+    res.status(500).json({ error: 'Failed to stop cart checkout simulator' });
+  }
+});
+
+app.get('/api/simulator/cart-checkout/status', (req, res) => {
+  try {
+    const status = simulatorManager.getCartCheckoutStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('Error getting cart checkout status:', error);
+    res.status(500).json({ error: 'Failed to get cart checkout status' });
+  }
+});
+
+app.post('/api/simulator/cart-checkout/config', (req, res) => {
+  try {
+    const config = req.body || {};
+    console.log(`🔧 Updating Cart Checkout Simulator config: ${JSON.stringify(config)}`);
+    
+    simulatorManager.updateCartCheckoutConfig(config);
+    
+    res.json({ 
+      success: true,
+      message: 'Cart Checkout Simulator config updated',
+      config: simulatorManager.getCartCheckoutStatus().config
+    });
+  } catch (error) {
+    console.error('Error updating cart checkout config:', error);
+    res.status(500).json({ error: 'Failed to update cart checkout config' });
+  }
+});
+
+// Stress Test Simulator APIs
+app.post('/api/simulator/stress-test/start', async (req, res) => {
+  try {
+    const config = req.body || {};
+    console.log(`🚀 Starting Stress Test Simulator with config: ${JSON.stringify(config)}`);
+    
+    await simulatorManager.startStressTestSimulator(config);
+    
+    res.json({ 
+      success: true,
+      message: 'Stress Test Simulator started',
+      status: simulatorManager.getStressTestStatus()
+    });
+  } catch (error) {
+    console.error('Error starting stress test simulator:', error);
+    res.status(500).json({ error: 'Failed to start stress test simulator' });
+  }
+});
+
+app.post('/api/simulator/stress-test/stop', (req, res) => {
+  try {
+    console.log('🛑 Stopping Stress Test Simulator');
+    simulatorManager.stopStressTestSimulator();
+    
+    res.json({ 
+      success: true,
+      message: 'Stress Test Simulator stopped',
+      status: simulatorManager.getStressTestStatus()
+    });
+  } catch (error) {
+    console.error('Error stopping stress test simulator:', error);
+    res.status(500).json({ error: 'Failed to stop stress test simulator' });
+  }
+});
+
+app.get('/api/simulator/stress-test/status', (req, res) => {
+  try {
+    const status = simulatorManager.getStressTestStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('Error getting stress test status:', error);
+    res.status(500).json({ error: 'Failed to get stress test status' });
+  }
+});
+
+app.get('/api/simulator/stress-test/detailed-stats', (req, res) => {
+  try {
+    const stats = simulatorManager.getStressTestDetailedStats();
+    res.json(stats);
+  } catch (error) {
+    console.error('Error getting stress test detailed stats:', error);
+    res.status(500).json({ error: 'Failed to get stress test detailed stats' });
+  }
+});
+
+app.post('/api/simulator/stress-test/config', (req, res) => {
+  try {
+    const config = req.body || {};
+    console.log(`🔧 Updating Stress Test Simulator config: ${JSON.stringify(config)}`);
+    
+    simulatorManager.updateStressTestConfig(config);
+    
+    res.json({ 
+      success: true,
+      message: 'Stress Test Simulator config updated',
+      config: simulatorManager.getStressTestStatus().config
+    });
+  } catch (error) {
+    console.error('Error updating stress test config:', error);
+    res.status(500).json({ error: 'Failed to update stress test config' });
+  }
+});
+
+// Combined Simulator Management APIs
+app.get('/api/simulator/status', (req, res) => {
+  try {
+    const status = simulatorManager.getAllSimulatorStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('Error getting simulator status:', error);
+    res.status(500).json({ error: 'Failed to get simulator status' });
+  }
+});
+
+app.get('/api/simulator/active', (req, res) => {
+  try {
+    const active = simulatorManager.getActiveSimulators();
+    res.json(active);
+  } catch (error) {
+    console.error('Error getting active simulators:', error);
+    res.status(500).json({ error: 'Failed to get active simulators' });
+  }
+});
+
+app.post('/api/simulator/stop-all', (req, res) => {
+  try {
+    console.log('🛑 Stopping all simulators');
+    simulatorManager.stopAllSimulators();
+    
+    res.json({ 
+      success: true,
+      message: 'All simulators stopped',
+      status: simulatorManager.getAllSimulatorStatus()
+    });
+  } catch (error) {
+    console.error('Error stopping all simulators:', error);
+    res.status(500).json({ error: 'Failed to stop all simulators' });
+  }
+});
+
+app.get('/api/simulator/stats', (req, res) => {
+  try {
+    const stats = simulatorManager.getSystemStats();
+    res.json(stats);
+  } catch (error) {
+    console.error('Error getting system stats:', error);
+    res.status(500).json({ error: 'Failed to get system stats' });
+  }
+});
+
+app.get('/api/simulator/health', async (req, res) => {
+  try {
+    const health = await simulatorManager.healthCheck();
+    res.json(health);
+  } catch (error) {
+    console.error('Error checking simulator health:', error);
+    res.status(500).json({ error: 'Failed to check simulator health' });
+  }
+});
+
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
+  // Initialize order counter based on existing orders
+  initializeOrderCounter();
+  
   appLogger.info('Server started successfully', {
     port: PORT,
     environment: process.env.NODE_ENV || 'development',
     pid: process.pid,
-    logLevels: getLogLevels()
+    logLevels: getLogLevels(),
+    nextOrderNumber: orderCounter.toString().padStart(7, '0')
   });
   
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 API available at http://localhost:${PORT}/api`);
   console.log(`📊 Logging levels:`, getLogLevels());
+  console.log(`📝 Next order number: #${orderCounter.toString().padStart(7, '0')}`);
   
   // Log server startup as business event
   logBusinessEvent('server_started', 'startup', {
@@ -2354,4 +4077,25 @@ app.listen(PORT, () => {
     logLevels: getLogLevels(),
     timestamp: new Date().toISOString()
   });
+
+  // Auto-start virtual traffic for demo-friendly experience
+  if (process.env.DISABLE_AUTO_TRAFFIC !== 'true') {
+    try {
+      console.log('🎭 Auto-starting virtual traffic for demo...');
+      const manager = await getTrafficManager();
+      const config = manager.getConfig();
+      
+      if (config.enabled) {
+        manager.start();
+        console.log(`✅ Virtual traffic started with ${config.targetConcurrentUsers} users (${config.journeyPattern} behavior, ${config.trafficTiming} timing)`);
+        console.log('💡 Orders will start appearing in the Orders page within minutes');
+        console.log(`⚙️  Configure virtual traffic at: http://localhost:${PORT}/agents`);
+      }
+    } catch (error) {
+      console.warn('⚠️  Failed to auto-start virtual traffic:', error.message);
+      console.log('💡 You can manually start virtual traffic from the Virtual Users page');
+    }
+  } else {
+    console.log('🚫 Auto-traffic disabled via DISABLE_AUTO_TRAFFIC environment variable');
+  }
 });

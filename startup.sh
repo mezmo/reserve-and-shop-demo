@@ -55,6 +55,7 @@ touch /tmp/codeuser/events.log
 touch /tmp/codeuser/metrics.log
 touch /tmp/codeuser/errors.log
 touch /tmp/codeuser/performance.log
+touch /tmp/codeuser/restaurant-performance.log
 touch /tmp/codeuser/app.log
 chmod 644 /tmp/codeuser/*.log
 
@@ -70,6 +71,7 @@ echo "   Business events: /tmp/codeuser/events.log"
 echo "   Performance metrics: /tmp/codeuser/metrics.log"
 echo "   Application errors: /tmp/codeuser/errors.log"
 echo "   Performance timing: /tmp/codeuser/performance.log"
+echo "   Restaurant performance: /tmp/codeuser/restaurant-performance.log"
 echo "   General app logs: /tmp/codeuser/app.log"
 
 # Load agent configuration from file if available
@@ -102,11 +104,72 @@ load_agents_config() {
                 
                 # Create LogDNA environment file
                 cat > /etc/logdna/logdna.env << EOF
+# LOGDNA_ prefixed variables (legacy)
 LOGDNA_INGESTION_KEY=$mezmo_key
 LOGDNA_HOST=$mezmo_host
 LOGDNA_TAGS=$mezmo_tags
 LOGDNA_LOGDIR=/tmp/codeuser
 LOGDNA_INCLUDE=*.log
+LOGDNA_DB_PATH=/var/lib/logdna
+LOGDNA_LOOKBACK=start
+LOGDNA_LOG_LEVEL=info
+
+# MZ_ prefixed variables (required by LogDNA Agent v2/v3)
+MZ_INGESTION_KEY=$mezmo_key
+MZ_HOST=$mezmo_host
+MZ_TAGS=$mezmo_tags
+MZ_LOGDIR=/tmp/codeuser
+MZ_DB_PATH=/var/lib/logdna
+MZ_LOOKBACK=start
+MZ_LOG_LEVEL=info
+MZ_HOSTNAME=restaurant-app-container
+MZ_USE_SSL=true
+EOF
+
+                # Create YAML configuration file to explicitly target our application logs
+                cat > /etc/logdna/config.yaml << EOF
+http:
+  endpoint: /logs/ingest
+  host: $mezmo_host
+  timeout: 30000
+  use_ssl: true
+  use_compression: true
+  gzip_level: 2
+  body_size: 2097152
+  ingestion_key: $mezmo_key
+  params:
+    hostname: restaurant-app-container
+    tags: $mezmo_tags
+
+log:
+  dirs:
+    - /tmp/codeuser/
+  db_path: /var/lib/logdna
+  metrics_port: 9898
+  include:
+    glob:
+      - "*.log"
+      - "/tmp/codeuser/*.log"
+      - "/tmp/codeuser/server.log"
+      - "/tmp/codeuser/app.log"
+      - "/tmp/codeuser/access.log"
+      - "/tmp/codeuser/events.log"
+      - "/tmp/codeuser/metrics.log"
+      - "/tmp/codeuser/errors.log"
+      - "/tmp/codeuser/performance.log"
+      - "/tmp/codeuser/restaurant-performance.log"
+    regex: []
+  exclude:
+    glob:
+      - "/tmp/codeuser/logdna-agent.log"
+      - "/tmp/codeuser/logdna-agent.pid"
+    regex: []
+  line_exclusion_regex: []
+  line_inclusion_regex: []
+  lookback: start
+
+journald: {}
+startup: {}
 EOF
                 echo "✅ Mezmo agent pre-configured with key ${mezmo_key:0:8}..."
             fi
@@ -129,40 +192,176 @@ EOF
 load_agents_config
 
 # LogDNA agent management functions
+validate_logdna_config() {
+    local env_file="$1"
+    
+    if [ ! -f "$env_file" ]; then
+        echo "❌ Environment file not found: $env_file"
+        return 1
+    fi
+    
+    # Source the env file to check variables
+    set -a
+    source "$env_file" 2>/dev/null
+    set +a
+    
+    # Check for required variables (both MZ_ and LOGDNA_ formats)
+    local has_mz_config=false
+    local has_logdna_config=false
+    
+    if [ -n "$MZ_INGESTION_KEY" ] && [ -n "$MZ_HOST" ]; then
+        has_mz_config=true
+        echo "✅ Found MZ_* configuration"
+    fi
+    
+    if [ -n "$LOGDNA_INGESTION_KEY" ] && [ -n "$LOGDNA_HOST" ]; then
+        has_logdna_config=true
+        echo "✅ Found LOGDNA_* configuration"
+    fi
+    
+    if [ "$has_mz_config" = false ] && [ "$has_logdna_config" = false ]; then
+        echo "❌ Missing required configuration variables"
+        echo "   Need either (MZ_INGESTION_KEY + MZ_HOST) or (LOGDNA_INGESTION_KEY + LOGDNA_HOST)"
+        return 1
+    fi
+    
+    # Validate ingestion key format (should be 32+ characters)
+    local key="${MZ_INGESTION_KEY:-$LOGDNA_INGESTION_KEY}"
+    if [ ${#key} -lt 16 ]; then
+        echo "❌ Ingestion key appears invalid (too short): ${#key} characters"
+        return 1
+    fi
+    
+    echo "✅ Configuration validation passed"
+    return 0
+}
+
 start_logdna_agent() {
     local config_file="/etc/logdna/config.yaml"
     local env_file="/etc/logdna/logdna.env"
+    local pid_file="/tmp/codeuser/logdna-agent.pid"
+    local log_file="/tmp/codeuser/logdna-agent.log"
     
     echo "🔍 Checking LogDNA agent configuration..."
     
-    # Check if configuration exists
+    # Check if agent is already running
+    if [ -f "$pid_file" ]; then
+        local existing_pid=$(cat "$pid_file" 2>/dev/null)
+        if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
+            echo "⚠️  LogDNA agent already running (PID: $existing_pid)"
+            return 0
+        else
+            echo "🧹 Cleaning up stale PID file"
+            rm -f "$pid_file"
+        fi
+    fi
+    
+    # Check if configuration exists and is valid
     if [ -f "$env_file" ]; then
-        echo "📋 Found LogDNA configuration, starting agent..."
+        echo "📋 Found LogDNA configuration file, validating..."
+        
+        if ! validate_logdna_config "$env_file"; then
+            echo "❌ LogDNA configuration validation failed"
+            echo "💡 Fix configuration in web interface at /agents or check agents-config.json"
+            return 1
+        fi
+        
+        # Check if LogDNA binary exists
+        if [ ! -f "/usr/bin/logdna-agent" ]; then
+            echo "❌ LogDNA agent binary not found at /usr/bin/logdna-agent"
+            echo "💡 Agent may not be installed properly"
+            return 1
+        fi
+        
+        echo "🚀 Starting LogDNA agent..."
         
         # Source environment variables
         set -a
         source "$env_file"
         set +a
         
-        # Start LogDNA agent in background (package manager installs to /usr/bin)
-        nohup /usr/bin/logdna-agent > /tmp/codeuser/logdna-agent.log 2>&1 &
+        # Create a more robust startup command that uses YAML config
+        cat > /tmp/start-logdna.sh << 'EOF'
+#!/bin/bash
+set -e
+source /etc/logdna/logdna.env
+echo "🚀 Starting LogDNA agent with config file /etc/logdna/config.yaml"
+echo "📁 Target directory: /tmp/codeuser/"
+exec /usr/bin/logdna-agent --config /etc/logdna/config.yaml
+EOF
+        chmod +x /tmp/start-logdna.sh
+        
+        # Start LogDNA agent in background with better error handling
+        nohup /tmp/start-logdna.sh > "$log_file" 2>&1 &
         LOGDNA_PID=$!
         
         # Save PID for later management
-        echo $LOGDNA_PID > /tmp/codeuser/logdna-agent.pid
+        echo $LOGDNA_PID > "$pid_file"
         
-        echo "✅ LogDNA agent started (PID: $LOGDNA_PID)"
+        echo "⏳ LogDNA agent starting (PID: $LOGDNA_PID)..."
         
-        # Wait a moment and check if it's still running
-        sleep 2
+        # Wait longer and validate more thoroughly
+        local wait_count=0
+        local max_wait=10
+        local agent_validated=false
+        
+        while [ $wait_count -lt $max_wait ]; do
+            sleep 1
+            wait_count=$((wait_count + 1))
+            
+            # Check if process is still running
+            if ! kill -0 $LOGDNA_PID 2>/dev/null; then
+                echo "❌ LogDNA agent process died (waited ${wait_count}s)"
+                break
+            fi
+            
+            # Check for startup success indicators in logs (LogDNA Agent v3.x patterns)
+            if [ -f "$log_file" ]; then
+                if grep -q "Enabling filesystem" "$log_file" 2>/dev/null || \
+                   grep -q "initializing middleware" "$log_file" 2>/dev/null || \
+                   grep -q "watching.*tmp.*codeuser" "$log_file" 2>/dev/null || \
+                   grep -q "files_tracked.*[1-9]" "$log_file" 2>/dev/null; then
+                    agent_validated=true
+                    break
+                fi
+                
+                # Check for immediate failures
+                if grep -qi "authentication.*failed\|invalid.*key\|connection.*refused\|unable.*connect" "$log_file" 2>/dev/null; then
+                    echo "❌ LogDNA agent authentication/connection failed"
+                    break
+                fi
+            fi
+            
+            echo "⏳ Still waiting for agent to initialize... (${wait_count}/${max_wait}s)"
+        done
+        
+        # Final validation
         if kill -0 $LOGDNA_PID 2>/dev/null; then
-            echo "🔗 LogDNA agent is running and forwarding logs"
+            if [ "$agent_validated" = true ]; then
+                echo "✅ LogDNA agent started successfully and is forwarding logs (PID: $LOGDNA_PID)"
+                return 0
+            else
+                echo "⚠️  LogDNA agent is running but status unclear (PID: $LOGDNA_PID)"
+                echo "📄 Check logs: tail -f $log_file"
+                return 0
+            fi
         else
-            echo "❌ LogDNA agent failed to start, check logs at /tmp/codeuser/logdna-agent.log"
+            echo "❌ LogDNA agent failed to start"
+            
+            # Show recent logs for debugging
+            if [ -f "$log_file" ]; then
+                echo "📄 Recent agent logs:"
+                tail -n 10 "$log_file" 2>/dev/null | sed 's/^/   /'
+            fi
+            
+            # Clean up PID file
+            rm -f "$pid_file"
+            return 1
         fi
     else
         echo "⚠️  No LogDNA configuration found, skipping agent startup"
-        echo "💡 Configure LogDNA in the web interface at /config"
+        echo "💡 Configure LogDNA in the web interface at /agents"
+        return 0
     fi
 }
 

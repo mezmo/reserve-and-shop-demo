@@ -10,12 +10,12 @@ export interface Product {
 
 export interface Reservation {
   id: string;
-  customerName: string;
-  customerEmail: string;
-  customerPhone: string;
+  name: string;
+  email: string;
+  phone: string;
   date: string;
   time: string;
-  partySize: number;
+  guests: number;
   specialRequests?: string;
   status: 'confirmed' | 'pending' | 'cancelled';
   createdAt: string;
@@ -34,7 +34,7 @@ export interface Order {
   customerPhone: string;
   items: OrderItem[];
   totalAmount: number;
-  status: 'pending' | 'preparing' | 'ready' | 'completed' | 'cancelled';
+  status: 'payment_pending' | 'confirmed' | 'payment_failed' | 'pending' | 'preparing' | 'ready' | 'completed' | 'cancelled';
   type: 'takeout' | 'delivery';
   createdAt: string;
   notes?: string;

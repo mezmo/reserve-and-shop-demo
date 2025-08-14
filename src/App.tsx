@@ -4,14 +4,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { CartProvider } from "@/hooks/useCart";
-import { usePerformance } from "@/hooks/usePerformance";
+import { useServerTracking } from "@/hooks/useServerTracking";
 import { useSessionTracker } from "@/hooks/useSessionTracker";
 import { initializeTracing } from "@/lib/tracing/config";
-import { TrafficManager } from "@/lib/tracing/trafficManager";
 import { useEffect, useRef } from "react";
 import Home from "./pages/Home";
 import Menu from "./pages/Menu";
 import Reservations from "./pages/Reservations";
+import Orders from "./pages/Orders";
 import Config from "./pages/Config";
 import Agents from "./pages/Agents";
 import NotFound from "./pages/NotFound";
@@ -45,8 +45,8 @@ const queryClient = new QueryClient({
 });
 
 const AppContent = () => {
-  // Initialize performance tracking
-  usePerformance();
+  // Initialize server-side user tracking (replaces client-side performance logging)
+  useServerTracking();
   
   // Initialize session tracking for tracing
   const sessionTracker = useSessionTracker();
@@ -69,6 +69,7 @@ const AppContent = () => {
         <Route path="/" element={<Home />} />
         <Route path="/menu" element={<Menu />} />
         <Route path="/reservations" element={<Reservations />} />
+        <Route path="/orders" element={<Orders />} />
         <Route path="/config" element={<Config />} />
         <Route path="/agents" element={<Agents />} />
         {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
@@ -90,15 +91,6 @@ const App = () => {
     });
   }, []);
 
-  // Initialize TrafficManager once globally
-  useEffect(() => {
-    const trafficManager = TrafficManager.getInstance();
-    
-    // Cleanup on app unmount
-    return () => {
-      trafficManager.destroy();
-    };
-  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
