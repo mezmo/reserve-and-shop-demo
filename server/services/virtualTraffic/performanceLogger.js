@@ -205,6 +205,51 @@ class PerformanceLogger {
 
     this.writeLog(logEntry);
   }
+
+  logApiError(requestId, endpoint, method, statusCode, errorMessage, duration) {
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      level: 'error',
+      logger: 'error',
+      sessionId: this.sessionId,
+      requestId: requestId,
+      correlationId: this.correlationId,
+      type: 'API_ERROR',
+      error: {
+        endpoint,
+        method,
+        statusCode,
+        message: errorMessage,
+        duration
+      },
+      message: `API Error: ${method} ${endpoint} returned ${statusCode} - ${errorMessage}`,
+      counter: ++this.logCounter
+    };
+    
+    this.writeLog(logEntry);
+  }
+
+  logSystemError(component, errorType, errorMessage, context = {}) {
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      level: 'error',
+      logger: 'error',
+      sessionId: this.sessionId,
+      requestId: this.requestId,
+      correlationId: this.correlationId,
+      type: 'SYSTEM_ERROR',
+      error: {
+        component,
+        type: errorType,
+        message: errorMessage,
+        context
+      },
+      message: `System Error in ${component}: ${errorMessage}`,
+      counter: ++this.logCounter
+    };
+    
+    this.writeLog(logEntry);
+  }
 }
 
 export default PerformanceLogger;

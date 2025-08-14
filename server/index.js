@@ -2457,6 +2457,9 @@ app.use((err, req, res, next) => {
 // Import performance logger for consistent logging format
 import PerformanceLogger from './services/virtualTraffic/performanceLogger.js';
 
+// Import simulator manager for cart checkout and stress test simulators
+import SimulatorManager from './services/simulators/simulatorManager.js';
+
 // Create user session tracking
 const userSessions = new Map(); // sessionId -> { userId, startTime, lastActivity, customerProfile }
 
@@ -2771,6 +2774,206 @@ app.get('/api/track/sessions', async (req, res) => {
   } catch (error) {
     console.error('Error getting active sessions:', error);
     res.status(500).json({ error: 'Failed to get active sessions' });
+  }
+});
+
+// =============================================================================
+// SIMULATOR API ENDPOINTS - Cart Checkout & Stress Test Simulators
+// =============================================================================
+
+// Initialize simulator manager
+const simulatorManager = SimulatorManager.getInstance();
+
+// Cart Checkout Simulator APIs
+app.post('/api/simulator/cart-checkout/start', async (req, res) => {
+  try {
+    const config = req.body || {};
+    console.log(`🚀 Starting Cart Checkout Simulator with config: ${JSON.stringify(config)}`);
+    
+    await simulatorManager.startCartCheckoutSimulator(config);
+    
+    res.json({ 
+      success: true,
+      message: 'Cart Checkout Simulator started',
+      status: simulatorManager.getCartCheckoutStatus()
+    });
+  } catch (error) {
+    console.error('Error starting cart checkout simulator:', error);
+    res.status(500).json({ error: 'Failed to start cart checkout simulator' });
+  }
+});
+
+app.post('/api/simulator/cart-checkout/stop', (req, res) => {
+  try {
+    console.log('🛑 Stopping Cart Checkout Simulator');
+    simulatorManager.stopCartCheckoutSimulator();
+    
+    res.json({ 
+      success: true,
+      message: 'Cart Checkout Simulator stopped',
+      status: simulatorManager.getCartCheckoutStatus()
+    });
+  } catch (error) {
+    console.error('Error stopping cart checkout simulator:', error);
+    res.status(500).json({ error: 'Failed to stop cart checkout simulator' });
+  }
+});
+
+app.get('/api/simulator/cart-checkout/status', (req, res) => {
+  try {
+    const status = simulatorManager.getCartCheckoutStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('Error getting cart checkout status:', error);
+    res.status(500).json({ error: 'Failed to get cart checkout status' });
+  }
+});
+
+app.post('/api/simulator/cart-checkout/config', (req, res) => {
+  try {
+    const config = req.body || {};
+    console.log(`🔧 Updating Cart Checkout Simulator config: ${JSON.stringify(config)}`);
+    
+    simulatorManager.updateCartCheckoutConfig(config);
+    
+    res.json({ 
+      success: true,
+      message: 'Cart Checkout Simulator config updated',
+      config: simulatorManager.getCartCheckoutStatus().config
+    });
+  } catch (error) {
+    console.error('Error updating cart checkout config:', error);
+    res.status(500).json({ error: 'Failed to update cart checkout config' });
+  }
+});
+
+// Stress Test Simulator APIs
+app.post('/api/simulator/stress-test/start', async (req, res) => {
+  try {
+    const config = req.body || {};
+    console.log(`🚀 Starting Stress Test Simulator with config: ${JSON.stringify(config)}`);
+    
+    await simulatorManager.startStressTestSimulator(config);
+    
+    res.json({ 
+      success: true,
+      message: 'Stress Test Simulator started',
+      status: simulatorManager.getStressTestStatus()
+    });
+  } catch (error) {
+    console.error('Error starting stress test simulator:', error);
+    res.status(500).json({ error: 'Failed to start stress test simulator' });
+  }
+});
+
+app.post('/api/simulator/stress-test/stop', (req, res) => {
+  try {
+    console.log('🛑 Stopping Stress Test Simulator');
+    simulatorManager.stopStressTestSimulator();
+    
+    res.json({ 
+      success: true,
+      message: 'Stress Test Simulator stopped',
+      status: simulatorManager.getStressTestStatus()
+    });
+  } catch (error) {
+    console.error('Error stopping stress test simulator:', error);
+    res.status(500).json({ error: 'Failed to stop stress test simulator' });
+  }
+});
+
+app.get('/api/simulator/stress-test/status', (req, res) => {
+  try {
+    const status = simulatorManager.getStressTestStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('Error getting stress test status:', error);
+    res.status(500).json({ error: 'Failed to get stress test status' });
+  }
+});
+
+app.get('/api/simulator/stress-test/detailed-stats', (req, res) => {
+  try {
+    const stats = simulatorManager.getStressTestDetailedStats();
+    res.json(stats);
+  } catch (error) {
+    console.error('Error getting stress test detailed stats:', error);
+    res.status(500).json({ error: 'Failed to get stress test detailed stats' });
+  }
+});
+
+app.post('/api/simulator/stress-test/config', (req, res) => {
+  try {
+    const config = req.body || {};
+    console.log(`🔧 Updating Stress Test Simulator config: ${JSON.stringify(config)}`);
+    
+    simulatorManager.updateStressTestConfig(config);
+    
+    res.json({ 
+      success: true,
+      message: 'Stress Test Simulator config updated',
+      config: simulatorManager.getStressTestStatus().config
+    });
+  } catch (error) {
+    console.error('Error updating stress test config:', error);
+    res.status(500).json({ error: 'Failed to update stress test config' });
+  }
+});
+
+// Combined Simulator Management APIs
+app.get('/api/simulator/status', (req, res) => {
+  try {
+    const status = simulatorManager.getAllSimulatorStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('Error getting simulator status:', error);
+    res.status(500).json({ error: 'Failed to get simulator status' });
+  }
+});
+
+app.get('/api/simulator/active', (req, res) => {
+  try {
+    const active = simulatorManager.getActiveSimulators();
+    res.json(active);
+  } catch (error) {
+    console.error('Error getting active simulators:', error);
+    res.status(500).json({ error: 'Failed to get active simulators' });
+  }
+});
+
+app.post('/api/simulator/stop-all', (req, res) => {
+  try {
+    console.log('🛑 Stopping all simulators');
+    simulatorManager.stopAllSimulators();
+    
+    res.json({ 
+      success: true,
+      message: 'All simulators stopped',
+      status: simulatorManager.getAllSimulatorStatus()
+    });
+  } catch (error) {
+    console.error('Error stopping all simulators:', error);
+    res.status(500).json({ error: 'Failed to stop all simulators' });
+  }
+});
+
+app.get('/api/simulator/stats', (req, res) => {
+  try {
+    const stats = simulatorManager.getSystemStats();
+    res.json(stats);
+  } catch (error) {
+    console.error('Error getting system stats:', error);
+    res.status(500).json({ error: 'Failed to get system stats' });
+  }
+});
+
+app.get('/api/simulator/health', async (req, res) => {
+  try {
+    const health = await simulatorManager.healthCheck();
+    res.json(health);
+  } catch (error) {
+    console.error('Error checking simulator health:', error);
+    res.status(500).json({ error: 'Failed to check simulator health' });
   }
 });
 
