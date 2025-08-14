@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import { execSync, spawn } from 'child_process';
+import os from 'os';
 import yaml from 'js-yaml';
 import { loggingMiddleware, errorLoggingMiddleware, logBusinessEvent, logPerformanceTiming } from './middleware/logging-middleware.js';
 import { updateLogFormat, getLogFormats } from './logging/winston-config.js';
@@ -1120,7 +1121,7 @@ exec /usr/bin/logdna-agent
         console.log('▶️ Starting LogDNA agent with enhanced monitoring...');
         
         // Start agent in background with better error handling
-        const child = require('child_process').spawn(startupScript, [], {
+        const child = spawn(startupScript, [], {
           detached: true,
           stdio: ['ignore', 'pipe', 'pipe']
         });
@@ -1340,11 +1341,11 @@ app.get('/api/mezmo/logs', (req, res) => {
       logFileAge: null,
       systemInfo: {
         timestamp: new Date().toISOString(),
-        hostname: require('os').hostname(),
-        platform: require('os').platform(),
+        hostname: os.hostname(),
+        platform: os.platform(),
         userInfo: (() => {
           try {
-            return require('os').userInfo();
+            return os.userInfo();
           } catch (error) {
             return { username: 'unknown', uid: -1, gid: -1, shell: null, homedir: null };
           }
