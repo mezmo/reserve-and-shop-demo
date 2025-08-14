@@ -355,46 +355,92 @@ const Config = () => {
     window.location.reload();
   };
 
-  const handleRefreshLocalStorage = () => {
-    const dataStore = DataStore.getInstance();
-    dataStore.refreshFromDefaults();
-    toast({
-      title: "Local Storage Refreshed",
-      description: "All cached data has been refreshed with latest defaults."
-    });
-    // Refresh the page to show updated data
-    window.location.reload();
+  const handleRefreshLocalStorage = async () => {
+    try {
+      const dataStore = DataStore.getInstance();
+      dataStore.refreshFromDefaults();
+      
+      // Manually trigger summary refresh without page reload
+      setSummaryRefresh(prev => prev + 1);
+      
+      toast({
+        title: "Data Refreshed",
+        description: "All cached data has been refreshed with latest server data."
+      });
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+      toast({
+        title: "Refresh Failed",
+        description: "Failed to refresh data. Please try again.",
+        variant: "destructive"
+      });
+    }
   };
 
   const [summaryRefresh, setSummaryRefresh] = useState(0);
 
   const getCurrentDataSummary = async () => {
     try {
-      const dataStore = DataStore.getInstance();
-      const data = await dataStore.getAllData();
+      // Fetch data directly from server endpoints to ensure real-time accuracy
+      const baseUrl = window.location.origin.replace(':8080', ':3001');
+      
+      const [productsResponse, reservationsResponse, ordersResponse] = await Promise.all([
+        fetch(`${baseUrl}/api/products`),
+        fetch(`${baseUrl}/api/reservations`),
+        fetch(`${baseUrl}/api/orders`)
+      ]);
+
+      const products = productsResponse.ok ? await productsResponse.json() : [];
+      const reservations = reservationsResponse.ok ? await reservationsResponse.json() : [];
+      const orders = ordersResponse.ok ? await ordersResponse.json() : [];
+
       return {
-        products: data.products?.length || 0,
-        reservations: data.reservations?.length || 0,
-        orders: data.orders?.length || 0
+        products: products?.length || 0,
+        reservations: reservations?.length || 0,
+        orders: orders?.length || 0
       };
     } catch (error) {
-      console.error('Error getting data summary:', error);
-      return {
-        products: 0,
-        reservations: 0,
-        orders: 0
-      };
+      console.error('Error getting data summary from server:', error);
+      
+      // Fallback to DataStore cache if server requests fail
+      try {
+        const dataStore = DataStore.getInstance();
+        const data = await dataStore.getAllData();
+        return {
+          products: data.products?.length || 0,
+          reservations: data.reservations?.length || 0,
+          orders: data.orders?.length || 0
+        };
+      } catch (fallbackError) {
+        console.error('Error getting data summary from fallback:', fallbackError);
+        return {
+          products: 0,
+          reservations: 0,
+          orders: 0
+        };
+      }
     }
   };
 
   const [summary, setSummary] = useState({ products: 0, reservations: 0, orders: 0 });
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
     const loadSummary = async () => {
       const newSummary = await getCurrentDataSummary();
       setSummary(newSummary);
+      setLastUpdated(new Date());
     };
+    
+    // Initial load
     loadSummary();
+    
+    // Set up polling every 5 seconds to keep data in sync with server
+    const summaryInterval = setInterval(loadSummary, 5000);
+    
+    return () => {
+      clearInterval(summaryInterval);
+    };
   }, [summaryRefresh]);
 
   const handlePerformanceConfigChange = (key: string, value: any) => {
@@ -1488,17 +1534,22 @@ const Config = () => {
                 <div className="text-sm text-muted-foreground">Orders</div>
               </div>
             </div>
-            <div className="flex justify-center">
+            <div className="flex flex-col items-center space-y-2">
               <Button 
                 onClick={handleRefreshLocalStorage}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 <RefreshCw className="mr-2 h-4 w-4" />
-                Refresh Local Storage
+                Refresh Data
               </Button>
+              {lastUpdated && (
+                <p className="text-xs text-muted-foreground">
+                  Last updated: {lastUpdated.toLocaleTimeString()} (auto-updates every 5s)
+                </p>
+              )}
             </div>
             <p className="text-sm text-muted-foreground text-center">
-              Clears cached data and reloads with latest defaults (including updated menu images)
+              Data refreshes automatically every 5 seconds to stay in sync with server
             </p>
           </CardContent>
         </Card>
