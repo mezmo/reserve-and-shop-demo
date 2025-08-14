@@ -103,10 +103,10 @@ class VirtualUser {
       console.log(`🎭 ${this.customerProfile.fullName} (${this.userId}) starting journey: ${this.journey.name} with ${this.journey.steps.length} steps`);
       
       const tracerProvider = trace.getTracerProvider();
-      console.log(`🔍 Virtual User ${this.userId} trace provider status:`, {
+      console.log(`🔍 Virtual User ${this.userId} trace provider status: ${JSON.stringify({
         providerType: tracerProvider.constructor.name,
         isNoopProvider: tracerProvider.constructor.name === 'NoopTracerProvider'
-      });
+      })}`);
       
       this.updateActivity(`starting_${this.journey.name.toLowerCase().replace(/\s+/g, '_')}`);
       
@@ -160,12 +160,12 @@ class VirtualUser {
     );
     
     const spanContext = stepSpan.spanContext();
-    console.log(`🔍 Virtual User ${this.userId} generated trace:`, {
+    console.log(`🔍 Virtual User ${this.userId} generated trace: ${JSON.stringify({
       traceId: spanContext.traceId,
       spanId: spanContext.spanId,
       spanName: `step_${stepIndex}_${step.action}`,
       isRecording: stepSpan.isRecording()
-    });
+    })}`);
 
     try {
       switch (step.action) {

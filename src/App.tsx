@@ -4,7 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { CartProvider } from "@/hooks/useCart";
-import { usePerformance } from "@/hooks/usePerformance";
+import { useServerTracking } from "@/hooks/useServerTracking";
 import { useSessionTracker } from "@/hooks/useSessionTracker";
 import { initializeTracing } from "@/lib/tracing/config";
 import { useEffect, useRef } from "react";
@@ -44,8 +44,8 @@ const queryClient = new QueryClient({
 });
 
 const AppContent = () => {
-  // Initialize performance tracking
-  usePerformance();
+  // Initialize server-side user tracking (replaces client-side performance logging)
+  useServerTracking();
   
   // Initialize session tracking for tracing
   const sessionTracker = useSessionTracker();

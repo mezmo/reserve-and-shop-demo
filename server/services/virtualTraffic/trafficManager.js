@@ -50,7 +50,7 @@ class TrafficManager {
     const oldConfig = { ...this.config };
     this.config = { ...this.config, ...newConfig };
 
-    console.log('🔧 Config update:', { old: oldConfig, new: this.config });
+    console.log(`🔧 Config update: ${JSON.stringify({ old: oldConfig, new: this.config })}`);
 
     if (this.config.enabled && !wasEnabled) {
       console.log('🟢 Starting traffic (was disabled, now enabled)');

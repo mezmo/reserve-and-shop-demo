@@ -568,11 +568,11 @@ app.post('/api/mezmo/configure', (req, res) => {
     };
     
     const hostConfig = getHostConfig(host);
-    console.log(`🌐 Mezmo host configuration:`, {
+    console.log(`🌐 Mezmo host configuration: ${JSON.stringify({
       host: host || 'logs.mezmo.com',
       type: hostConfig.type,
       endpoint: hostConfig.endpoint
-    });
+    })}`);
     
     // Create environment file with both LOGDNA_ and MZ_ prefixed variables
     const envContent = `
@@ -1489,12 +1489,12 @@ app.get('/api/otel/metrics', async (req, res) => {
 
 app.post('/api/otel/configure', (req, res) => {
   try {
-    console.log('🔧 OTEL Configure Request:', {
+    console.log(`🔧 OTEL Configure Request: ${JSON.stringify({
       timestamp: new Date().toISOString(),
       bodyKeys: Object.keys(req.body),
       hasBody: !!req.body,
       bodySize: JSON.stringify(req.body).length
-    });
+    })}`);
     
     const { 
       serviceName, 
@@ -1506,12 +1506,12 @@ app.post('/api/otel/configure', (req, res) => {
       tracesEnabled, tracesIngestionKey, tracesPipelineId, tracesHost
     } = req.body;
     
-    console.log('🔧 Extracted Parameters:', {
+    console.log(`🔧 Extracted Parameters: ${JSON.stringify({
       serviceName, tags, debugLevel,
       logsEnabled, hasLogsKey: !!logsIngestionKey,
       metricsEnabled, hasMetricsKey: !!metricsIngestionKey, 
       tracesEnabled, hasTracesKey: !!tracesIngestionKey
-    });
+    })}`);
     
     // Validate that at least one pipeline is enabled with a key
     const hasValidLogs = logsEnabled && logsIngestionKey;
@@ -2447,6 +2447,330 @@ app.use((err, req, res, next) => {
       requestId: req.requestId || 'unknown',
       timestamp: new Date().toISOString()
     });
+  }
+});
+
+// =============================================================================
+// REAL USER ACTIVITY TRACKING API - Rich Logging Like Virtual Users
+// =============================================================================
+
+// Import performance logger for consistent logging format
+import PerformanceLogger from './services/virtualTraffic/performanceLogger.js';
+
+// Create user session tracking
+const userSessions = new Map(); // sessionId -> { userId, startTime, lastActivity, customerProfile }
+
+// Generate user session ID
+function generateUserSessionId() {
+  return `real-user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
+// User session initialization
+app.post('/api/track/session/start', async (req, res) => {
+  try {
+    const sessionId = generateUserSessionId();
+    const { userAgent, viewport, language, timezone } = req.body;
+    
+    const performanceLogger = new PerformanceLogger();
+    
+    // Create user session tracking
+    const sessionData = {
+      sessionId,
+      userId: `real-user-${sessionId}`,
+      startTime: Date.now(),
+      lastActivity: Date.now(),
+      browserFingerprint: {
+        userAgent: userAgent || req.get('User-Agent'),
+        language: language || 'en-US',
+        viewport: viewport || { width: 1920, height: 1080 },
+        timezone: timezone || 'America/New_York'
+      },
+      performanceLogger,
+      interactions: 0,
+      pageViews: 0
+    };
+    
+    userSessions.set(sessionId, sessionData);
+    
+    // Log session start using same format as virtual users
+    performanceLogger.logSensitiveCustomerData({
+      fullName: 'Real User',
+      firstName: 'Real',
+      lastName: 'User',
+      email: 'real.user@example.com',
+      phone: '000-000-0000',
+      address: { street: 'Unknown', city: 'Unknown', state: 'Unknown', zipCode: '00000' },
+      creditCard: { number: '0000000000000000', type: 'unknown', expiryMonth: '00', expiryYear: '00', cvv: '000', holderName: 'Real User' },
+      sensitiveData: { ssn: '000-00-0000', driversLicense: 'UNKNOWN', bankAccount: { routingNumber: '000000000', accountNumber: '0000000000' } }
+    }, 'real_user_session_started');
+    
+    console.log(`🧑 Real user session started: ${sessionId}`);
+    
+    res.json({ 
+      sessionId,
+      message: 'Session tracking started',
+      userId: sessionData.userId
+    });
+  } catch (error) {
+    console.error('Error starting user session:', error);
+    res.status(500).json({ error: 'Failed to start session tracking' });
+  }
+});
+
+// User interaction tracking (clicks, hovers, etc.)
+app.post('/api/track/interaction', async (req, res) => {
+  try {
+    const { sessionId, interactionType, element, duration, metadata } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    session.interactions++;
+    
+    // Log interaction using same format as virtual users
+    session.performanceLogger.logUserInteraction(
+      interactionType || 'click',
+      element || 'unknown-element',
+      duration || 0
+    );
+    
+    console.log(`🖱️ Real user ${session.userId} ${interactionType}: ${element}`);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking interaction:', error);
+    res.status(500).json({ error: 'Failed to track interaction' });
+  }
+});
+
+// Page navigation tracking
+app.post('/api/track/navigation', async (req, res) => {
+  try {
+    const { sessionId, fromPath, toPath, loadTime } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    session.pageViews++;
+    
+    // Log navigation using same format as virtual users
+    session.performanceLogger.logUserInteraction(
+      'navigate',
+      `page-${toPath}`,
+      loadTime || 0
+    );
+    
+    console.log(`🔄 Real user ${session.userId} navigated: ${fromPath} → ${toPath}`);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking navigation:', error);
+    res.status(500).json({ error: 'Failed to track navigation' });
+  }
+});
+
+// Cart action tracking
+app.post('/api/track/cart', async (req, res) => {
+  try {
+    const { sessionId, action, productId, productName, quantity, price, cartTotal } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    
+    // Log cart action using same format as virtual users
+    session.performanceLogger.logCartAction(
+      action || 'add',
+      productId || 'unknown',
+      productName || 'Unknown Product',
+      quantity || 1,
+      cartTotal || 0,
+      0 // duration
+    );
+    
+    console.log(`🛒 Real user ${session.userId} ${action}: ${quantity}x ${productName} (cart total: ${cartTotal})`);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking cart action:', error);
+    res.status(500).json({ error: 'Failed to track cart action' });
+  }
+});
+
+// Customer profile capture (when user enters personal info)
+app.post('/api/track/customer-profile', async (req, res) => {
+  try {
+    const { sessionId, customerData } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    session.customerProfile = customerData;
+    
+    // Log customer profile with sensitive data using same format as virtual users
+    session.performanceLogger.logSensitiveCustomerData(customerData, 'real_user_profile_captured');
+    
+    console.log(`👤 Real user ${session.userId} profile captured: ${customerData.fullName}`);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking customer profile:', error);
+    res.status(500).json({ error: 'Failed to track customer profile' });
+  }
+});
+
+// Payment attempt tracking
+app.post('/api/track/payment', async (req, res) => {
+  try {
+    const { sessionId, paymentData, customerData, transactionData, status } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    
+    // Log payment attempt using same format as virtual users
+    session.performanceLogger.logPaymentAttempt(
+      paymentData,
+      customerData || session.customerProfile,
+      transactionData,
+      status || 'initiated',
+      0 // duration
+    );
+    
+    console.log(`💳 Real user ${session.userId} payment ${status}: $${transactionData?.amount || 0}`);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking payment:', error);
+    res.status(500).json({ error: 'Failed to track payment' });
+  }
+});
+
+// Reservation tracking
+app.post('/api/track/reservation', async (req, res) => {
+  try {
+    const { sessionId, reservationData } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    
+    // Log reservation using same format as virtual users
+    session.performanceLogger.logReservationData(
+      session.customerProfile || {
+        fullName: 'Real User',
+        email: 'real.user@example.com',
+        phone: '000-000-0000',
+        sensitiveData: { ssn: '000-00-0000', driversLicense: 'UNKNOWN' }
+      },
+      reservationData
+    );
+    
+    console.log(`📅 Real user ${session.userId} made reservation: ${reservationData.date} ${reservationData.time}`);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking reservation:', error);
+    res.status(500).json({ error: 'Failed to track reservation' });
+  }
+});
+
+// Form field focus/blur tracking
+app.post('/api/track/form-interaction', async (req, res) => {
+  try {
+    const { sessionId, fieldName, action, value, duration } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    session.lastActivity = Date.now();
+    
+    // Log form interaction using same format as virtual users
+    if (action === 'focus') {
+      console.log(`📝 Real user ${session.userId} focused: ${fieldName}`);
+    } else if (action === 'blur') {
+      console.log(`📤 Real user ${session.userId} completed: ${fieldName}`);
+    }
+    
+    session.performanceLogger.logUserInteraction(action, fieldName, duration || 0);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error tracking form interaction:', error);
+    res.status(500).json({ error: 'Failed to track form interaction' });
+  }
+});
+
+// Session end tracking
+app.post('/api/track/session/end', async (req, res) => {
+  try {
+    const { sessionId, reason } = req.body;
+    
+    if (!sessionId || !userSessions.has(sessionId)) {
+      return res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+    
+    const session = userSessions.get(sessionId);
+    const sessionDuration = Date.now() - session.startTime;
+    
+    console.log(`✅ Real user ${session.userId} session ended (${Math.round(sessionDuration / 1000)}s) - ${reason || 'unknown'}`);
+    
+    // Clean up session
+    userSessions.delete(sessionId);
+    
+    res.json({ 
+      success: true,
+      sessionDuration: sessionDuration,
+      totalInteractions: session.interactions,
+      totalPageViews: session.pageViews
+    });
+  } catch (error) {
+    console.error('Error ending user session:', error);
+    res.status(500).json({ error: 'Failed to end session' });
+  }
+});
+
+// Get active real user sessions (for monitoring)
+app.get('/api/track/sessions', async (req, res) => {
+  try {
+    const activeSessions = Array.from(userSessions.values()).map(session => ({
+      sessionId: session.sessionId,
+      userId: session.userId,
+      startTime: session.startTime,
+      lastActivity: session.lastActivity,
+      duration: Date.now() - session.startTime,
+      interactions: session.interactions,
+      pageViews: session.pageViews,
+      customerName: session.customerProfile?.fullName || 'Unknown'
+    }));
+    
+    res.json({
+      activeSessions: activeSessions.length,
+      sessions: activeSessions
+    });
+  } catch (error) {
+    console.error('Error getting active sessions:', error);
+    res.status(500).json({ error: 'Failed to get active sessions' });
   }
 });
 
