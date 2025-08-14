@@ -355,7 +355,7 @@ const Config = () => {
     window.location.reload();
   };
 
-  const handleRefreshLocalStorage = async () => {
+  const handleResetToDefaults = async () => {
     try {
       const dataStore = DataStore.getInstance();
       dataStore.refreshFromDefaults();
@@ -364,14 +364,14 @@ const Config = () => {
       setSummaryRefresh(prev => prev + 1);
       
       toast({
-        title: "Data Refreshed",
-        description: "All cached data has been refreshed with latest server data."
+        title: "Data Reset to Defaults",
+        description: "All data has been reset to default values (products, empty orders/reservations)."
       });
     } catch (error) {
-      console.error('Error refreshing data:', error);
+      console.error('Error resetting data:', error);
       toast({
-        title: "Refresh Failed",
-        description: "Failed to refresh data. Please try again.",
+        title: "Reset Failed",
+        description: "Failed to reset data. Please try again.",
         variant: "destructive"
       });
     }
@@ -1534,19 +1534,29 @@ const Config = () => {
                 <div className="text-sm text-muted-foreground">Orders</div>
               </div>
             </div>
-            <div className="flex flex-col items-center space-y-2">
-              <Button 
-                onClick={handleRefreshLocalStorage}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
-              >
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Refresh Data
-              </Button>
+            <div className="flex flex-col items-center space-y-3">
               {lastUpdated && (
                 <p className="text-xs text-muted-foreground">
                   Last updated: {lastUpdated.toLocaleTimeString()} (auto-updates every 5s)
                 </p>
               )}
+              <div className="flex gap-2">
+                <Button 
+                  onClick={() => setSummaryRefresh(prev => prev + 1)}
+                  variant="outline"
+                  size="sm"
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Refresh Now
+                </Button>
+                <Button 
+                  onClick={handleResetToDefaults}
+                  variant="destructive"
+                  size="sm"
+                >
+                  Reset to Defaults
+                </Button>
+              </div>
             </div>
             <p className="text-sm text-muted-foreground text-center">
               Data refreshes automatically every 5 seconds to stay in sync with server
