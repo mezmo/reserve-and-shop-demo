@@ -90,7 +90,7 @@ class ConfigManager {
     
     // Merge with existing config
     this.configs[type] = { ...this.configs[type], ...config };
-    console.log(`🔧 Updated ${type} configuration:`, this.configs[type]);
+    console.log(`🔧 Updated ${type} configuration: ${JSON.stringify(this.configs[type])}`);
     return this.configs[type];
   }
   

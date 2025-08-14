@@ -51,16 +51,16 @@ class VirtualUser {
     // Initialize simple metrics logger (console-based for server-side)
     this.metricsLogger = {
       logCounter: (name, value, tags) => {
-        console.log(`📊 Virtual User Metric Counter: ${name} = ${value}`, tags);
+        console.log(`📊 Virtual User Metric Counter: ${name} = ${value}${tags ? ` | tags: ${JSON.stringify(tags)}` : ''}`);
       },
       logGauge: (name, value, unit, tags) => {
-        console.log(`📊 Virtual User Metric Gauge: ${name} = ${value} ${unit || 'units'}`, tags);
+        console.log(`📊 Virtual User Metric Gauge: ${name} = ${value} ${unit || 'units'}${tags ? ` | tags: ${JSON.stringify(tags)}` : ''}`);
       },
       logBusinessMetric: (name, value, currency, tags) => {
-        console.log(`📊 Business Metric: ${name} = ${value} ${currency || 'units'}`, tags);
+        console.log(`📊 Business Metric: ${name} = ${value} ${currency || 'units'}${tags ? ` | tags: ${JSON.stringify(tags)}` : ''}`);
       },
       logPerformanceMetric: (name, duration, tags) => {
-        console.log(`📊 Performance Metric: ${name} = ${duration}ms`, tags);
+        console.log(`📊 Performance Metric: ${name} = ${duration}ms${tags ? ` | tags: ${JSON.stringify(tags)}` : ''}`);
       }
     };
     
@@ -794,7 +794,7 @@ class VirtualUser {
 
     try {
       const requestBody = method === 'POST' ? this.getRequestBody(url) : undefined;
-      console.log(`🌐 ${this.customerProfile.fullName} making ${method} request to ${url}`, requestBody ? { body: requestBody } : '');
+      console.log(`🌐 ${this.customerProfile.fullName} making ${method} request to ${url}${requestBody ? ` | body: ${JSON.stringify(requestBody)}` : ''}`);
       
       const networkDelay = addTimingJitter(networkTiming.responseStart - networkTiming.fetchStart, 0.4);
       await this.sleep(Math.max(10, networkDelay));
