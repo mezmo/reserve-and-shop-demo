@@ -623,7 +623,7 @@ const Config = () => {
       try {
         const customer = generateRandomCustomer();
         const paymentInfo = generateRandomPaymentInfo();
-        const orderData = generateRandomOrder(customer, sampleOrdersType);
+        const orderData = await generateRandomOrder(customer, sampleOrdersType);
 
         // Create order using DataStore (like CheckoutDialog does)
         const dataStore = DataStore.getInstance();
@@ -1057,9 +1057,9 @@ const Config = () => {
     };
   };
 
-  const generateRandomOrder = (customer: any, orderType: string) => {
+  const generateRandomOrder = async (customer: any, orderType: string) => {
     const dataStore = DataStore.getInstance();
-    const availableProducts = dataStore.getProducts().filter(p => p.available);
+    const availableProducts = (await dataStore.getProducts()).filter(p => p.available);
     
     if (availableProducts.length === 0) {
       throw new Error('No available products to create orders');

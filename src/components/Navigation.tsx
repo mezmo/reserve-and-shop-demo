@@ -20,8 +20,12 @@ const Navigation = () => {
   const { getTotalItems, clearCart, cart } = useCart();
 
   useEffect(() => {
-    const dataStore = DataStore.getInstance();
-    setProducts(dataStore.getProducts());
+    const loadProducts = async () => {
+      const dataStore = DataStore.getInstance();
+      const productsData = await dataStore.getProducts();
+      setProducts(productsData);
+    };
+    loadProducts();
   }, []);
 
   const navItems = [

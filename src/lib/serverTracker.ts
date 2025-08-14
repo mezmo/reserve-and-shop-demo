@@ -75,6 +75,8 @@ class ServerTracker {
         this.sessionId = data.sessionId;
         this.isInitialized = true;
         console.log('🔗 Real user tracking initialized:', this.sessionId);
+      } else {
+        console.warn('🚨 Failed to initialize real user tracking:', response.status, response.statusText);
       }
     } catch (error) {
       console.warn('Failed to initialize server tracking:', error);
@@ -199,7 +201,12 @@ class ServerTracker {
     },
     status: 'initiated' | 'processing' | 'successful' | 'failed'
   ): Promise<void> {
-    if (!this.sessionId) return;
+    if (!this.sessionId) {
+      console.warn('🚨 Real user payment tracking failed: No session ID');
+      return;
+    }
+
+    console.log(`💳 Real user payment ${status}: $${transactionData.amount} - ${transactionData.orderId}`);
 
     try {
       await fetch(`${this.baseUrl}/api/track/payment`, {

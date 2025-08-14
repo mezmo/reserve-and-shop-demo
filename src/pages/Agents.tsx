@@ -1118,7 +1118,7 @@ const Agents = () => {
     }));
   };
 
-  // Poll agent status periodically
+  // Poll agent status periodically with enhanced health monitoring
   useEffect(() => {
     const pollStatus = async () => {
       // Skip polling during configuration changes or operations to prevent race conditions
@@ -1126,7 +1126,7 @@ const Agents = () => {
         return;
       }
 
-      // Poll Mezmo status
+      // Poll Mezmo status with health checking
       if (mezmoEnabled) {
         try {
           const response = await fetch('/api/mezmo/status');
@@ -1136,15 +1136,56 @@ const Agents = () => {
             setMezmoStatus(status.status);
             setMezmoPid(status.pid);
             
+            // Update health information
+            if (status.health) {
+              if (status.health.healthy === false) {
+                console.warn('Mezmo agent health check failed:', status.health.reason);
+                setMezmoStats(prev => ({ 
+                  ...prev, 
+                  errors: prev.errors + 1,
+                  lastError: status.health.reason
+                }));
+                
+                // Show user notification for health issues
+                toast({
+                  title: "Agent Health Issue Detected",
+                  description: status.health.reason,
+                  variant: "destructive"
+                });
+              } else if (status.health.healthy === true) {
+                // Clear any previous errors if agent is now healthy
+                setMezmoStats(prev => ({ 
+                  ...prev, 
+                  lastError: null
+                }));
+              }
+            }
+            
             const isRunning = status.status === 'connected' && status.pid !== null;
-            // Only auto-disable if agent status isn't 'connecting' (prevents disabling during startup)
-            if (!isRunning && mezmoEnabled && mezmoStatus !== 'connecting') {
-              console.warn('Mezmo agent detected as not running, disabling UI toggle');
+            const isHealthy = !status.health || status.health.healthy !== false;
+            
+            // Auto-disable if agent is not running or consistently unhealthy
+            if ((!isRunning || !isHealthy) && mezmoEnabled && mezmoStatus !== 'connecting') {
+              const reason = !isRunning ? 'not running' : 'health check failed';
+              console.warn(`Mezmo agent detected as ${reason}, disabling UI toggle`);
               setMezmoEnabled(false);
+              
+              if (!isHealthy && status.health) {
+                toast({
+                  title: "Agent Automatically Disabled",
+                  description: `Agent disabled due to: ${status.health.reason}`,
+                  variant: "destructive"
+                });
+              }
             }
           }
         } catch (error) {
           console.warn('Could not check Mezmo status:', error);
+          setMezmoStats(prev => ({ 
+            ...prev, 
+            errors: prev.errors + 1,
+            lastError: 'Status check failed'
+          }));
         }
       }
       

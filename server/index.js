@@ -40,7 +40,7 @@ let data = {
       description: 'Fresh tomato sauce, mozzarella, and basil',
       price: 18.99,
       category: 'Pizza',
-      image: '/placeholder.svg',
+      image: 'https://images.unsplash.com/photo-1604382354936-07c5d9983bd3?w=400&h=300&fit=crop&crop=center',
       available: true
     },
     {
@@ -49,7 +49,7 @@ let data = {
       description: 'Crisp romaine lettuce with parmesan and croutons',
       price: 14.99,
       category: 'Salads',
-      image: '/placeholder.svg',
+      image: 'https://images.unsplash.com/photo-1546793665-c74683f339c1?w=400&h=300&fit=crop&crop=center',
       available: true
     },
     {
@@ -58,7 +58,7 @@ let data = {
       description: 'Atlantic salmon with lemon herb seasoning',
       price: 28.99,
       category: 'Main Course',
-      image: '/placeholder.svg',
+      image: 'https://images.unsplash.com/photo-1467003909585-2f8a72700288?w=400&h=300&fit=crop&crop=center',
       available: true
     },
     {
@@ -67,7 +67,7 @@ let data = {
       description: 'Warm chocolate brownie with vanilla ice cream',
       price: 8.99,
       category: 'Desserts',
-      image: '/placeholder.svg',
+      image: 'https://images.unsplash.com/photo-1606313564200-e75d5e30476c?w=400&h=300&fit=crop&crop=center',
       available: true
     }
   ],
@@ -587,7 +587,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // LogDNA Agent Management
-app.get('/api/mezmo/status', (req, res) => {
+app.get('/api/mezmo/status', async (req, res) => {
   try {
     // Check if agent is running
     const pidFile = '/tmp/codeuser/logdna-agent.pid';
@@ -596,38 +596,84 @@ app.get('/api/mezmo/status', (req, res) => {
     let status = 'disconnected';
     let pid = null;
     let hasConfig = false;
+    let configValid = false;
+    let health = null;
     
-    // Safely check if config file exists
+    // Safely check if config file exists and is valid
     try {
       if (fs.existsSync(configFile)) {
         hasConfig = true;
+        
+        // Validate configuration
+        const envContent = fs.readFileSync(configFile, 'utf8');
+        const configValidation = validateLogDNAConfig(envContent);
+        configValid = configValidation.isValid;
       }
     } catch (configError) {
       console.warn('Error checking config file:', configError);
       hasConfig = false;
+      configValid = false;
     }
     
-    // Safely check PID file and process status
+    // Safely check PID file and process status with health validation
     try {
       if (fs.existsSync(pidFile)) {
         const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
         pid = parseInt(pidContent);
         
         if (!isNaN(pid)) {
-          // Check if PID is still running
-          process.kill(pid, 0); // This throws if process doesn't exist
-          status = 'connected';
+          try {
+            // Check if PID is still running
+            process.kill(pid, 0); // This throws if process doesn't exist
+            status = 'connected';
+            
+            // Perform quick health check on running process
+            try {
+              const healthCheck = await checkAgentHealth(pid, 1500);
+              health = {
+                healthy: healthCheck.healthy,
+                reason: healthCheck.reason,
+                timestamp: new Date().toISOString()
+              };
+              
+              // Update status based on health
+              if (healthCheck.healthy === false) {
+                status = 'error';
+              } else if (healthCheck.healthy === null) {
+                status = 'connecting'; // Status unclear
+              }
+            } catch (healthError) {
+              console.warn('Health check failed:', healthError);
+              health = {
+                healthy: null,
+                reason: 'Health check failed',
+                error: healthError.message,
+                timestamp: new Date().toISOString()
+              };
+            }
+            
+          } catch (killError) {
+            // Process not running, clean up stale PID file
+            console.log('🧹 Cleaning up stale PID file for non-running process');
+            fs.unlinkSync(pidFile);
+            status = 'disconnected';
+            pid = null;
+            health = null;
+          }
         } else {
           // Invalid PID in file, clean up
+          console.log('🧹 Cleaning up invalid PID file');
           fs.unlinkSync(pidFile);
           status = 'disconnected';
           pid = null;
+          health = null;
         }
       }
     } catch (pidError) {
-      // Process not running or other error, clean up stale PID file
+      // Error reading PID file or other error, clean up
       try {
         if (fs.existsSync(pidFile)) {
+          console.log('🧹 Cleaning up PID file after error:', pidError.message);
           fs.unlinkSync(pidFile);
         }
       } catch (cleanupError) {
@@ -635,12 +681,15 @@ app.get('/api/mezmo/status', (req, res) => {
       }
       status = 'disconnected';
       pid = null;
+      health = null;
     }
     
     const response = {
       status,
       pid,
       hasConfig,
+      configValid,
+      health,
       timestamp: new Date().toISOString()
     };
     
@@ -722,7 +771,6 @@ app.post('/api/mezmo/configure', (req, res) => {
 LOGDNA_INGESTION_KEY=${ingestionKey}
 LOGDNA_HOST=${host || 'logs.mezmo.com'}
 LOGDNA_DB_PATH=/var/lib/logdna
-LOGDNA_LOG_DIRS=/tmp/codeuser
 LOGDNA_LOOKBACK=start
 LOGDNA_LOG_LEVEL=info
 
@@ -731,16 +779,20 @@ MZ_INGESTION_KEY=${ingestionKey}
 MZ_HOST=${host || 'logs.mezmo.com'}
 MZ_ENDPOINT=${hostConfig.endpoint}
 MZ_DB_PATH=/var/lib/logdna
-MZ_LOG_DIRS=/tmp/codeuser
 MZ_LOOKBACK=start
 MZ_LOG_LEVEL=info
 MZ_HOSTNAME=restaurant-app-container
 MZ_BODY_SIZE=2097152
 MZ_USE_SSL=${hostConfig.ssl ? 'true' : 'false'}
 MZ_TIMEOUT=${hostConfig.timeout}
+MZ_TAGS=${tags || 'restaurant-app,demo'}
+
+# Specify log directories - CRITICAL for finding our application logs
+LOGDNA_LOGDIR=/tmp/codeuser
+MZ_LOGDIR=/tmp/codeuser
 `.trim();
     
-    // Create YAML configuration
+    // Create YAML configuration that explicitly targets our application logs
     const yamlContent = `
 http:
   endpoint: ${hostConfig.endpoint}
@@ -762,9 +814,16 @@ log:
   metrics_port: 9898
   include:
     glob:
+      - "*.log"
       - "/tmp/codeuser/*.log"
-      - "/tmp/codeuser/restaurant-performance.log"
+      - "/tmp/codeuser/server.log"
       - "/tmp/codeuser/app.log"
+      - "/tmp/codeuser/access.log"
+      - "/tmp/codeuser/events.log"
+      - "/tmp/codeuser/metrics.log"
+      - "/tmp/codeuser/errors.log"
+      - "/tmp/codeuser/performance.log"
+      - "/tmp/codeuser/restaurant-performance.log"
     regex: []
   exclude:
     glob:
@@ -812,162 +871,343 @@ startup: {}
   }
 });
 
+// Helper function to validate environment configuration
+const validateLogDNAConfig = (envContent) => {
+  const mzHostMatch = envContent.match(/MZ_HOST=([^\n]+)/);
+  const mzKeyMatch = envContent.match(/MZ_INGESTION_KEY=([^\n]+)/);
+  const logdnaHostMatch = envContent.match(/LOGDNA_HOST=([^\n]+)/);
+  const logdnaKeyMatch = envContent.match(/LOGDNA_INGESTION_KEY=([^\n]+)/);
+
+  const hasMzConfig = mzHostMatch && mzKeyMatch && mzKeyMatch[1].length >= 16;
+  const hasLogdnaConfig = logdnaHostMatch && logdnaKeyMatch && logdnaKeyMatch[1].length >= 16;
+  
+  return {
+    isValid: hasMzConfig || hasLogdnaConfig,
+    hasMzConfig,
+    hasLogdnaConfig,
+    host: (mzHostMatch && mzHostMatch[1]) || (logdnaHostMatch && logdnaHostMatch[1]),
+    keyLength: (mzKeyMatch && mzKeyMatch[1].length) || (logdnaKeyMatch && logdnaKeyMatch[1].length) || 0
+  };
+};
+
+// Helper function to check agent health by testing log forwarding
+const checkAgentHealth = async (pid, timeoutMs = 5000) => {
+  return new Promise((resolve) => {
+    const logFile = '/tmp/codeuser/logdna-agent.log';
+    let healthCheckTimer;
+    
+    // Test if process is running
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      return resolve({ healthy: false, reason: 'Process not running' });
+    }
+    
+    // Check logs for health indicators
+    const checkLogs = () => {
+      try {
+        if (fs.existsSync(logFile)) {
+          const logContent = fs.readFileSync(logFile, 'utf8');
+          const recentLogs = logContent.split('\n').slice(-20).join('\n');
+          
+          // Positive indicators - match actual LogDNA agent v3.x output patterns
+          if (recentLogs.match(/Enabling filesystem|initializing middleware|watching.*tmp.*codeuser|files_tracked.*[1-9]/i)) {
+            clearTimeout(healthCheckTimer);
+            return resolve({ healthy: true, reason: 'Agent logs show filesystem monitoring active' });
+          }
+          
+          // Negative indicators
+          if (recentLogs.match(/authentication.*failed|invalid.*key|connection.*refused|unable.*connect/i)) {
+            clearTimeout(healthCheckTimer);
+            return resolve({ healthy: false, reason: 'Authentication or connection error detected' });
+          }
+        }
+      } catch (error) {
+        // Continue checking
+      }
+    };
+    
+    // Check immediately and then periodically
+    checkLogs();
+    const logCheckInterval = setInterval(checkLogs, 500);
+    
+    // Timeout after specified time
+    healthCheckTimer = setTimeout(() => {
+      clearInterval(logCheckInterval);
+      resolve({ healthy: null, reason: 'Health check timeout - agent status unclear' });
+    }, timeoutMs);
+  });
+};
+
 app.post('/api/mezmo/start', (req, res) => {
   try {
     const pidFile = '/tmp/codeuser/logdna-agent.pid';
     const logFile = '/tmp/codeuser/logdna-agent.log';
     const envFile = '/etc/logdna/logdna.env';
     
-    // Check if already running
+    console.log('🚀 Starting LogDNA agent via API...');
+    
+    // Check if already running and validate health
     if (fs.existsSync(pidFile)) {
-      const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
-      try {
-        process.kill(pid, 0);
-        return res.json({ message: 'LogDNA agent is already running', pid });
-      } catch (error) {
-        // Process not running, clean up
+      const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
+      const pid = parseInt(pidContent);
+      
+      if (!isNaN(pid)) {
+        try {
+          process.kill(pid, 0);
+          console.log(`⚠️  Agent already running (PID: ${pid}), checking health...`);
+          
+          // Check if the running agent is healthy
+          checkAgentHealth(pid, 3000).then(healthCheck => {
+            if (healthCheck.healthy === true) {
+              console.log('✅ Running agent is healthy, no restart needed');
+              if (!res.headersSent) {
+                res.json({ 
+                  message: 'LogDNA agent is already running and healthy', 
+                  pid,
+                  health: healthCheck.reason,
+                  timestamp: new Date().toISOString()
+                });
+              }
+            } else if (healthCheck.healthy === false) {
+              console.log(`❌ Running agent is unhealthy: ${healthCheck.reason}`);
+              console.log('🔄 Attempting to restart agent...');
+              
+              // Kill unhealthy agent and restart
+              try {
+                process.kill(pid, 'SIGTERM');
+                setTimeout(() => {
+                  try { process.kill(pid, 'SIGKILL'); } catch(e) {}
+                }, 2000);
+              } catch (killError) {
+                console.log('Agent process already dead');
+              }
+              
+              // Clean up and restart
+              fs.unlinkSync(pidFile);
+              // Continue to restart logic below
+              startNewAgent();
+            } else {
+              console.log(`⚠️  Agent health unclear: ${healthCheck.reason}`);
+              if (!res.headersSent) {
+                res.json({ 
+                  message: 'LogDNA agent is running but health status unclear', 
+                  pid,
+                  health: healthCheck.reason,
+                  timestamp: new Date().toISOString()
+                });
+              }
+            }
+          }).catch(healthError => {
+            console.error('Health check failed:', healthError);
+            if (!res.headersSent) {
+              res.json({ 
+                message: 'LogDNA agent is running but health check failed', 
+                pid,
+                error: healthError.message,
+                timestamp: new Date().toISOString()
+              });
+            }
+          });
+          
+          return; // Exit early, health check will handle response
+          
+        } catch (error) {
+          // Process not running, clean up
+          console.log('🧹 Cleaning up stale PID file');
+          fs.unlinkSync(pidFile);
+        }
+      } else {
+        console.log('🧹 Cleaning up invalid PID file');
         fs.unlinkSync(pidFile);
       }
     }
     
-    // Check if configuration exists
-    if (!fs.existsSync(envFile)) {
-      return res.status(400).json({ error: 'LogDNA not configured. Please configure first.' });
-    }
-    
-    // Check if LogDNA agent binary exists
-    if (!fs.existsSync('/usr/bin/logdna-agent')) {
-      return res.status(500).json({ 
-        error: 'LogDNA agent binary not found',
-        details: 'The LogDNA agent is not installed in this container. Install it first or use OTEL Collector instead.'
-      });
-    }
-    
-    try {
-      // Read and validate environment configuration
-      const envContent = fs.readFileSync(envFile, 'utf8');
-      
-      // Check for both MZ_ and LOGDNA_ prefixed variables separately
-      const mzHostMatch = envContent.match(/MZ_HOST=([^\n]+)/);
-      const mzKeyMatch = envContent.match(/MZ_INGESTION_KEY=([^\n]+)/);
-      const logdnaHostMatch = envContent.match(/LOGDNA_HOST=([^\n]+)/);
-      const logdnaKeyMatch = envContent.match(/LOGDNA_INGESTION_KEY=([^\n]+)/);
-
-      const hasMzConfig = mzHostMatch && mzKeyMatch;
-      const hasLogdnaConfig = logdnaHostMatch && logdnaKeyMatch;
-      
-      console.log('🔍 Pre-start validation:');
-      console.log(`   Environment file: ${fs.existsSync(envFile) ? '✅' : '❌'}`);
-      console.log(`   MZ_HOST: ${mzHostMatch ? mzHostMatch[1] : 'Not found'}`);
-      console.log(`   MZ_INGESTION_KEY: ${mzKeyMatch ? mzKeyMatch[1].substring(0, 8) + '...' : 'Not found'}`);
-      console.log(`   LOGDNA_HOST: ${logdnaHostMatch ? logdnaHostMatch[1] : 'Not found'}`);
-      console.log(`   LOGDNA_INGESTION_KEY: ${logdnaKeyMatch ? logdnaKeyMatch[1].substring(0, 8) + '...' : 'Not found'}`);
-      console.log(`   Has complete MZ config: ${hasMzConfig ? '✅' : '❌'}`);
-      console.log(`   Has complete LOGDNA config: ${hasLogdnaConfig ? '✅' : '❌'}`);
-
-      if (!hasMzConfig && !hasLogdnaConfig) {
-        return res.status(400).json({ 
-          error: 'Invalid environment configuration',
-          details: 'Need either (MZ_HOST + MZ_INGESTION_KEY) or (LOGDNA_HOST + LOGDNA_INGESTION_KEY)'
-        });
+    // Function to start new agent
+    const startNewAgent = () => {
+      // Check if configuration exists
+      if (!fs.existsSync(envFile)) {
+        return res.status(400).json({ error: 'LogDNA not configured. Please configure first.' });
       }
       
-      // Source environment variables and start agent
-      // Note: LogDNA agent might need elevated privileges
-      const startCommand = `
-set -a
-source ${envFile}
-set +a
-echo "Starting LogDNA agent with host: $MZ_HOST"
-nohup /usr/bin/logdna-agent > ${logFile} 2>&1 & echo $! > ${pidFile}
-`;
-      
-      console.log('▶️ Starting LogDNA agent...');
-      execSync(startCommand, { shell: '/bin/bash' });
-      
-      // Give it more time to start and verify (increased from 1s to 3s)
-      setTimeout(() => {
-        // Check if response hasn't been sent yet
-        if (res.headersSent) {
-          return; // Response already sent, nothing to do
-        }
+      // Check if LogDNA agent binary exists
+      if (!fs.existsSync('/usr/bin/logdna-agent')) {
+        return res.status(500).json({ 
+          error: 'LogDNA agent binary not found',
+          details: 'The LogDNA agent is not installed in this container. Install it first or use OTEL Collector instead.'
+        });
+      }
+    
+      try {
+        // Read and validate environment configuration
+        const envContent = fs.readFileSync(envFile, 'utf8');
+        const configValidation = validateLogDNAConfig(envContent);
         
-        if (fs.existsSync(pidFile)) {
-          const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
-          const pid = parseInt(pidContent);
-          
-          if (!isNaN(pid)) {
-            try {
-              // Check if process is actually running
-              process.kill(pid, 0);
-              console.log('✅ LogDNA agent started with PID:', pid);
-              return res.json({ 
-                success: true,
-                message: 'LogDNA agent started successfully', 
-                pid,
-                timestamp: new Date().toISOString()
-              });
-            } catch (killError) {
-              // Process not running - read logs for details
-              let logContent = 'No log content available';
-              try {
-                if (fs.existsSync(logFile)) {
-                  logContent = fs.readFileSync(logFile, 'utf8').slice(-500); // Last 500 chars
-                }
-              } catch (logError) {
-                logContent = `Error reading logs: ${logError.message}`;
-              }
-              
-              console.log('❌ LogDNA agent startup failed. Log content:');
-              console.log(logContent);
-              
-              return res.status(500).json({ 
-                error: 'LogDNA agent failed to start',
-                details: 'Process started but died immediately. Check logs for connection errors.',
-                logs: logContent,
-                pid: pid
-              });
-            }
-          } else {
-            return res.status(500).json({ 
-              error: 'Invalid PID in pid file',
-              details: `PID file contains: ${pidContent}`
-            });
-          }
-        } else {
-          // No PID file - agent failed to start at all
-          let logContent = 'No log content available';
-          try {
-            if (fs.existsSync(logFile)) {
-              logContent = fs.readFileSync(logFile, 'utf8').slice(-500);
-            }
-          } catch (logError) {
-            logContent = `Error reading logs: ${logError.message}`;
-          }
-          
-          console.log('❌ LogDNA agent failed to create PID file. Logs:');
-          console.log(logContent);
-          
-          return res.status(500).json({ 
-            error: 'Failed to start LogDNA agent',
-            details: 'PID file was not created. Check if the binary exists and has proper permissions.'
+        console.log('🔍 Pre-start validation:');
+        console.log(`   Environment file: ${fs.existsSync(envFile) ? '✅' : '❌'}`);
+        console.log(`   Configuration valid: ${configValidation.isValid ? '✅' : '❌'}`);
+        console.log(`   Host: ${configValidation.host || 'Not found'}`);
+        console.log(`   Ingestion key length: ${configValidation.keyLength || 0} chars`);
+        console.log(`   Has MZ config: ${configValidation.hasMzConfig ? '✅' : '❌'}`);
+        console.log(`   Has LOGDNA config: ${configValidation.hasLogdnaConfig ? '✅' : '❌'}`);
+
+        if (!configValidation.isValid) {
+          return res.status(400).json({ 
+            error: 'Invalid environment configuration',
+            details: 'Need either (MZ_HOST + MZ_INGESTION_KEY) or (LOGDNA_HOST + LOGDNA_INGESTION_KEY) with valid ingestion key',
+            validation: configValidation
           });
         }
-      }, 3000); // Increased from 1s to 3s for better startup reliability
       
-    } catch (execError) {
-      return res.status(500).json({ 
-        error: 'Failed to execute start command',
-        details: execError.message
-      });
-    }
+        // Create a more robust startup script
+        const startupScript = `/tmp/start-logdna-api.sh`;
+        const startupScriptContent = `#!/bin/bash
+set -e
+echo "🚀 Starting LogDNA agent via API..."
+source ${envFile}
+echo "📡 Connecting to host: \${MZ_HOST:-\$LOGDNA_HOST}"
+exec /usr/bin/logdna-agent
+`;
+        
+        fs.writeFileSync(startupScript, startupScriptContent);
+        fs.chmodSync(startupScript, 0o755);
+        
+        console.log('▶️ Starting LogDNA agent with enhanced monitoring...');
+        
+        // Start agent in background with better error handling
+        const child = require('child_process').spawn(startupScript, [], {
+          detached: true,
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        
+        // Write PID immediately
+        fs.writeFileSync(pidFile, child.pid.toString());
+        
+        // Set up log capture
+        let logBuffer = '';
+        const appendToLog = (data) => {
+          const content = data.toString();
+          logBuffer += content;
+          try {
+            fs.appendFileSync(logFile, content);
+          } catch (logWriteError) {
+            console.warn('Failed to write to log file:', logWriteError.message);
+          }
+        };
+        
+        child.stdout.on('data', appendToLog);
+        child.stderr.on('data', appendToLog);
+        
+        // Handle process exit
+        child.on('exit', (code, signal) => {
+          console.log(`LogDNA agent process exited with code ${code}, signal ${signal}`);
+          // Clean up PID file if agent exits
+          try {
+            if (fs.existsSync(pidFile)) {
+              fs.unlinkSync(pidFile);
+            }
+          } catch (cleanupError) {
+            console.warn('Failed to clean up PID file:', cleanupError.message);
+          }
+        });
+        
+        // Allow process to run independently
+        child.unref();
+        
+        console.log(`⏳ LogDNA agent starting with PID: ${child.pid}...`);
+        
+        // Enhanced validation with health checking
+        setTimeout(async () => {
+          // Check if response hasn't been sent yet
+          if (res.headersSent) {
+            return; // Response already sent, nothing to do
+          }
+          
+          try {
+            // Verify process is still running
+            process.kill(child.pid, 0);
+            
+            // Perform health check
+            const healthCheck = await checkAgentHealth(child.pid, 2000);
+            
+            if (healthCheck.healthy === true) {
+              console.log('✅ LogDNA agent started successfully and is healthy');
+              return res.json({ 
+                success: true,
+                message: 'LogDNA agent started successfully and is forwarding logs', 
+                pid: child.pid,
+                health: healthCheck.reason,
+                timestamp: new Date().toISOString()
+              });
+            } else if (healthCheck.healthy === false) {
+              console.log(`❌ LogDNA agent unhealthy: ${healthCheck.reason}`);
+              
+              // Get recent logs for debugging
+              const recentLogs = logBuffer.split('\n').slice(-10).join('\n');
+              
+              return res.status(500).json({ 
+                error: 'LogDNA agent started but is not healthy',
+                details: healthCheck.reason,
+                logs: recentLogs,
+                pid: child.pid,
+                timestamp: new Date().toISOString()
+              });
+            } else {
+              console.log(`⚠️  LogDNA agent health status unclear: ${healthCheck.reason}`);
+              return res.json({ 
+                success: true,
+                message: 'LogDNA agent started but health status unclear',
+                pid: child.pid,
+                health: healthCheck.reason,
+                warning: 'Monitor agent logs to verify log forwarding',
+                timestamp: new Date().toISOString()
+              });
+            }
+            
+          } catch (pidError) {
+            // Process died during startup
+            console.log('❌ LogDNA agent process died during startup');
+            
+            const recentLogs = logBuffer || 'No log content captured';
+            
+            // Clean up PID file
+            try {
+              if (fs.existsSync(pidFile)) {
+                fs.unlinkSync(pidFile);
+              }
+            } catch (cleanupError) {
+              console.warn('Failed to clean up PID file:', cleanupError.message);
+            }
+            
+            return res.status(500).json({ 
+              error: 'LogDNA agent failed to start',
+              details: 'Process died immediately after startup. Check configuration and connectivity.',
+              logs: recentLogs,
+              timestamp: new Date().toISOString()
+            });
+          }
+        }, 4000); // Wait 4 seconds for thorough validation
+      
+      } catch (execError) {
+        console.error('Failed to execute start command:', execError);
+        return res.status(500).json({ 
+          error: 'Failed to execute start command',
+          details: execError.message
+        });
+      }
+    };
+    
+    // Start new agent if we reached here
+    startNewAgent();
     
   } catch (error) {
     console.error('Error starting LogDNA agent:', error);
-    return res.status(500).json({ 
-      error: 'Failed to start LogDNA agent',
-      details: error.message
-    });
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Failed to start LogDNA agent',
+        details: error.message
+      });
+    }
   }
 });
 
@@ -1044,21 +1284,90 @@ app.get('/api/mezmo/logs', (req, res) => {
     const envFile = '/etc/logdna/logdna.env';
     const pidFile = '/tmp/codeuser/logdna-agent.pid';
     
-    // Gather debug information
+    // Gather comprehensive debug information
     const debugInfo = {
       logFileExists: fs.existsSync(logFile),
       envFileExists: fs.existsSync(envFile),
       pidFileExists: fs.existsSync(pidFile),
-      agentBinaryExists: fs.existsSync('/usr/bin/logdna-agent')
+      agentBinaryExists: fs.existsSync('/usr/bin/logdna-agent'),
+      configValidation: null,
+      processStatus: null,
+      logFileAge: null,
+      systemInfo: {
+        timestamp: new Date().toISOString(),
+        hostname: require('os').hostname(),
+        platform: require('os').platform(),
+        userInfo: (() => {
+          try {
+            return require('os').userInfo();
+          } catch (error) {
+            return { username: 'unknown', uid: -1, gid: -1, shell: null, homedir: null };
+          }
+        })()
+      }
     };
     
+    // Check file ages to understand startup sequence
+    if (fs.existsSync(logFile)) {
+      const stats = fs.statSync(logFile);
+      debugInfo.logFileAge = {
+        created: stats.birthtime.toISOString(),
+        modified: stats.mtime.toISOString(),
+        ageMinutes: Math.round((Date.now() - stats.mtime) / 60000)
+      };
+    }
+    
+    // Validate configuration if env file exists
     if (fs.existsSync(envFile)) {
       try {
         const envContent = fs.readFileSync(envFile, 'utf8');
-        const hostMatch = envContent.match(/(?:MZ_HOST|LOGDNA_HOST)=([^\n]+)/);
-        debugInfo.configuredHost = hostMatch ? hostMatch[1] : 'Not found';
+        const configValidation = validateLogDNAConfig(envContent);
+        
+        debugInfo.configValidation = {
+          isValid: configValidation.isValid,
+          hasMzConfig: configValidation.hasMzConfig,
+          hasLogdnaConfig: configValidation.hasLogdnaConfig,
+          host: configValidation.host || 'Not found',
+          keyLength: configValidation.keyLength
+        };
+        
+        debugInfo.configuredHost = configValidation.host || 'Not found';
       } catch (envError) {
         debugInfo.configuredHost = 'Error reading env file';
+        debugInfo.configValidation = { error: envError.message };
+      }
+    }
+    
+    // Check process status if PID file exists
+    if (fs.existsSync(pidFile)) {
+      try {
+        const pidContent = fs.readFileSync(pidFile, 'utf8').trim();
+        const pid = parseInt(pidContent);
+        
+        if (!isNaN(pid)) {
+          try {
+            process.kill(pid, 0); // Test if process exists
+            debugInfo.processStatus = {
+              pid,
+              running: true,
+              pidFileAge: Math.round((Date.now() - fs.statSync(pidFile).mtime) / 60000)
+            };
+          } catch (killError) {
+            debugInfo.processStatus = {
+              pid,
+              running: false,
+              error: 'Process not found',
+              pidFileAge: Math.round((Date.now() - fs.statSync(pidFile).mtime) / 60000)
+            };
+          }
+        } else {
+          debugInfo.processStatus = { 
+            error: 'Invalid PID in file',
+            pidContent: pidContent.substring(0, 20)
+          };
+        }
+      } catch (pidError) {
+        debugInfo.processStatus = { error: pidError.message };
       }
     }
     
@@ -1073,22 +1382,57 @@ app.get('/api/mezmo/logs', (req, res) => {
     const logs = fs.readFileSync(logFile, 'utf8');
     const lines = logs.split('\n').slice(-50); // Last 50 lines
     
-    // Enhanced error pattern detection with categorization
+    // Enhanced error pattern detection with categorization and startup sequence
     const errorPatterns = [
+      // Authentication issues
       { pattern: /403.*forbidden/i, category: 'authentication', severity: 'high' },
       { pattern: /bad.*request.*check.*configuration/i, category: 'authentication', severity: 'high' },
       { pattern: /unauthorized/i, category: 'authentication', severity: 'high' },
       { pattern: /invalid.*key/i, category: 'authentication', severity: 'medium' },
+      { pattern: /authentication.*failed/i, category: 'authentication', severity: 'high' },
+      
+      // Network connectivity
       { pattern: /connection.*refused/i, category: 'network', severity: 'high' },
       { pattern: /timeout/i, category: 'network', severity: 'medium' },
       { pattern: /dns.*resolution.*failed/i, category: 'network', severity: 'high' },
       { pattern: /host.*not.*found/i, category: 'network', severity: 'medium' },
+      { pattern: /unable.*connect/i, category: 'network', severity: 'high' },
+      { pattern: /network.*unreachable/i, category: 'network', severity: 'high' },
+      
+      // Security and SSL
       { pattern: /certificate/i, category: 'security', severity: 'medium' },
-      { pattern: /ssl.*error/i, category: 'security', severity: 'medium' }
+      { pattern: /ssl.*error/i, category: 'security', severity: 'medium' },
+      { pattern: /tls.*handshake.*failed/i, category: 'security', severity: 'medium' },
+      
+      // Configuration issues
+      { pattern: /missing.*configuration/i, category: 'configuration', severity: 'high' },
+      { pattern: /invalid.*format/i, category: 'configuration', severity: 'medium' },
+      { pattern: /config.*error/i, category: 'configuration', severity: 'medium' },
+      { pattern: /environment.*variable.*not.*set/i, category: 'configuration', severity: 'high' },
+      
+      // Startup sequence issues
+      { pattern: /failed.*to.*start/i, category: 'startup', severity: 'high' },
+      { pattern: /agent.*exited.*immediately/i, category: 'startup', severity: 'high' },
+      { pattern: /permission.*denied/i, category: 'startup', severity: 'high' },
+      { pattern: /binary.*not.*found/i, category: 'startup', severity: 'high' },
+      { pattern: /segmentation.*fault/i, category: 'startup', severity: 'high' },
+      
+      // Runtime issues
+      { pattern: /buffer.*full/i, category: 'runtime', severity: 'medium' },
+      { pattern: /memory.*error/i, category: 'runtime', severity: 'high' },
+      { pattern: /disk.*space/i, category: 'runtime', severity: 'medium' },
+      { pattern: /rate.*limit/i, category: 'runtime', severity: 'medium' }
     ];
     
     const detectedIssues = [];
-    const issueCategories = { authentication: [], network: [], security: [] };
+    const issueCategories = { 
+      authentication: [], 
+      network: [], 
+      security: [], 
+      configuration: [], 
+      startup: [], 
+      runtime: [] 
+    };
 
     lines.forEach(line => {
       errorPatterns.forEach(errorInfo => {
@@ -1110,7 +1454,8 @@ app.get('/api/mezmo/logs', (req, res) => {
         solutions: [
           'Verify the ingestion key is valid for the configured host',
           'Check if the key is for the correct environment (dev/staging/prod)',
-          'Regenerate the ingestion key in your Mezmo account if needed'
+          'Regenerate the ingestion key in your Mezmo account if needed',
+          'Ensure the key format is correct (32+ characters)'
         ]
       });
     }
@@ -1122,7 +1467,8 @@ app.get('/api/mezmo/logs', (req, res) => {
         solutions: [
           'Check internet connectivity',
           'Verify the host URL is correct for your environment',
-          'Check if corporate firewall is blocking connections'
+          'Check if corporate firewall is blocking connections',
+          'Test connectivity: ping logs.mezmo.com or curl -I https://logs.mezmo.com'
         ]
       });
     }
@@ -1134,7 +1480,48 @@ app.get('/api/mezmo/logs', (req, res) => {
         solutions: [
           'Check system clock is accurate',
           'Verify SSL certificates are up to date',
-          'Try connecting from a different network'
+          'Try connecting from a different network',
+          'Update container base image if certificates are outdated'
+        ]
+      });
+    }
+    
+    if (issueCategories.configuration.length > 0) {
+      recommendations.push({
+        issue: 'Configuration Problems',
+        cause: 'Invalid or missing configuration settings',
+        solutions: [
+          'Check environment file exists: /etc/logdna/logdna.env',
+          'Verify all required variables are set (MZ_INGESTION_KEY, MZ_HOST)',
+          'Validate configuration format and values',
+          'Restart agent after configuration changes'
+        ]
+      });
+    }
+    
+    if (issueCategories.startup.length > 0) {
+      recommendations.push({
+        issue: 'Agent Startup Failed',
+        cause: 'LogDNA agent binary cannot start or initialize properly',
+        solutions: [
+          'Check if LogDNA agent is installed: ls -la /usr/bin/logdna-agent',
+          'Verify file permissions and execute rights',
+          'Check available disk space and memory',
+          'Review startup logs for specific error messages',
+          'Try manual agent start: /usr/bin/logdna-agent --help'
+        ]
+      });
+    }
+    
+    if (issueCategories.runtime.length > 0) {
+      recommendations.push({
+        issue: 'Runtime Performance Issues',
+        cause: 'Agent running but experiencing performance problems',
+        solutions: [
+          'Check system resources (CPU, memory, disk)',
+          'Monitor log buffer sizes and rates',
+          'Verify log file permissions in /tmp/codeuser/',
+          'Consider adjusting agent configuration parameters'
         ]
       });
     }
