@@ -31,6 +31,28 @@ app.use((req, res, next) => {
   }
 });
 
+// Order counter for sequential order numbers
+let orderCounter = 1;
+
+// Function to generate sequential order numbers
+const generateOrderNumber = () => {
+  const orderNumber = orderCounter.toString().padStart(7, '0');
+  orderCounter++;
+  return orderNumber;
+};
+
+// Initialize order counter based on existing orders
+const initializeOrderCounter = () => {
+  if (data.orders && data.orders.length > 0) {
+    // Find the highest existing order number and set counter to next value
+    const maxOrderNumber = Math.max(...data.orders
+      .map(order => parseInt(order.id))
+      .filter(num => !isNaN(num))
+    );
+    orderCounter = maxOrderNumber + 1;
+  }
+};
+
 // In-memory data store (simulating a database)
 let data = {
   products: [
@@ -249,7 +271,7 @@ app.post('/api/orders', async (req, res) => {
   }
 
   const order = {
-    id: `order-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    id: generateOrderNumber(),
     ...req.body,
     createdAt: new Date().toISOString(),
     status: 'payment_pending'
@@ -258,64 +280,87 @@ app.post('/api/orders', async (req, res) => {
   // Calculate order total for business metrics
   const total = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   
-  // Check for payment gateway failure
-  if (isFailureActive('payment')) {
-    const paymentStartTime = Date.now();
-    
-    // Simulate payment attempt with timeout
-    await new Promise(resolve => setTimeout(resolve, 8000));
-    
-    // Log payment failure
-    logBusinessEvent('payment_failed', 'error', {
-      orderId: order.id,
-      amount: total,
-      errorCode: 'GATEWAY_TIMEOUT',
-      gatewayResponse: null,
-      attemptDuration: Date.now() - paymentStartTime
-    }, req);
-    
-    appLogger.error('Payment processing failed - gateway timeout', {
-      requestId: req.requestId,
-      orderId: order.id,
-      error: 'Connection timeout after 8000ms',
-      gateway: 'stripe',
-      customerId: customerEmail,
-      amount: total,
-      currency: 'USD'
-    });
-    
-    // Save order in failed payment state
-    order.status = 'payment_failed';
-    order.paymentError = 'Payment gateway timeout';
-    order.paymentErrorCode = 'GATEWAY_TIMEOUT';
-    data.orders.push(order);
-    
-    return res.status(502).json({
-      error: 'Payment processing failed - gateway timeout',
-      code: 'PAYMENT_GATEWAY_ERROR',
-      orderId: order.id,
-      retryable: true,
-      details: 'Payment gateway is currently unavailable'
-    });
-  }
+  // Ensure totalAmount is set correctly (use calculated total or fallback to req.body.total)
+  order.totalAmount = total;
   
-  // Normal order processing
-  order.status = 'confirmed';
+  // Save order immediately in payment_pending status
   data.orders.push(order);
   
-  // Log successful business event
-  logBusinessEvent('order_created', 'create', {
-    orderId: order.id,
-    customerEmail: customerEmail,
-    itemCount: items.length,
-    value: total,
-    unit: 'USD'
-  }, req);
+  // Return order ID immediately, then process payment asynchronously
+  res.json({ 
+    orderId: order.id, 
+    status: 'payment_pending',
+    message: 'Order created, processing payment...' 
+  });
   
+  // Process payment asynchronously to allow orders to be visible in payment_pending state
+  setTimeout(async () => {
+    try {
+      // Add realistic payment processing delay (2-5 seconds)
+      const paymentDelay = 2000 + Math.random() * 3000;
+      await new Promise(resolve => setTimeout(resolve, paymentDelay));
+      
+      // Random payment failures for realistic demo (10% failure rate)
+      const shouldFailPayment = Math.random() < 0.1;
+      
+      // Check for payment gateway failure (either simulated failure or random failure)
+      if (isFailureActive('payment') || shouldFailPayment) {
+        const paymentStartTime = Date.now();
+        
+        // Simulate payment attempt with timeout
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Log payment failure
+        logBusinessEvent('payment_failed', 'error', {
+          orderId: order.id,
+          amount: total,
+          errorCode: shouldFailPayment ? 'RANDOM_PAYMENT_FAILURE' : 'GATEWAY_TIMEOUT',
+          gatewayResponse: null,
+          attemptDuration: Date.now() - paymentStartTime
+        }, req);
+        
+        appLogger.error('Payment processing failed', {
+          requestId: req.requestId,
+          orderId: order.id,
+          error: shouldFailPayment ? 'Random payment failure for demo' : 'Connection timeout',
+          gateway: 'stripe',
+          customerId: customerEmail,
+          amount: total,
+          currency: 'USD'
+        });
+        
+        // Update order to failed payment state
+        order.status = 'payment_failed';
+        order.paymentError = shouldFailPayment ? 'Payment declined' : 'Payment gateway timeout';
+        order.paymentErrorCode = shouldFailPayment ? 'CARD_DECLINED' : 'GATEWAY_TIMEOUT';
+        
+        console.log(`💳❌ Payment failed for order ${order.id} - ${order.paymentError}`);
+      } else {
+        // Payment successful
+        order.status = 'confirmed';
+        
+        // Log successful business event
+        logBusinessEvent('order_created', 'create', {
+          orderId: order.id,
+          customerEmail: customerEmail,
+          totalAmount: total,
+          itemCount: items.length,
+          orderType: order.orderType || 'takeout'
+        }, req);
+        
+        console.log(`💳✅ Payment confirmed for order ${order.id} - $${total}`);
+      }
+    } catch (error) {
+      console.error(`💳⚠️ Error processing payment for order ${order.id}:`, error);
+      order.status = 'payment_failed';
+      order.paymentError = 'Payment processing error';
+      order.paymentErrorCode = 'PROCESSING_ERROR';
+    }
+  }, 100); // Small delay to ensure order is saved first
+  
+  // Log initial order creation event (payment processing will be logged separately)
   const duration = Date.now() - startTime;
-  logPerformanceTiming('order_processing', duration, 'orders', { orderId: order.id, itemCount: items.length }, req);
-  
-  res.status(201).json(order);
+  logPerformanceTiming('order_creation', duration, 'orders', { orderId: order.id, itemCount: items.length }, req);
 });
 
 app.put('/api/orders/:id', (req, res) => {
@@ -4000,17 +4045,22 @@ app.get('/api/simulator/health', async (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
+  // Initialize order counter based on existing orders
+  initializeOrderCounter();
+  
   appLogger.info('Server started successfully', {
     port: PORT,
     environment: process.env.NODE_ENV || 'development',
     pid: process.pid,
-    logLevels: getLogLevels()
+    logLevels: getLogLevels(),
+    nextOrderNumber: orderCounter.toString().padStart(7, '0')
   });
   
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 API available at http://localhost:${PORT}/api`);
   console.log(`📊 Logging levels:`, getLogLevels());
+  console.log(`📝 Next order number: #${orderCounter.toString().padStart(7, '0')}`);
   
   // Log server startup as business event
   logBusinessEvent('server_started', 'startup', {
@@ -4026,4 +4076,25 @@ app.listen(PORT, () => {
     logLevels: getLogLevels(),
     timestamp: new Date().toISOString()
   });
+
+  // Auto-start virtual traffic for demo-friendly experience
+  if (process.env.DISABLE_AUTO_TRAFFIC !== 'true') {
+    try {
+      console.log('🎭 Auto-starting virtual traffic for demo...');
+      const manager = await getTrafficManager();
+      const config = manager.getConfig();
+      
+      if (config.enabled) {
+        manager.start();
+        console.log(`✅ Virtual traffic started with ${config.targetConcurrentUsers} users (${config.journeyPattern} behavior, ${config.trafficTiming} timing)`);
+        console.log('💡 Orders will start appearing in the Orders page within minutes');
+        console.log(`⚙️  Configure virtual traffic at: http://localhost:${PORT}/agents`);
+      }
+    } catch (error) {
+      console.warn('⚠️  Failed to auto-start virtual traffic:', error.message);
+      console.log('💡 You can manually start virtual traffic from the Virtual Users page');
+    }
+  } else {
+    console.log('🚫 Auto-traffic disabled via DISABLE_AUTO_TRAFFIC environment variable');
+  }
 });

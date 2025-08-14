@@ -31,13 +31,13 @@ class TrafficManager {
 
   getDefaultConfig() {
     return {
-      enabled: false,
-      targetConcurrentUsers: 5,
+      enabled: true,  // Auto-enable for demo-friendly experience
+      targetConcurrentUsers: 50,  // Demo with 50 users as requested
       spawnIntervalMin: 30000,
       spawnIntervalMax: 120000,
       bounceRate: 0.15,
-      journeyPattern: 'mixed',
-      trafficTiming: 'steady'
+      journeyPattern: 'mixed',  // Mixed behavior as requested
+      trafficTiming: 'steady'   // Steady timing as requested
     };
   }
 

@@ -11,6 +11,7 @@ import { useEffect, useRef } from "react";
 import Home from "./pages/Home";
 import Menu from "./pages/Menu";
 import Reservations from "./pages/Reservations";
+import Orders from "./pages/Orders";
 import Config from "./pages/Config";
 import Agents from "./pages/Agents";
 import NotFound from "./pages/NotFound";
@@ -68,6 +69,7 @@ const AppContent = () => {
         <Route path="/" element={<Home />} />
         <Route path="/menu" element={<Menu />} />
         <Route path="/reservations" element={<Reservations />} />
+        <Route path="/orders" element={<Orders />} />
         <Route path="/config" element={<Config />} />
         <Route path="/agents" element={<Agents />} />
         {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

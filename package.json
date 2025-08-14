@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "dev:no-traffic": "concurrently \"npm run server:no-traffic\" \"npm run client\"",
     "client": "vite",
     "server": "node server/index.js",
     "server:dev": "nodemon server/index.js",
+    "server:no-traffic": "DISABLE_AUTO_TRAFFIC=true node server/index.js",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",

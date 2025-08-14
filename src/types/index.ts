@@ -34,7 +34,7 @@ export interface Order {
   customerPhone: string;
   items: OrderItem[];
   totalAmount: number;
-  status: 'pending' | 'preparing' | 'ready' | 'completed' | 'cancelled';
+  status: 'payment_pending' | 'confirmed' | 'payment_failed' | 'pending' | 'preparing' | 'ready' | 'completed' | 'cancelled';
   type: 'takeout' | 'delivery';
   createdAt: string;
   notes?: string;
