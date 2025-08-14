@@ -542,8 +542,13 @@ const Agents = () => {
         setOperationInProgress(prev => ({ ...prev, mezmo: true }));
         try {
           await handleStartMezmoAgent();
+          // Update the toggle state to reflect that the agent is running
+          setMezmoEnabled(true);
+          console.log('✅ Mezmo agent restarted successfully, toggle state updated');
         } catch (error: any) {
           console.error('Failed to restart Mezmo agent:', error);
+          // Ensure toggle is off if restart failed
+          setMezmoEnabled(false);
           toast({
             title: "Failed to Restart Mezmo Agent",
             description: error.message,
@@ -563,8 +568,13 @@ const Agents = () => {
         setOperationInProgress(prev => ({ ...prev, otel: true }));
         try {
           await handleStartOtelCollector();
+          // Update the toggle state to reflect that the collector is running
+          setOtelEnabled(true);
+          console.log('✅ OTEL collector restarted successfully, toggle state updated');
         } catch (error: any) {
           console.error('Failed to restart OTEL collector:', error);
+          // Ensure toggle is off if restart failed
+          setOtelEnabled(false);
           toast({
             title: "Failed to Restart OTEL Collector", 
             description: error.message,
