@@ -1,0 +1,27 @@
+{
+  "id": "approval_1755789479151_p6jo5srci",
+  "title": "Tasks Phase: otel-mezmo-integration-fix - Ready for Review",
+  "filePath": ".spec-workflow/specs/otel-mezmo-integration-fix/tasks.md",
+  "type": "document",
+  "status": "needs-revision",
+  "createdAt": "2025-08-21T15:17:59.151Z",
+  "category": "spec",
+  "categoryName": "otel-mezmo-integration-fix",
+  "response": "Feedback Summary (2 comments):\n\nGeneral Comments:\n1. Lets make sure to update the example config agents-config.json with any changes.\n2. I want to make sure we can test as much as we can within the development process as possible.  This means having good unit tests and integration tests to make sure things are flowing.  As part of each task I want us to be able to test what the tasks did, before we mark it complete.\n\n",
+  "annotations": "{\n  \"decision\": \"needs-revision\",\n  \"comments\": [\n    {\n      \"type\": \"general\",\n      \"comment\": \"Lets make sure to update the example config agents-config.json with any changes.\",\n      \"timestamp\": \"2025-08-21T15:21:11.698Z\",\n      \"id\": \"comment_1755789671698_gumhknyyh\"\n    },\n    {\n      \"type\": \"general\",\n      \"comment\": \"I want to make sure we can test as much as we can within the development process as possible.  This means having good unit tests and integration tests to make sure things are flowing.  As part of each task I want us to be able to test what the tasks did, before we mark it complete.\",\n      \"timestamp\": \"2025-08-21T15:26:12.049Z\",\n      \"id\": \"comment_1755789972049_o7hm71mqp\"\n    }\n  ],\n  \"summary\": \"Feedback Summary (2 comments):\\n\\nGeneral Comments:\\n1. Lets make sure to update the example config agents-config.json with any changes.\\n2. I want to make sure we can test as much as we can within the development process as possible.  This means having good unit tests and integration tests to make sure things are flowing.  As part of each task I want us to be able to test what the tasks did, before we mark it complete.\\n\\n\",\n  \"timestamp\": \"2025-08-21T15:26:31.257Z\"\n}",
+  "respondedAt": "2025-08-21T15:26:31.266Z",
+  "comments": [
+    {
+      "type": "general",
+      "comment": "Lets make sure to update the example config agents-config.json with any changes.",
+      "timestamp": "2025-08-21T15:21:11.698Z",
+      "id": "comment_1755789671698_gumhknyyh"
+    },
+    {
+      "type": "general",
+      "comment": "I want to make sure we can test as much as we can within the development process as possible.  This means having good unit tests and integration tests to make sure things are flowing.  As part of each task I want us to be able to test what the tasks did, before we mark it complete.",
+      "timestamp": "2025-08-21T15:26:12.049Z",
+      "id": "comment_1755789972049_o7hm71mqp"
+    }
+  ]
+}
