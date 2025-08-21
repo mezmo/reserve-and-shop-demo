@@ -91,6 +91,7 @@ load_agents_config() {
             local mezmo_enabled=$(jq -r ".configurations.$default_config.mezmo.enabled // false" "$config_file")
             local mezmo_key=$(jq -r ".configurations.$default_config.mezmo.ingestionKey // \"\"" "$config_file")
             local mezmo_host=$(jq -r ".configurations.$default_config.mezmo.host // \"logs.mezmo.com\"" "$config_file")
+            local mezmo_endpoint=$(jq -r ".configurations.$default_config.mezmo.endpoint // \"logs.mezmo.com\"" "$config_file")
             local mezmo_tags=$(jq -r ".configurations.$default_config.mezmo.tags // \"restaurant-app,demo\"" "$config_file")
             
             # Extract OTEL configuration
@@ -104,20 +105,11 @@ load_agents_config() {
                 
                 # Create LogDNA environment file
                 cat > /etc/logdna/logdna.env << EOF
-# LOGDNA_ prefixed variables (legacy)
-LOGDNA_INGESTION_KEY=$mezmo_key
-LOGDNA_HOST=$mezmo_host
-LOGDNA_TAGS=$mezmo_tags
-LOGDNA_LOGDIR=/tmp/codeuser
-LOGDNA_INCLUDE=*.log
-LOGDNA_DB_PATH=/var/lib/logdna
-LOGDNA_LOOKBACK=start
-LOGDNA_LOG_LEVEL=info
-
 # MZ_ prefixed variables (required by LogDNA Agent v2/v3)
 MZ_INGESTION_KEY=$mezmo_key
 MZ_HOST=$mezmo_host
 MZ_TAGS=$mezmo_tags
+MZ_ENDPOINT=$mezmo_endpoint
 MZ_LOGDIR=/tmp/codeuser
 MZ_DB_PATH=/var/lib/logdna
 MZ_LOOKBACK=start
@@ -129,7 +121,7 @@ EOF
                 # Create YAML configuration file to explicitly target our application logs
                 cat > /etc/logdna/config.yaml << EOF
 http:
-  endpoint: /logs/ingest
+  endpoint: $mezmo_endpoint
   host: $mezmo_host
   timeout: 30000
   use_ssl: true
