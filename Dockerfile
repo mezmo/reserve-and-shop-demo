@@ -50,13 +50,8 @@ RUN npm config set update-notifier false && \
 COPY . .
 
 # Optional: Copy agents configuration file if provided during build
-ARG AGENTS_CONFIG_FILE
-RUN if [ -n "${AGENTS_CONFIG_FILE}" ] && [ -f "${AGENTS_CONFIG_FILE}" ]; then \
-      echo "✅ Agents configuration file included in build"; \
-      cp "${AGENTS_CONFIG_FILE}" /app/agents-config.json; \
-    else \
-      echo "ℹ️  No agents configuration file provided - agents can be configured via web UI"; \
-    fi
+COPY agents-config.json /app/
+
 
 # Set up startup script
 COPY startup.sh /usr/local/bin/startup.sh
