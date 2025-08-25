@@ -9,12 +9,36 @@ import { FetchInstrumentation } from '@opentelemetry/instrumentation-fetch';
 import { XMLHttpRequestInstrumentation } from '@opentelemetry/instrumentation-xml-http-request';
 import { UserInteractionInstrumentation } from '@opentelemetry/instrumentation-user-interaction';
 
-// Check if OTEL collector is available
+// Check if OTEL collector is available - Updated for enhanced status monitoring
 async function checkOTELCollectorHealth(): Promise<boolean> {
   try {
     const response = await fetch('/api/otel/status');
+    if (!response.ok) {
+      console.warn('OTEL collector health check failed: HTTP', response.status);
+      return false;
+    }
+    
     const status = await response.json();
-    return response.ok && status.status === 'connected' && status.enabledPipelines?.traces;
+    
+    // Enhanced health check using new status response format
+    const isCollectorRunning = status.status === 'connected' && status.pid;
+    const isCollectorHealthy = status.healthChecks?.collector === true;
+    const hasTracesEnabled = status.enabledPipelines?.traces === true;
+    const isOverallHealthy = status.isHealthy === true;
+    
+    const healthStatus = isCollectorRunning && isCollectorHealthy && hasTracesEnabled && isOverallHealthy;
+    
+    if (!healthStatus) {
+      console.warn('OTEL collector health check failed:', {
+        running: isCollectorRunning,
+        healthy: isCollectorHealthy, 
+        tracesEnabled: hasTracesEnabled,
+        overall: isOverallHealthy,
+        errors: status.errors
+      });
+    }
+    
+    return healthStatus;
   } catch (error) {
     console.warn('OTEL collector health check failed:', error);
     return false;
@@ -23,30 +47,63 @@ async function checkOTELCollectorHealth(): Promise<boolean> {
 
 export async function initializeTracing() {
   try {
-    // Check if OTEL is enabled in config from server
-    const response = await fetch(`${window.location.origin.replace(':8080', ':3001')}/api/config/otel`);
+    // Enhanced backend configuration loading with proper error handling
+    console.log('🔄 Initializing OTEL tracing - loading configuration from backend...');
+    
+    const configUrl = `${window.location.origin.replace(':8080', ':3001')}/api/config/otel`;
+    const response = await fetch(configUrl);
+    
     if (!response.ok) {
-      console.log('OTEL tracing not initialized: No configuration found on server');
+      if (response.status === 404) {
+        console.log('OTEL tracing not initialized: Configuration endpoint not found');
+      } else if (response.status === 503) {
+        console.log('OTEL tracing not initialized: Configuration service unavailable');
+      } else {
+        console.log(`OTEL tracing not initialized: Configuration request failed (HTTP ${response.status})`);
+      }
       return null;
     }
     
-    const result = await response.json();
+    let result;
+    try {
+      result = await response.json();
+    } catch (parseError) {
+      console.error('OTEL tracing not initialized: Invalid configuration response format');
+      return null;
+    }
+    
     if (!result.success) {
-      console.log('OTEL tracing not initialized: Failed to load configuration');
+      console.log('OTEL tracing not initialized: Configuration marked as failed:', result.error || 'Unknown error');
       return null;
     }
     
     const config = result.config;
-    if (!config.enabled || !config.pipelines?.traces?.enabled) {
-      console.log('OTEL tracing not initialized: Disabled in configuration');
+    if (!config) {
+      console.log('OTEL tracing not initialized: No configuration data received');
       return null;
     }
     
-    // Verify OTEL collector is available before initializing
+    if (!config.enabled) {
+      console.log('OTEL tracing not initialized: OTEL disabled in configuration');
+      return null;
+    }
+    
+    if (!config.pipelines?.traces?.enabled) {
+      console.log('OTEL tracing not initialized: Traces pipeline disabled in configuration');
+      return null;
+    }
+    
+    if (!config.pipelines.traces.ingestionKey) {
+      console.log('OTEL tracing not initialized: No traces ingestion key configured');
+      return null;
+    }
+    
+    // Enhanced collector availability check with detailed error reporting
+    console.log('🔍 Verifying OTEL collector availability...');
     const isHealthy = await checkOTELCollectorHealth();
     if (!isHealthy) {
-      console.log('OTEL tracing disabled: Collector not available');
-      return null; // Don't initialize tracing if collector unavailable
+      console.log('OTEL tracing disabled: Collector health check failed - see previous warnings for details');
+      return null;
     }
 
     console.log('Initializing OTEL tracing with config:', {
@@ -179,7 +236,22 @@ export async function initializeTracing() {
     console.log(`Traces will be sent via backend proxy to: ${baseUrl}/api/traces/v1/traces`);
     return provider;
   } catch (error) {
-    console.error('Failed to initialize OTEL tracing:', error);
+    // Enhanced error handling for unavailable collector
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      console.error('❌ Failed to initialize OTEL tracing: Network error - backend unreachable');
+    } else if (error instanceof SyntaxError) {
+      console.error('❌ Failed to initialize OTEL tracing: Invalid response format from backend');
+    } else {
+      console.error('❌ Failed to initialize OTEL tracing:', error.message || error);
+    }
+    
+    // Log additional debugging information
+    console.warn('OTEL tracing initialization failed - check:');
+    console.warn('  • Backend server is running on port 3001');
+    console.warn('  • OTEL collector is configured and running');
+    console.warn('  • Network connectivity to backend');
+    console.warn('  • Console for additional error details above');
+    
     return null;
   }
 }

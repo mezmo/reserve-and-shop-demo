@@ -69,7 +69,7 @@ const OTEL_HOST_ENVIRONMENTS = {
   }
 } as const;
 
-type HostEnvironment = keyof typeof HOST_ENVIRONMENTS;
+type HostEnvironment = keyof typeof OTEL_HOST_ENVIRONMENTS;
 
 interface MezmoConfig {
   enabled: boolean;
@@ -148,6 +148,34 @@ const Agents = () => {
     lastError: null as string | null
   });
 
+  // Enhanced OTEL status monitoring state (Task 11)
+  const [otelHealthChecks, setOtelHealthChecks] = useState({
+    collector: false,
+    pipelines: {
+      logs: false,
+      metrics: false,
+      traces: false
+    }
+  });
+  const [otelPipelineStatus, setOtelPipelineStatus] = useState({
+    logs: { enabled: false, healthy: false },
+    metrics: { enabled: false, healthy: false },
+    traces: { enabled: false, healthy: false }
+  });
+  const [otelDetailedMetrics, setOtelDetailedMetrics] = useState({
+    logsSent: 0,
+    metricsCollected: 0,
+    tracesReceived: 0,
+    errors: 0,
+    uptime: 0,
+    lastChecked: null as string | null
+  });
+  const [otelErrors, setOtelErrors] = useState<string[]>([]);
+  // Validation error state for real-time feedback
+  const [otelValidationErrors, setOtelValidationErrors] = useState<{
+    [key: string]: string; // key format: "pipelineType.field" or "serviceName"
+  }>({});
+
   // Multi-pipeline OTEL configuration
   const [otelPipelines, setOtelPipelines] = useState({
     logs: {
@@ -173,6 +201,8 @@ const Agents = () => {
   // Host environment selection state
   const [mezmoHostEnv, setMezmoHostEnv] = useState<HostEnvironment>('production');
   const [mezmoCustomHost, setMezmoCustomHost] = useState('');
+  // Global OTEL environment (for easy switching)
+  const [otelGlobalEnv, setOtelGlobalEnv] = useState<HostEnvironment>('production');
   const [otelHostEnvs, setOtelHostEnvs] = useState({
     logs: 'production' as HostEnvironment,
     metrics: 'production' as HostEnvironment,
@@ -225,12 +255,64 @@ const Agents = () => {
   };
 
   const setOtelHostEnvironment = (pipelineType: 'logs' | 'metrics' | 'traces', env: HostEnvironment, customHost?: string) => {
-    setOtelHostEnvs(prev => ({ ...prev, [pipelineType]: env }));
+    setOtelHostEnvs(prev => {
+      const newEnvs = { ...prev, [pipelineType]: env };
+      
+      // Update global environment if all non-custom pipelines have the same environment
+      const nonCustomEnvs = Object.values(newEnvs).filter(e => e !== 'custom');
+      const uniqueNonCustomEnvs = [...new Set(nonCustomEnvs)];
+      if (uniqueNonCustomEnvs.length === 1 && env !== 'custom') {
+        setOtelGlobalEnv(uniqueNonCustomEnvs[0]);
+      }
+      
+      return newEnvs;
+    });
+    
     if (env === 'custom' && customHost !== undefined) {
       setOtelCustomHosts(prev => ({ ...prev, [pipelineType]: customHost }));
       updateOtelPipeline(pipelineType, 'host', customHost);
     } else {
       updateOtelPipeline(pipelineType, 'host', OTEL_HOST_ENVIRONMENTS[env].host);
+    }
+  };
+
+  // Global OTEL environment switching - updates all pipelines at once
+  const setOtelGlobalEnvironment = (env: HostEnvironment) => {
+    setOtelGlobalEnv(env);
+    
+    // Update all pipeline environments to match global environment
+    const pipelineTypes = ['logs', 'metrics', 'traces'] as const;
+    pipelineTypes.forEach(pipelineType => {
+      // Only update pipelines that aren't set to custom
+      if (otelHostEnvs[pipelineType] !== 'custom') {
+        setOtelHostEnvironment(pipelineType, env);
+      }
+    });
+    
+    // Show notification about the change
+    const updatedCount = pipelineTypes.filter(pt => otelHostEnvs[pt] !== 'custom').length;
+    if (updatedCount > 0) {
+      toast({
+        title: "Environment Updated",
+        description: `Updated ${updatedCount} pipeline(s) to ${OTEL_HOST_ENVIRONMENTS[env].label} environment`,
+      });
+    }
+  };
+
+  // Helper to sync global environment with individual pipeline environments
+  const syncOtelGlobalEnvironment = (envs: { logs: HostEnvironment; metrics: HostEnvironment; traces: HostEnvironment }) => {
+    const nonCustomEnvs = Object.values(envs).filter(e => e !== 'custom');
+    const uniqueNonCustomEnvs = [...new Set(nonCustomEnvs)];
+    
+    if (uniqueNonCustomEnvs.length === 1) {
+      // All non-custom pipelines have the same environment
+      setOtelGlobalEnv(uniqueNonCustomEnvs[0]);
+    } else if (nonCustomEnvs.length === 0) {
+      // All pipelines are custom
+      setOtelGlobalEnv('custom');
+    } else {
+      // Mixed environments, default to production
+      setOtelGlobalEnv('production');
     }
   };
 
@@ -349,28 +431,39 @@ const Agents = () => {
           setOtelPid(status.pid);
           setOtelStatus(status.status);
           
-          // Load configuration from localStorage if no file config
+          // Load configuration from server if no file config
           if (!hasFileConfig) {
-            const savedOtelConfig = localStorage.getItem('otel-config');
-            if (savedOtelConfig) {
-              const config = JSON.parse(savedOtelConfig);
-              setOtelServiceName(config.serviceName || 'restaurant-app');
-              setOtelTags(config.tags || 'restaurant-app,otel');
-              if (config.pipelines) {
-                setOtelPipelines(config.pipelines);
-                // Detect host environments for each pipeline
-                Object.keys(config.pipelines).forEach((pipelineKey) => {
-                  const pipelineType = pipelineKey as 'logs' | 'metrics' | 'traces';
-                  const pipelineConfig = config.pipelines[pipelineType];
-                  if (pipelineConfig?.host) {
-                    const hostDetection = detectOtelHostEnvironment(pipelineConfig.host);
-                    setOtelHostEnvs(prev => ({ ...prev, [pipelineType]: hostDetection.env }));
-                    if (hostDetection.env === 'custom' && hostDetection.customHost) {
-                      setOtelCustomHosts(prev => ({ ...prev, [pipelineType]: hostDetection.customHost! }));
-                    }
+            try {
+              const configResponse = await fetch('/api/config/otel');
+              if (configResponse.ok) {
+                const result = await configResponse.json();
+                if (result.success && result.config) {
+                  const config = result.config;
+                  setOtelServiceName(config.serviceName || 'restaurant-app');
+                  setOtelTags(config.tags || 'restaurant-app,otel');
+                  if (config.pipelines) {
+                    setOtelPipelines(config.pipelines);
+                    // Detect host environments for each pipeline
+                    const detectedEnvs = { logs: 'production' as HostEnvironment, metrics: 'production' as HostEnvironment, traces: 'production' as HostEnvironment };
+                    Object.keys(config.pipelines).forEach((pipelineKey) => {
+                      const pipelineType = pipelineKey as 'logs' | 'metrics' | 'traces';
+                      const pipelineConfig = config.pipelines[pipelineType];
+                      if (pipelineConfig?.host) {
+                        const hostDetection = detectOtelHostEnvironment(pipelineConfig.host);
+                        detectedEnvs[pipelineType] = hostDetection.env;
+                        setOtelHostEnvs(prev => ({ ...prev, [pipelineType]: hostDetection.env }));
+                        if (hostDetection.env === 'custom' && hostDetection.customHost) {
+                          setOtelCustomHosts(prev => ({ ...prev, [pipelineType]: hostDetection.customHost! }));
+                        }
+                      }
+                    });
+                    // Sync global environment based on detected individual environments
+                    syncOtelGlobalEnvironment(detectedEnvs);
                   }
-                });
+                }
               }
+            } catch (error) {
+              console.error('Error loading OTEL config from server:', error);
             }
           }
         }
@@ -408,17 +501,21 @@ const Agents = () => {
     setOtelPipelines(config.otel.pipelines);
     
     // Apply OTEL host environments
+    const detectedEnvs = { logs: 'production' as HostEnvironment, metrics: 'production' as HostEnvironment, traces: 'production' as HostEnvironment };
     Object.keys(config.otel.pipelines).forEach((pipelineKey) => {
       const pipelineType = pipelineKey as 'logs' | 'metrics' | 'traces';
       const pipelineConfig = config.otel.pipelines[pipelineType];
       if (pipelineConfig?.host) {
         const hostDetection = detectOtelHostEnvironment(pipelineConfig.host);
+        detectedEnvs[pipelineType] = hostDetection.env;
         setOtelHostEnvs(prev => ({ ...prev, [pipelineType]: hostDetection.env }));
         if (hostDetection.env === 'custom' && hostDetection.customHost) {
           setOtelCustomHosts(prev => ({ ...prev, [pipelineType]: hostDetection.customHost! }));
         }
       }
     });
+    // Sync global environment based on detected individual environments
+    syncOtelGlobalEnvironment(detectedEnvs);
     
     // For preset configurations, we don't save to localStorage - they remain read-only
     
@@ -500,8 +597,12 @@ const Agents = () => {
           body: JSON.stringify(currentMezmoConfig)
         });
         
-        // Still save OTEL to localStorage for now (can migrate later)
-        localStorage.setItem('otel-config', JSON.stringify(currentOtelConfig));
+        // Save OTEL config to server (matching Mezmo pattern)
+        await fetch('/api/config/otel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(currentOtelConfig)
+        });
         console.log('💾 Saved custom configuration to server before switching to preset');
       }
 
@@ -531,28 +632,38 @@ const Agents = () => {
         console.error('Error loading Mezmo config from server:', error);
       }
       
-      // Load OTEL from localStorage (for now)
-      const savedOtelConfig = localStorage.getItem('otel-config');
-      
-      if (savedOtelConfig) {
-        const config = JSON.parse(savedOtelConfig);
-        setOtelServiceName(config.serviceName || 'restaurant-app');
-        setOtelTags(config.tags || 'restaurant-app,otel');
-        if (config.pipelines) {
-          setOtelPipelines(config.pipelines);
-          // Detect host environments for each pipeline
-          Object.keys(config.pipelines).forEach((pipelineKey) => {
-            const pipelineType = pipelineKey as 'logs' | 'metrics' | 'traces';
-            const pipelineConfig = config.pipelines[pipelineType];
-            if (pipelineConfig?.host) {
-              const hostDetection = detectOtelHostEnvironment(pipelineConfig.host);
-              setOtelHostEnvs(prev => ({ ...prev, [pipelineType]: hostDetection.env }));
-              if (hostDetection.env === 'custom' && hostDetection.customHost) {
-                setOtelCustomHosts(prev => ({ ...prev, [pipelineType]: hostDetection.customHost! }));
-              }
+      // Load OTEL config from server (matching Mezmo pattern)
+      try {
+        const otelResponse = await fetch('/api/config/otel');
+        if (otelResponse.ok) {
+          const result = await otelResponse.json();
+          if (result.success && result.config) {
+            const config = result.config;
+            setOtelServiceName(config.serviceName || 'restaurant-app');
+            setOtelTags(config.tags || 'restaurant-app,otel');
+            if (config.pipelines) {
+              setOtelPipelines(config.pipelines);
+              // Detect host environments for each pipeline
+              const detectedEnvs = { logs: 'production' as HostEnvironment, metrics: 'production' as HostEnvironment, traces: 'production' as HostEnvironment };
+              Object.keys(config.pipelines).forEach((pipelineKey) => {
+                const pipelineType = pipelineKey as 'logs' | 'metrics' | 'traces';
+                const pipelineConfig = config.pipelines[pipelineType];
+                if (pipelineConfig?.host) {
+                  const hostDetection = detectOtelHostEnvironment(pipelineConfig.host);
+                  detectedEnvs[pipelineType] = hostDetection.env;
+                  setOtelHostEnvs(prev => ({ ...prev, [pipelineType]: hostDetection.env }));
+                  if (hostDetection.env === 'custom' && hostDetection.customHost) {
+                    setOtelCustomHosts(prev => ({ ...prev, [pipelineType]: hostDetection.customHost! }));
+                  }
+                }
+              });
+              // Sync global environment based on detected individual environments
+              syncOtelGlobalEnvironment(detectedEnvs);
             }
-          });
+          }
         }
+      } catch (error) {
+        console.error('Error loading OTEL config from server:', error);
       }
     } else if (availableConfigs[configName]) {
       console.log(`🔄 Applying ${configName} preset configuration (read-only)...`);
@@ -613,21 +724,37 @@ const Agents = () => {
         }
       }
       
-      const currentOtelPipelines = configName === 'custom' ?
-        (JSON.parse(localStorage.getItem('otel-config') || '{}').pipelines || {}) :
-        (availableConfigs[configName]?.otel?.pipelines || {});
+      // Get current OTEL configuration for restart
+      let currentOtelPipelines = {};
+      let currentOtelServiceName = 'restaurant-app-frontend';
+      let currentOtelTags = '';
+      
+      if (configName === 'custom') {
+        // Load from server for custom config
+        try {
+          const otelResponse = await fetch('/api/config/otel');
+          if (otelResponse.ok) {
+            const result = await otelResponse.json();
+            if (result.success && result.config) {
+              currentOtelPipelines = result.config.pipelines || {};
+              currentOtelServiceName = result.config.serviceName || 'restaurant-app-frontend';
+              currentOtelTags = result.config.tags || '';
+            }
+          }
+        } catch (error) {
+          console.error('Error loading OTEL config for restart:', error);
+        }
+      } else {
+        // Use preset config
+        currentOtelPipelines = availableConfigs[configName]?.otel?.pipelines || {};
+        currentOtelServiceName = availableConfigs[configName]?.otel?.serviceName || 'restaurant-app-frontend';
+        currentOtelTags = availableConfigs[configName]?.otel?.tags || '';
+      }
 
       if (wasRunning.otel && Object.values(currentOtelPipelines).some((p: any) => p.ingestionKey)) {
         console.log('Restarting OTEL collector with new configuration');
         setOperationInProgress(prev => ({ ...prev, otel: true }));
         try {
-          // Get the service name and tags from the configuration
-          const currentOtelServiceName = configName === 'custom' ?
-            (JSON.parse(localStorage.getItem('otel-config') || '{}').serviceName || 'restaurant-app-frontend') :
-            (availableConfigs[configName]?.otel?.serviceName || 'restaurant-app-frontend');
-          const currentOtelTags = configName === 'custom' ?
-            (JSON.parse(localStorage.getItem('otel-config') || '{}').tags || '') :
-            (availableConfigs[configName]?.otel?.tags || '');
           
           // Use the new function with explicit config values
           await startOtelCollectorWithConfig(currentOtelServiceName, currentOtelTags, currentOtelPipelines);
@@ -798,6 +925,149 @@ const Agents = () => {
     }
     
     return true;
+  };
+
+  // OTEL Configuration Validation Functions
+  const validateOtelIngestionKey = (ingestionKey: string): { isValid: boolean; error?: string } => {
+    if (!ingestionKey || !ingestionKey.trim()) {
+      return { isValid: false, error: "Ingestion key is required" };
+    }
+    
+    // Mezmo ingestion keys are typically 32 characters long, alphanumeric
+    if (ingestionKey.length < 10) {
+      return { isValid: false, error: "Ingestion key appears to be too short (minimum 10 characters)" };
+    }
+    
+    if (ingestionKey.length > 100) {
+      return { isValid: false, error: "Ingestion key appears to be too long (maximum 100 characters)" };
+    }
+    
+    // Check for valid characters (alphanumeric, hyphens, underscores)
+    if (!/^[a-zA-Z0-9_-]+$/.test(ingestionKey)) {
+      return { isValid: false, error: "Ingestion key contains invalid characters (only alphanumeric, hyphens, and underscores allowed)" };
+    }
+    
+    return { isValid: true };
+  };
+
+  const validateOtelPipelineId = (pipelineId: string): { isValid: boolean; error?: string } => {
+    // Pipeline ID is optional for legacy endpoints
+    if (!pipelineId || !pipelineId.trim()) {
+      return { isValid: true }; // Optional field
+    }
+    
+    // Mezmo Pipeline IDs are UUIDs
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!uuidPattern.test(pipelineId)) {
+      return { isValid: false, error: "Pipeline ID must be a valid UUID format (e.g., 123e4567-e89b-12d3-a456-426614174000)" };
+    }
+    
+    return { isValid: true };
+  };
+
+  const validateOtelHostUrl = (hostUrl: string, environment: string): { isValid: boolean; error?: string } => {
+    if (!hostUrl || !hostUrl.trim()) {
+      return { isValid: false, error: "Host URL is required" };
+    }
+    
+    // Basic URL validation
+    try {
+      const url = new URL(hostUrl.startsWith('http') ? hostUrl : `https://${hostUrl}`);
+      
+      // Check for common Mezmo host patterns
+      if (environment !== 'custom') {
+        const expectedDomains = ['logs.mezmo.com', 'agent-api.logdna.com', 'logs.logdna.com'];
+        const isKnownDomain = expectedDomains.some(domain => url.hostname.includes(domain));
+        
+        if (!isKnownDomain && !url.hostname.includes('mezmo') && !url.hostname.includes('logdna')) {
+          return { 
+            isValid: false, 
+            error: `Host URL doesn't appear to be a Mezmo endpoint. Expected domains: ${expectedDomains.join(', ')}` 
+          };
+        }
+      }
+      
+      // Ensure HTTPS for production environments
+      if (environment === 'prod' && url.protocol !== 'https:') {
+        return { isValid: false, error: "Production environment requires HTTPS" };
+      }
+      
+    } catch (urlError) {
+      return { isValid: false, error: "Invalid URL format" };
+    }
+    
+    return { isValid: true };
+  };
+
+  const validateOtelPipelineConfig = (pipelineType: 'logs' | 'metrics' | 'traces', pipeline: any): { isValid: boolean; errors: string[] } => {
+    const errors: string[] = [];
+    
+    if (!pipeline.enabled) {
+      return { isValid: true, errors: [] }; // Skip validation for disabled pipelines
+    }
+    
+    // Validate ingestion key
+    const keyValidation = validateOtelIngestionKey(pipeline.ingestionKey);
+    if (!keyValidation.isValid && keyValidation.error) {
+      errors.push(`${pipelineType} ingestion key: ${keyValidation.error}`);
+    }
+    
+    // Validate pipeline ID
+    const pipelineIdValidation = validateOtelPipelineId(pipeline.pipelineId);
+    if (!pipelineIdValidation.isValid && pipelineIdValidation.error) {
+      errors.push(`${pipelineType} pipeline ID: ${pipelineIdValidation.error}`);
+    }
+    
+    // Validate host URL
+    const environment = otelHostEnvs[pipelineType];
+    const hostUrl = getOtelPipelineHost(pipelineType);
+    const hostValidation = validateOtelHostUrl(hostUrl, environment);
+    if (!hostValidation.isValid && hostValidation.error) {
+      errors.push(`${pipelineType} host URL: ${hostValidation.error}`);
+    }
+    
+    return { isValid: errors.length === 0, errors };
+  };
+
+  const validateOtelConfig = (): { isValid: boolean; errors: string[] } => {
+    const allErrors: string[] = [];
+    
+    if (!otelEnabled) {
+      return { isValid: true, errors: [] }; // Skip validation if OTEL is disabled
+    }
+    
+    // Check if at least one pipeline is enabled
+    const enabledPipelines = Object.entries(otelPipelines).filter(([_, pipeline]) => pipeline.enabled);
+    if (enabledPipelines.length === 0) {
+      allErrors.push("At least one pipeline (logs, metrics, or traces) must be enabled");
+    }
+    
+    // Validate each enabled pipeline
+    (['logs', 'metrics', 'traces'] as const).forEach(pipelineType => {
+      const validation = validateOtelPipelineConfig(pipelineType, otelPipelines[pipelineType]);
+      allErrors.push(...validation.errors);
+    });
+    
+    // Validate service name
+    if (!otelServiceName.trim()) {
+      allErrors.push("Service name is required");
+    } else if (otelServiceName.length > 100) {
+      allErrors.push("Service name is too long (maximum 100 characters)");
+    } else if (!/^[a-zA-Z0-9_-]+$/.test(otelServiceName)) {
+      allErrors.push("Service name contains invalid characters (only alphanumeric, hyphens, and underscores allowed)");
+    }
+    
+    return { isValid: allErrors.length === 0, errors: allErrors };
+  };
+
+  const showOtelValidationErrors = (errors: string[]) => {
+    errors.forEach(error => {
+      toast({
+        title: "Configuration Error",
+        description: error,
+        variant: "destructive"
+      });
+    });
   };
 
   // Start Mezmo agent with specific configuration (used for config changes)
@@ -976,6 +1246,13 @@ const Agents = () => {
 
   // OTEL handlers
   const saveOtelConfig = async () => {
+    // Validate configuration before saving
+    const validation = validateOtelConfig();
+    if (!validation.isValid) {
+      showOtelValidationErrors(validation.errors);
+      return false; // Return false to indicate validation failed
+    }
+
     const config = {
       enabled: otelEnabled,
       serviceName: otelServiceName,
@@ -987,32 +1264,27 @@ const Agents = () => {
       setLastError(null);
       setErrorDetails(null);
       
-      localStorage.setItem('otel-config', JSON.stringify(config));
+      // Save to server ConfigManager first (like Mezmo agent pattern)
+      const configResponse = await fetch('/api/config/otel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
       
-      // Save to server if we have at least one pipeline with ingestion key
+      if (!configResponse.ok) {
+        const result = await configResponse.json().catch(() => ({}));
+        const errorMsg = result.error || `Failed to save configuration to server (HTTP ${configResponse.status})`;
+        throw new Error(errorMsg);
+      }
+      
+      // Configure collector with saved configuration if we have at least one pipeline with ingestion key
       const hasAnyIngestionKey = Object.values(otelPipelines).some(p => p.ingestionKey);
       
       if (hasAnyIngestionKey) {
         const response = await fetch('/api/otel/configure', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            serviceName: otelServiceName,
-            tags: otelTags,
-            // Convert pipelines object to individual parameters expected by server
-            logsEnabled: otelPipelines.logs.enabled,
-            logsIngestionKey: otelPipelines.logs.ingestionKey,
-            logsPipelineId: otelPipelines.logs.pipelineId,
-            logsHost: otelPipelines.logs.host,
-            metricsEnabled: otelPipelines.metrics.enabled,
-            metricsIngestionKey: otelPipelines.metrics.ingestionKey,
-            metricsPipelineId: otelPipelines.metrics.pipelineId,
-            metricsHost: otelPipelines.metrics.host,
-            tracesEnabled: otelPipelines.traces.enabled,
-            tracesIngestionKey: otelPipelines.traces.ingestionKey,
-            tracesPipelineId: otelPipelines.traces.pipelineId,
-            tracesHost: otelPipelines.traces.host
-          })
+          body: JSON.stringify({}) // ConfigManager handles the configuration
         });
         
         if (!response.ok) {
@@ -1060,6 +1332,8 @@ const Agents = () => {
           console.warn('Failed to reinitialize tracing:', tracingError);
         }
       }
+      
+      return true; // Configuration saved successfully
     } catch (error: any) {
       if (!lastError) {
         const errorMsg = error.message || 'Unknown error';
@@ -1076,6 +1350,8 @@ const Agents = () => {
         description: error.message,
         variant: "destructive"
       });
+      
+      return false; // Configuration save failed
     }
   };
 
@@ -1088,13 +1364,30 @@ const Agents = () => {
     setOperationInProgress(prev => ({ ...prev, otel: true }));
     
     try {
+      if (enabled) {
+        // Validate configuration before enabling
+        const validation = validateOtelConfig();
+        if (!validation.isValid) {
+          showOtelValidationErrors(validation.errors);
+          return; // Don't enable if validation fails
+        }
+      }
+      
       setOtelEnabled(enabled);
-      localStorage.setItem('otel-config', JSON.stringify({
+      
+      // Save to server (matching Mezmo pattern)
+      const config = {
         enabled,
         serviceName: otelServiceName,
         tags: otelTags,
         pipelines: otelPipelines
-      }));
+      };
+      
+      await fetch('/api/config/otel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
       
       if (enabled) {
         const hasAnyIngestionKey = Object.values(otelPipelines).some(p => p.ingestionKey);
@@ -1114,27 +1407,11 @@ const Agents = () => {
     setOtelStatus('connecting');
     
     try {
-      // Configure the collector with provided values
+      // Configure the collector using ConfigManager configuration
       const configResponse = await fetch('/api/otel/configure', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          serviceName,
-          tags,
-          // Convert pipelines object to individual parameters expected by server
-          logsEnabled: pipelines.logs.enabled,
-          logsIngestionKey: pipelines.logs.ingestionKey,
-          logsPipelineId: pipelines.logs.pipelineId,
-          logsHost: pipelines.logs.host,
-          metricsEnabled: pipelines.metrics.enabled,
-          metricsIngestionKey: pipelines.metrics.ingestionKey,
-          metricsPipelineId: pipelines.metrics.pipelineId,
-          metricsHost: pipelines.metrics.host,
-          tracesEnabled: pipelines.traces.enabled,
-          tracesIngestionKey: pipelines.traces.ingestionKey,
-          tracesPipelineId: pipelines.traces.pipelineId,
-          tracesHost: pipelines.traces.host
-        })
+        body: JSON.stringify({}) // ConfigManager handles the configuration
       });
       
       if (!configResponse.ok) {
@@ -1173,27 +1450,11 @@ const Agents = () => {
     setOtelStatus('connecting');
     
     try {
-      // Configure the collector
+      // Configure the collector using ConfigManager configuration
       const configResponse = await fetch('/api/otel/configure', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          serviceName: otelServiceName,
-          tags: otelTags,
-          // Convert pipelines object to individual parameters expected by server
-          logsEnabled: otelPipelines.logs.enabled,
-          logsIngestionKey: otelPipelines.logs.ingestionKey,
-          logsPipelineId: otelPipelines.logs.pipelineId,
-          logsHost: otelPipelines.logs.host,
-          metricsEnabled: otelPipelines.metrics.enabled,
-          metricsIngestionKey: otelPipelines.metrics.ingestionKey,
-          metricsPipelineId: otelPipelines.metrics.pipelineId,
-          metricsHost: otelPipelines.metrics.host,
-          tracesEnabled: otelPipelines.traces.enabled,
-          tracesIngestionKey: otelPipelines.traces.ingestionKey,
-          tracesPipelineId: otelPipelines.traces.pipelineId,
-          tracesHost: otelPipelines.traces.host
-        })
+        body: JSON.stringify({}) // ConfigManager handles the configuration
       });
       
       if (!configResponse.ok) {
@@ -1260,43 +1521,8 @@ const Agents = () => {
   };
 
   const handleTestOtelConnection = async () => {
-    setOtelStatus('connecting');
-    
-    try {
-      const configResponse = await fetch('/api/otel/configure', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          serviceName: otelServiceName,
-          tags: otelTags,
-          pipelines: otelPipelines
-        })
-      });
-      
-      if (!configResponse.ok) {
-        throw new Error('Failed to configure OTEL Collector');
-      }
-      
-      const statusResponse = await fetch('/api/otel/status');
-      const status = await statusResponse.json();
-      
-      if (statusResponse.ok && status.hasConfig) {
-        setOtelStatus('connected');
-        toast({
-          title: "Configuration Test Successful",
-          description: "OTEL configuration is valid."
-        });
-      } else {
-        throw new Error('Configuration test failed');
-      }
-    } catch (error: any) {
-      setOtelStatus('error');
-      toast({
-        title: "Configuration Test Failed",
-        description: error.message,
-        variant: "destructive"
-      });
-    }
+    // Use our new comprehensive pipeline connectivity testing
+    await testAllOtelPipelines();
   };
 
   // Update OTEL pipeline configuration
@@ -1308,6 +1534,225 @@ const Agents = () => {
         [field]: value
       }
     }));
+    
+    // Real-time validation for specific fields
+    const validationKey = `${pipelineType}.${field}`;
+    let validationError = '';
+    
+    if (field === 'ingestionKey' && value.trim()) {
+      const keyValidation = validateOtelIngestionKey(value);
+      if (!keyValidation.isValid && keyValidation.error) {
+        validationError = keyValidation.error;
+      }
+    } else if (field === 'pipelineId' && value.trim()) {
+      const pipelineIdValidation = validateOtelPipelineId(value);
+      if (!pipelineIdValidation.isValid && pipelineIdValidation.error) {
+        validationError = pipelineIdValidation.error;
+      }
+    }
+    
+    setOtelValidationErrors(prev => {
+      const newErrors = { ...prev };
+      if (validationError) {
+        newErrors[validationKey] = validationError;
+      } else {
+        delete newErrors[validationKey];
+      }
+      return newErrors;
+    });
+  };
+
+  // OTEL Connectivity Testing Functions
+  const testOtelPipelineConnectivity = async (pipelineType: 'logs' | 'metrics' | 'traces') => {
+    const pipeline = otelPipelines[pipelineType];
+    
+    if (!pipeline.enabled) {
+      toast({
+        title: "Pipeline Disabled",
+        description: `${pipelineType} pipeline is disabled. Enable it first to test connectivity.`,
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    if (!pipeline.ingestionKey) {
+      toast({
+        title: "Missing Ingestion Key",
+        description: `Please enter an ingestion key for ${pipelineType} pipeline.`,
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    const host = getOtelPipelineHost(pipelineType);
+    if (!host) {
+      toast({
+        title: "Missing Host",
+        description: `Please configure a host URL for ${pipelineType} pipeline.`,
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    // Show testing state
+    toast({
+      title: "Testing Connection",
+      description: `Testing ${pipelineType} pipeline connectivity...`,
+    });
+    
+    try {
+      const response = await fetch('/api/otel/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pipelineType,
+          ingestionKey: pipeline.ingestionKey,
+          host: host,
+          pipelineId: pipeline.pipelineId
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (result.success && result.testResult.success) {
+        toast({
+          title: "Connection Successful",
+          description: `${pipelineType} pipeline connectivity test passed (${result.testResult.responseTime}ms)`,
+        });
+        
+        // Log details for debugging
+        console.log(`✅ ${pipelineType} connectivity test passed:`, result);
+        
+      } else {
+        const errorMsg = result.testResult?.error || result.error || `Test failed with status ${result.testResult?.status}`;
+        
+        toast({
+          title: "Connection Failed",
+          description: `${pipelineType} pipeline test failed: ${errorMsg}`,
+          variant: "destructive"
+        });
+        
+        // Log details for debugging
+        console.error(`❌ ${pipelineType} connectivity test failed:`, result);
+      }
+      
+    } catch (error: any) {
+      toast({
+        title: "Test Error",
+        description: `Failed to test ${pipelineType} connectivity: ${error.message}`,
+        variant: "destructive"
+      });
+      
+      console.error(`❌ ${pipelineType} connectivity test error:`, error);
+    }
+  };
+
+  // Test all enabled pipelines
+  const testAllOtelPipelines = async () => {
+    const enabledPipelines = (['logs', 'metrics', 'traces'] as const).filter(
+      pipelineType => otelPipelines[pipelineType].enabled && otelPipelines[pipelineType].ingestionKey
+    );
+    
+    if (enabledPipelines.length === 0) {
+      toast({
+        title: "No Pipelines to Test",
+        description: "Enable at least one pipeline with an ingestion key to test connectivity.",
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    toast({
+      title: "Testing All Pipelines",
+      description: `Testing ${enabledPipelines.length} enabled pipeline(s)...`,
+    });
+    
+    let successCount = 0;
+    let failureCount = 0;
+    
+    for (const pipelineType of enabledPipelines) {
+      try {
+        await testOtelPipelineConnectivity(pipelineType);
+        successCount++;
+      } catch (error) {
+        failureCount++;
+      }
+      
+      // Add a small delay between tests to avoid overwhelming the backend
+      if (enabledPipelines.indexOf(pipelineType) < enabledPipelines.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    
+    // Show summary
+    if (failureCount === 0) {
+      toast({
+        title: "All Tests Passed",
+        description: `All ${successCount} pipeline connectivity tests succeeded.`,
+      });
+    } else {
+      toast({
+        title: "Mixed Results",
+        description: `${successCount} passed, ${failureCount} failed. Check individual pipeline results above.`,
+        variant: "destructive"
+      });
+    }
+  };
+
+  // Update OTEL service name with validation
+  const updateOtelServiceName = (value: string) => {
+    setOtelServiceName(value);
+    
+    // Real-time validation
+    const validationKey = 'serviceName';
+    let validationError = '';
+    
+    if (value.trim()) {
+      if (value.length > 100) {
+        validationError = 'Service name is too long (maximum 100 characters)';
+      } else if (!/^[a-zA-Z0-9_-]+$/.test(value)) {
+        validationError = 'Service name contains invalid characters (only alphanumeric, hyphens, and underscores allowed)';
+      }
+    } else if (otelEnabled) {
+      validationError = 'Service name is required when OTEL is enabled';
+    }
+    
+    setOtelValidationErrors(prev => {
+      const newErrors = { ...prev };
+      if (validationError) {
+        newErrors[validationKey] = validationError;
+      } else {
+        delete newErrors[validationKey];
+      }
+      return newErrors;
+    });
+  };
+
+  // Update custom host with validation
+  const updateOtelCustomHost = (pipelineType: 'logs' | 'metrics' | 'traces', value: string) => {
+    setOtelCustomHosts(prev => ({ ...prev, [pipelineType]: value }));
+    
+    // Real-time validation for custom hosts
+    const validationKey = `${pipelineType}.customHost`;
+    let validationError = '';
+    
+    if (value.trim()) {
+      const environment = otelHostEnvs[pipelineType];
+      const hostValidation = validateOtelHostUrl(value, environment);
+      if (!hostValidation.isValid && hostValidation.error) {
+        validationError = hostValidation.error;
+      }
+    }
+    
+    setOtelValidationErrors(prev => {
+      const newErrors = { ...prev };
+      if (validationError) {
+        newErrors[validationKey] = validationError;
+      } else {
+        delete newErrors[validationKey];
+      }
+      return newErrors;
+    });
   };
 
   // Poll agent status periodically with enhanced health monitoring
@@ -1381,15 +1826,62 @@ const Agents = () => {
         }
       }
       
-      // Poll OTEL status
+      // Poll OTEL status with enhanced monitoring (Task 11)
       if (otelEnabled) {
         try {
           const response = await fetch('/api/otel/status');
           const status = await response.json();
           
           if (response.ok) {
+            // Basic status information
             setOtelStatus(status.status);
             setOtelPid(status.pid);
+            
+            // Enhanced status monitoring data
+            if (status.healthChecks) {
+              setOtelHealthChecks(status.healthChecks);
+            }
+            
+            if (status.metricsData) {
+              setOtelDetailedMetrics({
+                ...status.metricsData,
+                lastChecked: status.lastChecked || new Date().toISOString()
+              });
+              
+              // Update legacy stats for backward compatibility
+              setOtelStats({
+                metricsCollected: status.metricsData.metricsCollected || 0,
+                logsProcessed: status.metricsData.logsSent || 0,
+                tracesReceived: status.metricsData.tracesReceived || 0,
+                errors: status.metricsData.errors || 0,
+                lastError: status.errors && status.errors.length > 0 ? status.errors[0] : null
+              });
+            }
+            
+            // Pipeline-specific status
+            if (status.enabledPipelines) {
+              setOtelPipelineStatus({
+                logs: { 
+                  enabled: status.enabledPipelines.logs || false,
+                  healthy: status.healthChecks?.pipelines?.logs || false
+                },
+                metrics: { 
+                  enabled: status.enabledPipelines.metrics || false,
+                  healthy: status.healthChecks?.pipelines?.metrics || false
+                },
+                traces: { 
+                  enabled: status.enabledPipelines.traces || false,
+                  healthy: status.healthChecks?.pipelines?.traces || false
+                }
+              });
+            }
+            
+            // Error information
+            if (status.errors && Array.isArray(status.errors)) {
+              setOtelErrors(status.errors);
+            } else {
+              setOtelErrors([]);
+            }
             
             const isRunning = status.status === 'connected' && status.pid !== null;
             // Only auto-disable if collector status isn't 'connecting' (prevents disabling during startup)
@@ -1398,21 +1890,16 @@ const Agents = () => {
               setOtelEnabled(false);
             }
             
-            // Fetch metrics if available
+            // Update last sync time
             if (isRunning) {
-              try {
-                const metricsResponse = await fetch('/api/otel/metrics');
-                if (metricsResponse.ok) {
-                  const metrics = await metricsResponse.json();
-                  setOtelStats(metrics);
-                }
-              } catch (error) {
-                console.warn('Could not fetch OTEL metrics:', error);
-              }
+              setOtelLastSync(new Date().toISOString());
             }
           }
         } catch (error) {
           console.warn('Could not check OTEL status:', error);
+          // Reset enhanced status on error
+          setOtelHealthChecks({ collector: false, pipelines: { logs: false, metrics: false, traces: false } });
+          setOtelErrors(['Failed to connect to status endpoint']);
         }
       }
     };
@@ -1820,12 +2307,15 @@ const Agents = () => {
                     id="otel-service"
                     type="text"
                     value={otelServiceName}
-                    onChange={(e) => setOtelServiceName(e.target.value)}
+                    onChange={(e) => updateOtelServiceName(e.target.value)}
                     placeholder={isPresetConfiguration ? "Configured from file" : "restaurant-app"}
-                    className={isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''}
+                    className={`${isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''} ${otelValidationErrors.serviceName ? 'border-red-500 focus:border-red-500' : ''}`}
                     readOnly={isPresetConfiguration}
                     disabled={isPresetConfiguration}
                   />
+                  {otelValidationErrors.serviceName && (
+                    <p className="text-sm text-red-600 mt-1">{otelValidationErrors.serviceName}</p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -1843,6 +2333,45 @@ const Agents = () => {
                     readOnly={isPresetConfiguration}
                     disabled={isPresetConfiguration}
                   />
+                </div>
+              </div>
+
+              {/* Global Environment Configuration */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Environment Configuration</h3>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="otel-global-env">
+                    Global Environment (Updates All Pipelines)
+                    {isPresetConfiguration && <span className="ml-1 text-xs text-muted-foreground">(Read-only)</span>}
+                  </Label>
+                  <Select
+                    value={otelGlobalEnv}
+                    onValueChange={(value: HostEnvironment) => setOtelGlobalEnvironment(value)}
+                    disabled={isPresetConfiguration}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select environment" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(OTEL_HOST_ENVIRONMENTS).filter(([key]) => key !== 'custom').map(([key, env]) => (
+                        <SelectItem key={key} value={key}>
+                          {env.label} ({env.host})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    This will update all non-custom pipelines to use the selected environment. 
+                    Individual pipelines can still be set to custom hosts if needed.
+                    {(() => {
+                      const syncedCount = (['logs', 'metrics', 'traces'] as const).filter(
+                        pt => otelHostEnvs[pt] === otelGlobalEnv && otelHostEnvs[pt] !== 'custom'
+                      ).length;
+                      const totalCount = (['logs', 'metrics', 'traces'] as const).length;
+                      return syncedCount > 0 ? ` (${syncedCount}/${totalCount} pipelines synced)` : '';
+                    })()}
+                  </p>
                 </div>
               </div>
 
@@ -1877,7 +2406,7 @@ const Agents = () => {
                               value={otelPipelines[pipelineType].ingestionKey}
                               onChange={(e) => updateOtelPipeline(pipelineType, 'ingestionKey', e.target.value)}
                               placeholder={isPresetConfiguration ? "Configured from file" : `Enter ${pipelineType} ingestion key`}
-                              className={`pr-10 ${isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''}`}
+                              className={`pr-10 ${isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''} ${otelValidationErrors[`${pipelineType}.ingestionKey`] ? 'border-red-500 focus:border-red-500' : ''}`}
                               readOnly={isPresetConfiguration}
                               disabled={isPresetConfiguration}
                             />
@@ -1897,6 +2426,9 @@ const Agents = () => {
                               }
                             </Button>
                           </div>
+                          {otelValidationErrors[`${pipelineType}.ingestionKey`] && (
+                            <p className="text-sm text-red-600 mt-1">{otelValidationErrors[`${pipelineType}.ingestionKey`]}</p>
+                          )}
                         </div>
 
                         <div className="space-y-2">
@@ -1909,16 +2441,24 @@ const Agents = () => {
                             value={otelPipelines[pipelineType].pipelineId}
                             onChange={(e) => updateOtelPipeline(pipelineType, 'pipelineId', e.target.value)}
                             placeholder={isPresetConfiguration ? "Configured from file" : "For Mezmo Pipelines, enter the Pipeline ID"}
-                            className={isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''}
+                            className={`${isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''} ${otelValidationErrors[`${pipelineType}.pipelineId`] ? 'border-red-500 focus:border-red-500' : ''}`}
                             readOnly={isPresetConfiguration}
                             disabled={isPresetConfiguration}
                           />
+                          {otelValidationErrors[`${pipelineType}.pipelineId`] && (
+                            <p className="text-sm text-red-600 mt-1">{otelValidationErrors[`${pipelineType}.pipelineId`]}</p>
+                          )}
                         </div>
 
                         <div className="space-y-2">
                           <Label>
                             Host Environment
                             {isPresetConfiguration && <span className="ml-1 text-xs text-muted-foreground">(Read-only)</span>}
+                            {otelHostEnvs[pipelineType] === otelGlobalEnv && otelHostEnvs[pipelineType] !== 'custom' && (
+                              <Badge variant="secondary" className="ml-2 text-xs">
+                                Synced with Global
+                              </Badge>
+                            )}
                           </Label>
                           <Select
                             value={otelHostEnvs[pipelineType]}
@@ -1932,10 +2472,18 @@ const Agents = () => {
                               {Object.entries(OTEL_HOST_ENVIRONMENTS).map(([key, env]) => (
                                 <SelectItem key={key} value={key}>
                                   {env.label} {env.host && `(${env.host})`}
+                                  {key === otelGlobalEnv && key !== 'custom' && (
+                                    <span className="text-xs text-muted-foreground ml-1">(Global)</span>
+                                  )}
                                 </SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
+                          {otelHostEnvs[pipelineType] === 'custom' && (
+                            <p className="text-xs text-blue-600">
+                              This pipeline uses a custom host and won't be affected by global environment changes.
+                            </p>
+                          )}
                           
                           {/* Custom host input */}
                           {otelHostEnvs[pipelineType] === 'custom' && (
@@ -1948,14 +2496,17 @@ const Agents = () => {
                                 type="text"
                                 value={otelCustomHosts[pipelineType]}
                                 onChange={(e) => {
-                                  setOtelCustomHosts(prev => ({ ...prev, [pipelineType]: e.target.value }));
+                                  updateOtelCustomHost(pipelineType, e.target.value);
                                   updateOtelPipeline(pipelineType, 'host', e.target.value);
                                 }}
                                 placeholder={isPresetConfiguration ? "Configured from file" : "Enter custom host URL"}
-                                className={isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''}
+                                className={`${isPresetConfiguration ? 'bg-gray-50 cursor-not-allowed' : ''} ${otelValidationErrors[`${pipelineType}.customHost`] ? 'border-red-500 focus:border-red-500' : ''}`}
                                 readOnly={isPresetConfiguration}
                                 disabled={isPresetConfiguration}
                               />
+                              {otelValidationErrors[`${pipelineType}.customHost`] && (
+                                <p className="text-sm text-red-600 mt-1">{otelValidationErrors[`${pipelineType}.customHost`]}</p>
+                              )}
                             </div>
                           )}
                           
@@ -1963,6 +2514,27 @@ const Agents = () => {
                           <div className="text-xs text-muted-foreground">
                             Current host: <code>{getOtelPipelineHost(pipelineType)}</code>
                           </div>
+                        </div>
+
+                        {/* Connectivity Test Button */}
+                        <div className="mt-4 pt-3 border-t">
+                          <Button
+                            onClick={() => testOtelPipelineConnectivity(pipelineType)}
+                            disabled={!otelPipelines[pipelineType].enabled || !otelPipelines[pipelineType].ingestionKey || isPresetConfiguration}
+                            variant="outline"
+                            size="sm"
+                            className="w-full"
+                          >
+                            <TestTube className="mr-2 h-4 w-4" />
+                            Test {pipelineType.charAt(0).toUpperCase() + pipelineType.slice(1)} Connection
+                          </Button>
+                          {(!otelPipelines[pipelineType].enabled || !otelPipelines[pipelineType].ingestionKey) && (
+                            <p className="text-xs text-muted-foreground mt-1 text-center">
+                              {!otelPipelines[pipelineType].enabled 
+                                ? "Enable pipeline to test connection" 
+                                : "Add ingestion key to test connection"}
+                            </p>
+                          )}
                         </div>
                       </CardContent>
                     )}
@@ -2108,25 +2680,115 @@ Full details logged to console and copied to clipboard.
                 </div>
               </div>
 
-              {/* Status Information */}
+              {/* Enhanced Status Information (Task 11) */}
               {otelStatus === 'connected' && (
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4 space-y-2">
-                  <div className="flex items-center space-x-2">
-                    <CheckCircle className="h-5 w-5 text-green-600" />
-                    <span className="font-medium text-green-900">Collector Active</span>
+                <div className="space-y-4">
+                  {/* Collector Status */}
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <CheckCircle className="h-5 w-5 text-green-600" />
+                        <span className="font-medium text-green-900">Collector Active</span>
+                      </div>
+                      <div className="flex items-center space-x-2 text-sm text-green-700">
+                        {otelHealthChecks.collector && (
+                          <span className="flex items-center space-x-1">
+                            <CheckCircle className="h-4 w-4" />
+                            <span>Healthy</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-sm text-green-800 grid grid-cols-2 gap-2">
+                      <p>Process ID: {otelPid}</p>
+                      {otelDetailedMetrics.uptime > 0 && (
+                        <p>Uptime: {Math.floor(otelDetailedMetrics.uptime / 60)}m {Math.floor(otelDetailedMetrics.uptime % 60)}s</p>
+                      )}
+                      {otelLastSync && (
+                        <p>Last sync: {new Date(otelLastSync).toLocaleTimeString()}</p>
+                      )}
+                      {otelDetailedMetrics.lastChecked && (
+                        <p>Status updated: {new Date(otelDetailedMetrics.lastChecked).toLocaleTimeString()}</p>
+                      )}
+                    </div>
                   </div>
-                  <div className="text-sm text-green-800 space-y-1">
-                    <p>Process ID: {otelPid}</p>
-                    {otelLastSync && (
-                      <p>Last sync: {new Date(otelLastSync).toLocaleTimeString()}</p>
-                    )}
-                    <p>Logs processed: {otelStats.logsProcessed}</p>
-                    <p>Metrics collected: {otelStats.metricsCollected}</p>
-                    <p>Traces received: {otelStats.tracesReceived}</p>
-                    {otelStats.errors > 0 && (
-                      <p>Errors: {otelStats.errors}</p>
-                    )}
+
+                  {/* Pipeline-specific Status Indicators */}
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
+                    <div className="flex items-center space-x-2">
+                      <Activity className="h-5 w-5 text-blue-600" />
+                      <span className="font-medium text-blue-900">Pipeline Status</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4 text-sm">
+                      {/* Logs Pipeline */}
+                      <div className="space-y-1">
+                        <div className="flex items-center space-x-2">
+                          <div className={`w-2 h-2 rounded-full ${otelPipelineStatus.logs.enabled ? (otelPipelineStatus.logs.healthy ? 'bg-green-500' : 'bg-yellow-500') : 'bg-gray-400'}`}></div>
+                          <span className="font-medium text-blue-900">Logs</span>
+                        </div>
+                        <p className="text-blue-800">
+                          Status: {otelPipelineStatus.logs.enabled ? (otelPipelineStatus.logs.healthy ? '✅ Healthy' : '⚠️ Issues') : '❌ Disabled'}
+                        </p>
+                        <p className="text-blue-800">Sent: {otelDetailedMetrics.logsSent || 0}</p>
+                      </div>
+
+                      {/* Metrics Pipeline */}
+                      <div className="space-y-1">
+                        <div className="flex items-center space-x-2">
+                          <div className={`w-2 h-2 rounded-full ${otelPipelineStatus.metrics.enabled ? (otelPipelineStatus.metrics.healthy ? 'bg-green-500' : 'bg-yellow-500') : 'bg-gray-400'}`}></div>
+                          <span className="font-medium text-blue-900">Metrics</span>
+                        </div>
+                        <p className="text-blue-800">
+                          Status: {otelPipelineStatus.metrics.enabled ? (otelPipelineStatus.metrics.healthy ? '✅ Healthy' : '⚠️ Issues') : '❌ Disabled'}
+                        </p>
+                        <p className="text-blue-800">Collected: {otelDetailedMetrics.metricsCollected || 0}</p>
+                      </div>
+
+                      {/* Traces Pipeline */}
+                      <div className="space-y-1">
+                        <div className="flex items-center space-x-2">
+                          <div className={`w-2 h-2 rounded-full ${otelPipelineStatus.traces.enabled ? (otelPipelineStatus.traces.healthy ? 'bg-green-500' : 'bg-yellow-500') : 'bg-gray-400'}`}></div>
+                          <span className="font-medium text-blue-900">Traces</span>
+                        </div>
+                        <p className="text-blue-800">
+                          Status: {otelPipelineStatus.traces.enabled ? (otelPipelineStatus.traces.healthy ? '✅ Healthy' : '⚠️ Issues') : '❌ Disabled'}
+                        </p>
+                        <p className="text-blue-800">Received: {otelDetailedMetrics.tracesReceived || 0}</p>
+                      </div>
+                    </div>
                   </div>
+
+                  {/* Error State Display */}
+                  {otelErrors.length > 0 && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-4 space-y-2">
+                      <div className="flex items-center space-x-2">
+                        <XCircle className="h-5 w-5 text-red-600" />
+                        <span className="font-medium text-red-900">Issues Detected</span>
+                        <Badge variant="destructive">{otelErrors.length}</Badge>
+                      </div>
+                      <div className="text-sm text-red-800 space-y-1 max-h-32 overflow-y-auto">
+                        {otelErrors.slice(0, 5).map((error, index) => (
+                          <p key={index} className="break-words">• {error}</p>
+                        ))}
+                        {otelErrors.length > 5 && (
+                          <p className="italic">... and {otelErrors.length - 5} more issues</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Performance Metrics Summary */}
+                  {otelDetailedMetrics.errors > 0 && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                      <div className="flex items-center space-x-2">
+                        <AlertTriangle className="h-5 w-5 text-yellow-600" />
+                        <span className="font-medium text-yellow-900">Performance Alert</span>
+                      </div>
+                      <p className="text-sm text-yellow-800 mt-1">
+                        {otelDetailedMetrics.errors} failed operations detected. Check collector logs for details.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 

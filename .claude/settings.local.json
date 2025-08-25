@@ -11,7 +11,10 @@
       "mcp__spec-workflow__request-approval",
       "mcp__spec-workflow__get-approval-status",
       "mcp__spec-workflow__delete-approval",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "mcp__spec-workflow__manage-tasks",
+      "mcp__spec-workflow__spec-status",
+      "Bash(curl:*)"
     ],
     "deny": []
   }

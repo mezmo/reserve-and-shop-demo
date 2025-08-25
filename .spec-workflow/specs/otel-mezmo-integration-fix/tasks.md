@@ -6,7 +6,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
 
 ## Tasks
 
-- [ ] 1. Update agents-config.json template with OTEL preset configurations
+- [x] 1. Update agents-config.json template with OTEL preset configurations
   - File: agents-config.json.template (modify existing)
   - Add comprehensive OTEL configuration examples for all environments
   - Include placeholder values and documentation comments
@@ -19,7 +19,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing agents-config.json structure_
   - _Requirements: 1.1, 1.2, 1.3_
 
-- [ ] 2. Enhance ConfigManager to load OTEL defaults from config file
+- [x] 2. Enhance ConfigManager to load OTEL defaults from config file
   - File: server/services/configManager.js (modify existing)
   - Add method to initialize OTEL config from file presets
   - Implement configuration merging logic (file > storage > defaults)
@@ -33,7 +33,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing ConfigManager class structure_
   - _Requirements: 1.1, 1.5, 2.1, 2.5_
 
-- [ ] 3. Fix OTEL configuration loading endpoint
+- [x] 3. Fix OTEL configuration loading endpoint
   - File: server/index.js (modify existing /api/config/otel endpoint)
   - Update endpoint to return merged configuration from ConfigManager
   - Ensure configuration includes values from agents-config.json file
@@ -47,7 +47,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing /api/config/otel endpoint structure_
   - _Requirements: 2.1, 2.4, 8.3_
 
-- [ ] 4. Fix OTEL collector configuration generation
+- [x] 4. Fix OTEL collector configuration generation
   - File: server/index.js (modify generateOTELConfig function)
   - Update YAML generation to use current ConfigManager OTEL settings
   - Ensure multi-pipeline support for logs, metrics, and traces
@@ -61,7 +61,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing generateOTELConfig function_
   - _Requirements: 3.1, 3.2, 3.3, 4.1, 4.2_
 
-- [ ] 5. Improve OTEL collector process management
+- [x] 5. Improve OTEL collector process management
   - File: server/index.js (modify /api/otel/start and /api/otel/stop endpoints)
   - Fix PID file handling and process tracking
   - Add automatic restart when configuration changes
@@ -76,7 +76,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing OTEL process management endpoints_
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
 
-- [ ] 6. Enhance OTEL status monitoring
+- [x] 6. Enhance OTEL status monitoring
   - File: server/index.js (modify /api/otel/status endpoint)
   - Add real-time metrics collection from collector
   - Implement health checks for pipeline connectivity
@@ -90,7 +90,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing /api/otel/status endpoint_
   - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
 
-- [ ] 7. Fix backend trace proxy endpoint
+- [x] 7. Fix backend trace proxy endpoint
   - File: server/index.js (modify /api/traces/v1/traces endpoint)
   - Fix connection to OTEL collector on port 4318
   - Add proper error handling for collector unavailability
@@ -104,7 +104,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing trace proxy endpoint structure_
   - _Requirements: 6.1, 6.5_
 
-- [ ] 8. Update frontend OTEL configuration loading
+- [x] 8. Update frontend OTEL configuration loading
   - File: src/pages/Agents.tsx (modify existing OTEL section)
   - Update useEffect hooks to load configuration from backend
   - Implement preset configuration handling matching Mezmo pattern
@@ -118,7 +118,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing Mezmo agent configuration loading pattern_
   - _Requirements: 1.1, 1.6, 2.1, 9.1_
 
-- [ ] 9. Implement OTEL configuration save functionality
+- [x] 9. Implement OTEL configuration save functionality
   - File: src/pages/Agents.tsx (modify saveOtelConfig function)
   - Update function to save configuration to backend ConfigManager
   - Add validation before saving configuration
@@ -133,7 +133,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing saveMezmoConfig function pattern_
   - _Requirements: 2.1, 2.3, 8.1, 8.4_
 
-- [ ] 10. Add OTEL preset configuration support
+- [x] 10. Add OTEL preset configuration support
   - File: src/pages/Agents.tsx (modify OTEL configuration UI)
   - Add preset selector dropdown matching Mezmo agent pattern
   - Implement read-only mode for preset configurations
@@ -147,7 +147,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing Mezmo preset configuration UI pattern_
   - _Requirements: 1.5, 1.6, 9.2, 9.4_
 
-- [ ] 11. Update OTEL status display
+- [x] 11. Update OTEL status display
   - File: src/pages/Agents.tsx (modify OTEL status section)
   - Add real-time status updates from backend
   - Display pipeline-specific status indicators
@@ -161,7 +161,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing Mezmo status display patterns_
   - _Requirements: 7.1, 7.2, 7.3, 7.4_
 
-- [ ] 12. Fix frontend tracing initialization
+- [x] 12. Fix frontend tracing initialization
   - File: src/lib/tracing/config.ts (modify initializeTracing function)
   - Update health check to verify collector availability before initialization
   - Fix backend configuration loading endpoint call
@@ -175,7 +175,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing tracing initialization logic_
   - _Requirements: 6.1, 6.2, 6.5_
 
-- [ ] 13. Add OTEL configuration validation
+- [x] 13. Add OTEL configuration validation
   - File: src/pages/Agents.tsx (add validation functions)
   - Implement ingestion key format validation
   - Add pipeline ID validation for Mezmo format
@@ -189,7 +189,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing Mezmo validation patterns_
   - _Requirements: 8.1, 8.2, 8.3, 8.5_
 
-- [ ] 14. Implement OTEL connectivity testing
+- [x] 14. Implement OTEL connectivity testing
   - File: src/pages/Agents.tsx (add test connection functionality)
   - Add test buttons for each pipeline (logs, metrics, traces)
   - Implement backend connectivity verification
@@ -203,7 +203,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing Mezmo connectivity testing patterns_
   - _Requirements: 8.2, 8.4_
 
-- [ ] 15. Fix environment switching for OTEL
+- [x] 15. Fix environment switching for OTEL
   - File: src/pages/Agents.tsx (modify environment selection)
   - Update host URL configuration for different environments
   - Add automatic host selection when switching environments
@@ -217,7 +217,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing Mezmo environment switching logic_
   - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5_
 
-- [ ] 16. Add OTEL error handling and recovery
+- [x] 16. Add OTEL error handling and recovery
   - File: server/index.js (enhance error handling in OTEL endpoints)
   - Implement automatic retry logic for transient failures
   - Add detailed error messages for common configuration issues
@@ -231,7 +231,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing error handling patterns_
   - _Requirements: 8.4, 3.3_
 
-- [ ] 17. Create comprehensive integration tests
+- [x] 17. Create comprehensive integration tests
   - Files: Add test files for end-to-end OTEL flow validation
   - Create tests for configuration loading from file to UI
   - Test collector start/stop with different configurations
@@ -246,7 +246,7 @@ This implementation plan fixes the OTEL integration with Mezmo by following the 
   - _Leverage: existing debugging and testing utilities_
   - _Requirements: All requirements_
 
-- [ ] 18. Update OTEL collector configuration templates and documentation
+- [x] 18. Update OTEL collector configuration templates and documentation
   - File: log_info/config-examples/otel-collector-configs.yaml (modify existing)
   - Update templates to match generated configuration
   - Add comments explaining configuration options

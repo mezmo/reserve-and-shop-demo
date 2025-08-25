@@ -1,0 +1,151 @@
+{
+  "summary": {
+    "totalTests": 16,
+    "passed": 16,
+    "failed": 0,
+    "successRate": 100,
+    "totalDuration": 14637,
+    "timestamp": "2025-08-21T21:23:50.566Z"
+  },
+  "results": [
+    {
+      "name": "1a. Configuration File Exists & Valid",
+      "passed": true,
+      "details": "",
+      "duration": 0,
+      "timestamp": "2025-08-21T21:23:35.945Z"
+    },
+    {
+      "name": "1b. Backend Loads Config from File",
+      "passed": {
+        "traces": {
+          "enabled": true,
+          "ingestionKey": "Vr4at+j5Y8G1jRiRGb/35yXbV+vUtOIoDtCXUXp3Da8=",
+          "pipelineId": "5c7e0854-7705-11f0-b8ef-0260f52d7685",
+          "host": "pipeline.use.dev.logdna.net"
+        },
+        "logs": {
+          "enabled": true,
+          "ingestionKey": "hm1A1LKqG+Y3K9tp3P2Bx04Z5QFe3pSuiFoqBzrtpoQ=",
+          "pipelineId": "5c7e0854-7705-11f0-b8ef-0260f52d7685",
+          "host": "pipeline.use.dev.logdna.net"
+        },
+        "metrics": {
+          "enabled": true,
+          "ingestionKey": "SGYSgfVbGjj/NAbaiIt714G426rkkQlfydo1RUuiuYw=",
+          "pipelineId": "5c7e0854-7705-11f0-b8ef-0260f52d7685",
+          "host": "pipeline.use.dev.logdna.net"
+        }
+      },
+      "details": "",
+      "duration": 3,
+      "timestamp": "2025-08-21T21:23:35.947Z"
+    },
+    {
+      "name": "1c. Config Has All Pipelines",
+      "passed": {
+        "enabled": true,
+        "ingestionKey": "Vr4at+j5Y8G1jRiRGb/35yXbV+vUtOIoDtCXUXp3Da8=",
+        "pipelineId": "5c7e0854-7705-11f0-b8ef-0260f52d7685",
+        "host": "pipeline.use.dev.logdna.net"
+      },
+      "details": "",
+      "duration": 3,
+      "timestamp": "2025-08-21T21:23:35.947Z"
+    },
+    {
+      "name": "2a. Status Endpoint Available",
+      "passed": "disconnected",
+      "details": "",
+      "duration": 1,
+      "timestamp": "2025-08-21T21:23:35.949Z"
+    },
+    {
+      "name": "2b. Collector Start Error Handling",
+      "passed": "OTEL Collector not configured. Please configure first.",
+      "details": "Expected error handled properly",
+      "duration": 3,
+      "timestamp": "2025-08-21T21:23:35.951Z"
+    },
+    {
+      "name": "2c. Status Reflects Collector State",
+      "passed": true,
+      "details": "",
+      "duration": 1011,
+      "timestamp": "2025-08-21T21:23:36.958Z"
+    },
+    {
+      "name": "3a. Configuration Validation",
+      "passed": "Failed to start OTEL Collector",
+      "details": "",
+      "duration": 5036,
+      "timestamp": "2025-08-21T21:23:41.995Z"
+    },
+    {
+      "name": "3b. Invalid Config Rejection",
+      "passed": true,
+      "details": "",
+      "duration": 10055,
+      "timestamp": "2025-08-21T21:23:47.013Z"
+    },
+    {
+      "name": "4a. Trace Proxy Endpoint Exists",
+      "passed": true,
+      "details": "",
+      "duration": 3,
+      "timestamp": "2025-08-21T21:23:47.016Z"
+    },
+    {
+      "name": "4b. Health Check Available",
+      "passed": {
+        "status": "ok",
+        "timestamp": "2025-08-21T21:23:47.017Z"
+      },
+      "details": "",
+      "duration": 6,
+      "timestamp": "2025-08-21T21:23:47.019Z"
+    },
+    {
+      "name": "4c. Status Monitoring Consistency",
+      "passed": true,
+      "details": "",
+      "duration": 1522,
+      "timestamp": "2025-08-21T21:23:48.536Z"
+    },
+    {
+      "name": "5a. Config Load Performance",
+      "passed": true,
+      "details": "3ms",
+      "duration": 3,
+      "timestamp": "2025-08-21T21:23:48.539Z"
+    },
+    {
+      "name": "5b. Status Load Performance",
+      "passed": true,
+      "details": "10 concurrent calls in 12ms",
+      "duration": 15,
+      "timestamp": "2025-08-21T21:23:48.551Z"
+    },
+    {
+      "name": "5c. Server Responsive After Load",
+      "passed": true,
+      "details": "",
+      "duration": 1019,
+      "timestamp": "2025-08-21T21:23:49.555Z"
+    },
+    {
+      "name": "6a. ConfigManager Consistency",
+      "passed": true,
+      "details": "",
+      "duration": 4,
+      "timestamp": "2025-08-21T21:23:49.559Z"
+    },
+    {
+      "name": "6b. Configuration Persistence",
+      "passed": true,
+      "details": "",
+      "duration": 1010,
+      "timestamp": "2025-08-21T21:23:50.565Z"
+    }
+  ]
+}
