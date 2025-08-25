@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OTEL UI Testing Dashboard</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-dashboard {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+        }
+        .test-result {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .success { background: #d4edda; border-left: 4px solid #28a745; }
+        .error { background: #f8d7da; border-left: 4px solid #dc3545; }
+        .warning { background: #fff3cd; border-left: 4px solid #ffc107; }
+        .info { background: #d1ecf1; border-left: 4px solid #17a2b8; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .connected { background: #28a745; }
+        .disconnected { background: #dc3545; }
+        .pending { background: #ffc107; }
+        pre {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+        .iframe-container {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            height: 600px;
+            margin: 10px 0;
+        }
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-dashboard">
+        <h1>🧪 OTEL Configuration UI Testing Dashboard</h1>
+        
+        <div class="test-section">
+            <h2>📊 Backend API Status</h2>
+            <div id="api-status">
+                <div class="test-result info">
+                    <span class="status-indicator pending"></span>
+                    Checking API connectivity...
+                </div>
+            </div>
+            <button onclick="checkAPIs()">Refresh API Status</button>
+        </div>
+
+        <div class="test-section">
+            <h2>🔧 OTEL Configuration Test</h2>
+            <div id="config-status">
+                <div class="test-result info">
+                    <span class="status-indicator pending"></span>
+                    Loading configuration test...
+                </div>
+            </div>
+            <button onclick="testConfiguration()">Test Configuration</button>
+        </div>
+
+        <div class="test-section">
+            <h2>📱 UI Interface Test</h2>
+            <button onclick="openAgentsPage()">Open Agents Page</button>
+            <button onclick="openConfigPage()">Open Config Page</button>
+            <button onclick="testUIInteraction()">Test UI Interaction</button>
+            
+            <div id="ui-test-frame" class="iframe-container" style="display: none;">
+                <iframe id="test-iframe" src=""></iframe>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h2>🚀 Performance Test</h2>
+            <div id="performance-results"></div>
+            <button onclick="runPerformanceTest()">Run Performance Test</button>
+        </div>
+
+        <div class="test-section">
+            <h2>📝 Test Results</h2>
+            <div id="test-log"></div>
+            <button onclick="clearLog()">Clear Log</button>
+            <button onclick="exportResults()">Export Results</button>
+        </div>
+    </div>
+
+    <script>
+        let testResults = [];
+        
+        function logResult(message, type = 'info') {
+            const timestamp = new Date().toISOString();
+            const result = { timestamp, message, type };
+            testResults.push(result);
+            
+            const logDiv = document.getElementById('test-log');
+            const resultDiv = document.createElement('div');
+            resultDiv.className = `test-result ${type}`;
+            resultDiv.innerHTML = `<strong>${timestamp}:</strong> ${message}`;
+            logDiv.appendChild(resultDiv);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        async function checkAPIs() {
+            const apiStatusDiv = document.getElementById('api-status');
+            apiStatusDiv.innerHTML = '<div class="test-result info"><span class="status-indicator pending"></span>Checking APIs...</div>';
+
+            const apis = [
+                { name: 'Health Check', url: '/api/health' },
+                { name: 'OTEL Config', url: '/api/config/otel' },
+                { name: 'OTEL Status', url: '/api/otel/status' },
+                { name: 'Frontend', url: '/' }
+            ];
+
+            let results = '';
+            
+            for (const api of apis) {
+                try {
+                    const startTime = performance.now();
+                    const response = await fetch(api.url);
+                    const endTime = performance.now();
+                    const duration = Math.round(endTime - startTime);
+                    
+                    if (response.ok) {
+                        results += `<div class="test-result success">
+                            <span class="status-indicator connected"></span>
+                            ${api.name}: ✅ ${response.status} (${duration}ms)
+                        </div>`;
+                        logResult(`${api.name} API: Success - ${response.status} in ${duration}ms`, 'success');
+                    } else {
+                        results += `<div class="test-result error">
+                            <span class="status-indicator disconnected"></span>
+                            ${api.name}: ❌ ${response.status} (${duration}ms)
+                        </div>`;
+                        logResult(`${api.name} API: Failed - ${response.status}`, 'error');
+                    }
+                } catch (error) {
+                    results += `<div class="test-result error">
+                        <span class="status-indicator disconnected"></span>
+                        ${api.name}: ❌ Network Error - ${error.message}
+                    </div>`;
+                    logResult(`${api.name} API: Network Error - ${error.message}`, 'error');
+                }
+            }
+            
+            apiStatusDiv.innerHTML = results;
+        }
+
+        async function testConfiguration() {
+            const configStatusDiv = document.getElementById('config-status');
+            configStatusDiv.innerHTML = '<div class="test-result info"><span class="status-indicator pending"></span>Testing configuration...</div>';
+
+            try {
+                // Test OTEL configuration endpoint
+                const configResponse = await fetch('/api/config/otel');
+                const configData = await configResponse.json();
+                
+                if (configData.success && configData.config) {
+                    const config = configData.config;
+                    let configResults = `<div class="test-result success">
+                        <span class="status-indicator connected"></span>
+                        Configuration loaded successfully
+                    </div>`;
+                    
+                    // Check service name
+                    if (config.serviceName) {
+                        configResults += `<div class="test-result info">Service Name: ${config.serviceName}</div>`;
+                    }
+                    
+                    // Check pipelines
+                    if (config.pipelines) {
+                        const pipelines = Object.keys(config.pipelines);
+                        configResults += `<div class="test-result info">Pipelines: ${pipelines.join(', ')}</div>`;
+                        
+                        pipelines.forEach(pipeline => {
+                            const pipelineConfig = config.pipelines[pipeline];
+                            const status = pipelineConfig.enabled ? '✅ Enabled' : '❌ Disabled';
+                            configResults += `<div class="test-result ${pipelineConfig.enabled ? 'success' : 'warning'}">
+                                ${pipeline}: ${status}
+                            </div>`;
+                        });
+                    }
+                    
+                    configStatusDiv.innerHTML = configResults;
+                    logResult('Configuration test passed', 'success');
+                } else {
+                    configStatusDiv.innerHTML = `<div class="test-result error">
+                        <span class="status-indicator disconnected"></span>
+                        Configuration test failed: ${configData.error || 'Unknown error'}
+                    </div>`;
+                    logResult(`Configuration test failed: ${configData.error}`, 'error');
+                }
+                
+                // Test OTEL status
+                const statusResponse = await fetch('/api/otel/status');
+                const statusData = await statusResponse.json();
+                
+                configStatusDiv.innerHTML += `<div class="test-result ${statusData.status === 'connected' ? 'success' : 'warning'}">
+                    <span class="status-indicator ${statusData.status === 'connected' ? 'connected' : 'disconnected'}"></span>
+                    OTEL Status: ${statusData.status} ${statusData.pid ? `(PID: ${statusData.pid})` : ''}
+                </div>`;
+                
+            } catch (error) {
+                configStatusDiv.innerHTML = `<div class="test-result error">
+                    <span class="status-indicator disconnected"></span>
+                    Configuration test error: ${error.message}
+                </div>`;
+                logResult(`Configuration test error: ${error.message}`, 'error');
+            }
+        }
+
+        function openAgentsPage() {
+            document.getElementById('ui-test-frame').style.display = 'block';
+            document.getElementById('test-iframe').src = '/agents';
+            logResult('Opened Agents page for testing', 'info');
+        }
+
+        function openConfigPage() {
+            document.getElementById('ui-test-frame').style.display = 'block';
+            document.getElementById('test-iframe').src = '/config';
+            logResult('Opened Config page for testing', 'info');
+        }
+
+        async function testUIInteraction() {
+            // This simulates UI testing by checking if the pages load properly
+            const testPages = ['/agents', '/config'];
+            let results = '';
+            
+            for (const page of testPages) {
+                try {
+                    const response = await fetch(page);
+                    if (response.ok) {
+                        const html = await response.text();
+                        const hasReact = html.includes('react') || html.includes('React');
+                        const hasOTEL = html.includes('otel') || html.includes('OTEL') || html.includes('OpenTelemetry');
+                        
+                        logResult(`${page}: Loaded successfully (React: ${hasReact}, OTEL: ${hasOTEL})`, 'success');
+                    } else {
+                        logResult(`${page}: Failed to load - ${response.status}`, 'error');
+                    }
+                } catch (error) {
+                    logResult(`${page}: Error - ${error.message}`, 'error');
+                }
+            }
+        }
+
+        async function runPerformanceTest() {
+            const performanceDiv = document.getElementById('performance-results');
+            performanceDiv.innerHTML = '<div class="test-result info">Running performance test...</div>';
+            
+            const startTime = performance.now();
+            const requests = [];
+            
+            // Concurrent API calls to test performance
+            for (let i = 0; i < 10; i++) {
+                requests.push(fetch('/api/config/otel'));
+            }
+            
+            try {
+                const responses = await Promise.all(requests);
+                const endTime = performance.now();
+                const totalTime = Math.round(endTime - startTime);
+                const avgTime = Math.round(totalTime / requests.length);
+                
+                const successCount = responses.filter(r => r.ok).length;
+                const failureCount = requests.length - successCount;
+                
+                performanceDiv.innerHTML = `
+                    <div class="test-result ${successCount === requests.length ? 'success' : 'warning'}">
+                        Performance Test Results:
+                        <ul>
+                            <li>Total Requests: ${requests.length}</li>
+                            <li>Successful: ${successCount}</li>
+                            <li>Failed: ${failureCount}</li>
+                            <li>Total Time: ${totalTime}ms</li>
+                            <li>Average Time: ${avgTime}ms</li>
+                        </ul>
+                    </div>
+                `;
+                
+                logResult(`Performance test: ${successCount}/${requests.length} successful in ${totalTime}ms (avg: ${avgTime}ms)`, 
+                         successCount === requests.length ? 'success' : 'warning');
+            } catch (error) {
+                performanceDiv.innerHTML = `<div class="test-result error">Performance test failed: ${error.message}</div>`;
+                logResult(`Performance test failed: ${error.message}`, 'error');
+            }
+        }
+
+        function clearLog() {
+            document.getElementById('test-log').innerHTML = '';
+            testResults = [];
+            logResult('Test log cleared', 'info');
+        }
+
+        function exportResults() {
+            const results = {
+                timestamp: new Date().toISOString(),
+                testResults,
+                summary: {
+                    total: testResults.length,
+                    success: testResults.filter(r => r.type === 'success').length,
+                    errors: testResults.filter(r => r.type === 'error').length,
+                    warnings: testResults.filter(r => r.type === 'warning').length
+                }
+            };
+            
+            const blob = new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `otel-ui-test-results-${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            logResult('Test results exported', 'success');
+        }
+
+        // Auto-run initial tests
+        window.onload = function() {
+            logResult('OTEL UI Testing Dashboard loaded', 'info');
+            checkAPIs();
+            testConfiguration();
+        };
+    </script>
+</body>
+</html>

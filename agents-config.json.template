@@ -1,11 +1,35 @@
 {
+  "_comment": "Agent Configuration Template - Replace placeholder values with your actual credentials",
+  "_documentation": {
+    "defaultConfig": "The configuration to use by default when the app starts",
+    "configurations": "Named configuration presets for different environments",
+    "mezmo": {
+      "enabled": "Enable/disable Mezmo Agent (direct log forwarding)",
+      "ingestionKey": "Your Mezmo ingestion key (32+ character string)",
+      "host": "Mezmo log collection endpoint for your environment",
+      "tags": "Comma-separated tags to apply to all logs"
+    },
+    "otel": {
+      "enabled": "Enable/disable OpenTelemetry Collector",
+      "serviceName": "Service name for telemetry identification", 
+      "tags": "Comma-separated tags for all telemetry data",
+      "pipelines": {
+        "logs": "Log collection pipeline configuration",
+        "metrics": "Metrics collection pipeline configuration", 
+        "traces": "Distributed tracing pipeline configuration",
+        "ingestionKey": "Base64-encoded pipeline ingestion key",
+        "pipelineId": "UUID of your Mezmo pipeline",
+        "host": "Mezmo pipeline endpoint for your environment"
+      }
+    }
+  },
   "defaultConfig": "dev",
   "configurations": {
     "dev": {
       "displayName": "Development Environment",
       "mezmo": {
         "enabled": false,
-        "ingestionKey": "",
+        "ingestionKey": "your-32-char-mezmo-ingestion-key-here",
         "host": "logs.use.dev.logdna.net",
         "tags": "restaurant-app,dev"
       },
@@ -16,21 +40,21 @@
         "pipelines": {
           "logs": {
             "enabled": false,
-            "ingestionKey": "",
-            "pipelineId": "",
-            "host": "pipeline.use.dev.mezmo.com"
+            "ingestionKey": "your-base64-encoded-logs-key-here==",
+            "pipelineId": "12345678-1234-5678-9abc-123456789abc",
+            "host": "pipeline.use.dev.logdna.net"
           },
           "metrics": {
             "enabled": false,
-            "ingestionKey": "",
-            "pipelineId": "",
-            "host": "pipeline.use.dev.mezmo.com"
+            "ingestionKey": "your-base64-encoded-metrics-key-here==",
+            "pipelineId": "12345678-1234-5678-9abc-123456789abc",
+            "host": "pipeline.use.dev.logdna.net"
           },
           "traces": {
             "enabled": false,
-            "ingestionKey": "",
-            "pipelineId": "",
-            "host": "pipeline.use.dev.mezmo.com"
+            "ingestionKey": "your-base64-encoded-traces-key-here==",
+            "pipelineId": "12345678-1234-5678-9abc-123456789abc",
+            "host": "pipeline.use.dev.logdna.net"
           }
         }
       }
@@ -39,8 +63,8 @@
       "displayName": "Integration Environment",
       "mezmo": {
         "enabled": false,
-        "ingestionKey": "",
-        "host": "app.use.int.logdna.net",
+        "ingestionKey": "your-32-char-mezmo-ingestion-key-here",
+        "host": "logs.use.int.logdna.net",
         "tags": "restaurant-app,integration"
       },
       "otel": {
@@ -50,21 +74,21 @@
         "pipelines": {
           "logs": {
             "enabled": false,
-            "ingestionKey": "",
-            "pipelineId": "",
-            "host": "pipeline.use.int.mezmo.com"
+            "ingestionKey": "your-base64-encoded-logs-key-here==",
+            "pipelineId": "87654321-4321-8765-dcba-987654321abc",
+            "host": "pipeline.use.int.logdna.net"
           },
           "metrics": {
             "enabled": false,
-            "ingestionKey": "",
-            "pipelineId": "",
-            "host": "pipeline.use.int.mezmo.com"
+            "ingestionKey": "your-base64-encoded-metrics-key-here==",
+            "pipelineId": "87654321-4321-8765-dcba-987654321abc",
+            "host": "pipeline.use.int.logdna.net"
           },
           "traces": {
             "enabled": false,
-            "ingestionKey": "",
-            "pipelineId": "",
-            "host": "pipeline.use.int.mezmo.com"
+            "ingestionKey": "your-base64-encoded-traces-key-here==",
+            "pipelineId": "87654321-4321-8765-dcba-987654321abc",
+            "host": "pipeline.use.int.logdna.net"
           }
         }
       }
@@ -73,7 +97,7 @@
       "displayName": "Production Environment",
       "mezmo": {
         "enabled": false,
-        "ingestionKey": "",
+        "ingestionKey": "your-32-char-mezmo-ingestion-key-here",
         "host": "logs.mezmo.com",
         "tags": "restaurant-app,production"
       },
@@ -84,24 +108,73 @@
         "pipelines": {
           "logs": {
             "enabled": false,
+            "ingestionKey": "your-base64-encoded-logs-key-here==",
+            "pipelineId": "abcdef12-5678-90ab-cdef-123456789abc",
+            "host": "pipeline.mezmo.com"
+          },
+          "metrics": {
+            "enabled": false,
+            "ingestionKey": "your-base64-encoded-metrics-key-here==",
+            "pipelineId": "abcdef12-5678-90ab-cdef-123456789abc",
+            "host": "pipeline.mezmo.com"
+          },
+          "traces": {
+            "enabled": false,
+            "ingestionKey": "your-base64-encoded-traces-key-here==",
+            "pipelineId": "abcdef12-5678-90ab-cdef-123456789abc",
+            "host": "pipeline.mezmo.com"
+          }
+        }
+      }
+    },
+    "custom": {
+      "displayName": "Custom Configuration",
+      "_comment": "Use this configuration for manual setup with custom values",
+      "mezmo": {
+        "enabled": false,
+        "ingestionKey": "",
+        "host": "logs.mezmo.com",
+        "tags": "restaurant-app,custom"
+      },
+      "otel": {
+        "enabled": false,
+        "serviceName": "restaurant-app-custom",
+        "tags": "restaurant-app,otel,custom",
+        "pipelines": {
+          "logs": {
+            "enabled": false,
             "ingestionKey": "",
             "pipelineId": "",
-            "host": "pipeline.mezmo.com"
+            "host": ""
           },
           "metrics": {
             "enabled": false,
             "ingestionKey": "",
             "pipelineId": "",
-            "host": "pipeline.mezmo.com"
+            "host": ""
           },
           "traces": {
             "enabled": false,
             "ingestionKey": "",
             "pipelineId": "",
-            "host": "pipeline.mezmo.com"
+            "host": ""
           }
         }
       }
+    }
+  },
+  "_usage": {
+    "setup": "1. Copy this file to agents-config.json, 2. Replace placeholder values with your actual credentials, 3. Set enabled: true for desired agents, 4. Restart the application",
+    "environments": {
+      "dev": "Development environment using *.use.dev.logdna.net endpoints",
+      "integration": "Integration environment using *.use.int.logdna.net endpoints", 
+      "production": "Production environment using *.mezmo.com endpoints",
+      "custom": "Manual configuration with custom values"
+    },
+    "credentials": {
+      "mezmo_ingestion_key": "Found in Mezmo dashboard under Organization > API Keys",
+      "otel_ingestion_key": "Base64-encoded key from Mezmo Pipeline dashboard",
+      "pipeline_id": "UUID of your pipeline from Mezmo Pipeline dashboard"
     }
   }
 }

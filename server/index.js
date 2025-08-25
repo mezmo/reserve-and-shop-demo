@@ -985,6 +985,114 @@ const checkAgentHealth = async (pid, timeoutMs = 5000) => {
   });
 };
 
+// Helper function to check OTEL collector health by testing metrics endpoint and logs
+const checkOtelCollectorHealth = async (pid, timeoutMs = 5000) => {
+  return new Promise((resolve) => {
+    const logFile = '/tmp/codeuser/otel-collector.log';
+    let healthCheckTimer;
+    
+    // Test if process is running
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      return resolve({ healthy: false, reason: 'Process not running' });
+    }
+    
+    // Check logs for health indicators
+    const checkLogs = () => {
+      try {
+        if (fs.existsSync(logFile)) {
+          const logContent = fs.readFileSync(logFile, 'utf8');
+          const recentLogs = logContent.split('\n').slice(-20).join('\n');
+          
+          // Positive indicators - OTEL collector startup success patterns
+          if (recentLogs.match(/Everything is ready|Starting.*collector|Server available|receivers.*started/i)) {
+            clearTimeout(healthCheckTimer);
+            return resolve({ healthy: true, reason: 'OTEL Collector logs show successful startup' });
+          }
+          
+          // Check if metrics endpoint is accessible
+          if (recentLogs.match(/serving.*metrics|prometheus.*endpoint|8888.*available/i)) {
+            clearTimeout(healthCheckTimer);
+            return resolve({ healthy: true, reason: 'OTEL Collector metrics endpoint active' });
+          }
+          
+          // Negative indicators - common failure patterns
+          if (recentLogs.match(/failed.*start|error.*config|authentication.*failed|connection.*refused|unable.*bind|port.*already.*use/i)) {
+            clearTimeout(healthCheckTimer);
+            return resolve({ healthy: false, reason: 'Configuration or startup error detected in logs' });
+          }
+          
+          // Pipeline-specific errors
+          if (recentLogs.match(/exporter.*failed|pipeline.*error|receiver.*failed/i)) {
+            clearTimeout(healthCheckTimer);
+            return resolve({ healthy: false, reason: 'Pipeline or exporter error detected' });
+          }
+        }
+      } catch (error) {
+        // Continue checking
+      }
+    };
+    
+    // Additional check - try to ping metrics endpoint
+    const checkMetricsEndpoint = async () => {
+      try {
+        const response = await fetch('http://localhost:8888/metrics', { timeout: 1000 });
+        if (response.ok) {
+          clearTimeout(healthCheckTimer);
+          return resolve({ healthy: true, reason: 'OTEL Collector metrics endpoint responsive' });
+        }
+      } catch (error) {
+        // Metrics endpoint not available, continue with log checking
+      }
+    };
+    
+    // Check immediately and then periodically
+    checkLogs();
+    checkMetricsEndpoint();
+    const logCheckInterval = setInterval(() => {
+      checkLogs();
+      if (Math.random() < 0.3) { // Check metrics endpoint occasionally to avoid spam
+        checkMetricsEndpoint();
+      }
+    }, 500);
+    
+    // Timeout after specified time
+    healthCheckTimer = setTimeout(() => {
+      clearInterval(logCheckInterval);
+      resolve({ healthy: null, reason: 'Health check timeout - OTEL Collector status unclear' });
+    }, timeoutMs);
+  });
+};
+
+// Retry utility function for handling transient failures
+const retryOperation = async (operation, maxRetries = 3, delayMs = 1000, operationName = 'operation') => {
+  let lastError;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`🔄 Attempting ${operationName} (attempt ${attempt}/${maxRetries})`);
+      const result = await operation();
+      if (attempt > 1) {
+        console.log(`✅ ${operationName} succeeded on attempt ${attempt}`);
+      }
+      return result;
+    } catch (error) {
+      lastError = error;
+      console.warn(`⚠️ ${operationName} attempt ${attempt}/${maxRetries} failed:`, error.message);
+      
+      if (attempt < maxRetries) {
+        console.log(`⏳ Retrying in ${delayMs}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        delayMs *= 1.5; // Exponential backoff
+      }
+    }
+  }
+  
+  console.error(`❌ ${operationName} failed after ${maxRetries} attempts`);
+  throw lastError;
+};
+
 app.post('/api/mezmo/start', (req, res) => {
   try {
     const pidFile = '/tmp/codeuser/logdna-agent.pid';
@@ -1592,129 +1700,181 @@ app.get('/api/mezmo/logs', (req, res) => {
   }
 });
 
-// Frontend traces proxy endpoint
+// Frontend traces proxy endpoint - Fixed backend trace proxy
 app.use('/api/traces/v1/traces', express.raw({ type: 'application/x-protobuf', limit: '10mb' }));
 app.post('/api/traces/v1/traces', async (req, res) => {
+  const startTime = Date.now();
+  let errorDetails = null;
+  
   try {
-    // Check if OTEL collector is running
+    // Enhanced collector availability check
     const pidFile = '/tmp/codeuser/otel-collector.pid';
     const configFile = '/etc/otelcol/config.yaml';
     
-    if (!fs.existsSync(pidFile) || !fs.existsSync(configFile)) {
-      // Silently return 503 - this is expected when collector not configured
-      return res.status(503).end();
+    // Check configuration first
+    if (!fs.existsSync(configFile)) {
+      errorDetails = 'OTEL collector not configured';
+      return res.status(503).json({ 
+        error: 'Service Unavailable', 
+        details: errorDetails,
+        code: 'NO_CONFIG'
+      });
     }
     
-    // Check if collector process is actually running
+    // Check if collector process is running
+    if (!fs.existsSync(pidFile)) {
+      errorDetails = 'OTEL collector not started';
+      return res.status(503).json({ 
+        error: 'Service Unavailable', 
+        details: errorDetails,
+        code: 'NOT_RUNNING'
+      });
+    }
+    
     let pid;
     try {
       pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
-    } catch (readError) {
-      return res.status(503).end();
-    }
-    
-    if (isNaN(pid)) {
-      return res.status(503).end();
-    }
-    
-    try {
-      process.kill(pid, 0); // Check if process exists
-    } catch (killError) {
-      return res.status(503).end(); // Process not running
-    }
-    
-    // Proxy the request to the OTEL collector
-    console.log(`Proxy - Process check passed for PID: ${pid}`);
-    
-    try {
-      console.log('Proxy - Using built-in fetch...');
-      console.log('Proxy - Forwarding trace to collector...');
-      
-      const response = await fetch('http://localhost:4318/v1/traces', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-protobuf'
-        },
-        body: req.body
-      });
-      
-      const responseStatus = response.status;
-      console.log(`Proxy - Collector response: ${responseStatus}`);
-      
-      // If protobuf format fails with 400, try JSON format workaround
-      if (responseStatus === 400) {
-        console.log('Proxy - Protobuf failed, attempting JSON workaround...');
-        
-        // Generate a valid JSON trace payload as fallback
-        const testTracePayload = {
-          "resourceSpans": [{
-            "resource": {
-              "attributes": [{
-                "key": "service.name",
-                "value": {"stringValue": "restaurant-app-virtual-traffic"}
-              }, {
-                "key": "service.version", 
-                "value": {"stringValue": "1.0.0"}
-              }, {
-                "key": "telemetry.sdk.name",
-                "value": {"stringValue": "opentelemetry"}
-              }]
-            },
-            "scopeSpans": [{
-              "scope": {"name": "virtual-traffic-simulator", "version": "1.0.0"},
-              "spans": [{
-                "traceId": Buffer.from(Array(16).fill(0).map(() => Math.floor(Math.random() * 256))).toString('hex'),
-                "spanId": Buffer.from(Array(8).fill(0).map(() => Math.floor(Math.random() * 256))).toString('hex'),
-                "name": "virtual-user-activity",
-                "kind": 2,
-                "startTimeUnixNano": (Date.now() * 1000000).toString(),
-                "endTimeUnixNano": ((Date.now() + 1000) * 1000000).toString(),
-                "attributes": [{
-                  "key": "user.type", 
-                  "value": {"stringValue": "virtual"}
-                }, {
-                  "key": "http.method",
-                  "value": {"stringValue": "GET"}
-                }, {
-                  "key": "user.journey",
-                  "value": {"stringValue": "virtual-traffic"}
-                }],
-                "status": {"code": 1}
-              }]
-            }]
-          }]
-        };
-        
-        try {
-          const jsonResponse = await fetch('http://localhost:4318/v1/traces', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(testTracePayload)
-          });
-          
-          console.log(`Proxy - JSON workaround response: ${jsonResponse.status}`);
-          res.status(jsonResponse.status);
-          res.end();
-          return;
-        } catch (jsonError) {
-          console.log('Proxy - JSON workaround also failed:', jsonError.message);
-        }
+      if (isNaN(pid)) {
+        throw new Error('Invalid PID format');
       }
       
-      res.status(responseStatus);
-      res.end(); // Always return empty response
+      // Verify process is actually running
+      process.kill(pid, 0);
+    } catch (pidError) {
+      // Clean up stale PID file
+      if (fs.existsSync(pidFile)) {
+        fs.unlinkSync(pidFile);
+      }
+      errorDetails = `OTEL collector process not running: ${pidError.message}`;
+      return res.status(503).json({ 
+        error: 'Service Unavailable', 
+        details: errorDetails,
+        code: 'PROCESS_DOWN'
+      });
+    }
+    
+    // Enhanced request forwarding with proper headers
+    const collectorUrl = 'http://localhost:4318/v1/traces';
+    const requestHeaders = {
+      'Content-Type': req.headers['content-type'] || 'application/x-protobuf',
+      'User-Agent': 'restaurant-app-trace-proxy/1.0',
+      'X-Forwarded-For': req.ip || 'unknown',
+      'X-Proxy-Timestamp': startTime.toString()
+    };
+    
+    // Forward authorization headers if present
+    if (req.headers.authorization) {
+      requestHeaders.authorization = req.headers.authorization;
+    }
+    
+    // Add any custom OTEL headers
+    Object.keys(req.headers).forEach(header => {
+      if (header.startsWith('x-otel-') || header.startsWith('otlp-')) {
+        requestHeaders[header] = req.headers[header];
+      }
+    });
+    
+    console.log(`🔄 Trace proxy: Forwarding ${req.body?.length || 0} bytes to collector (PID: ${pid})`);
+    
+    try {
+      // Forward request to OTEL collector with enhanced error handling
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
+      const response = await fetch(collectorUrl, {
+        method: 'POST',
+        headers: requestHeaders,
+        body: req.body,
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      const responseStatus = response.status;
+      const responseTime = Date.now() - startTime;
+      
+      console.log(`✅ Trace proxy: Collector response ${responseStatus} in ${responseTime}ms`);
+      
+      // Handle different response scenarios
+      if (response.ok) {
+        // Success case - forward response
+        const responseBody = await response.text();
+        res.status(responseStatus);
+        if (responseBody) {
+          res.send(responseBody);
+        } else {
+          res.end();
+        }
+        return;
+      }
+      
+      // Handle collector errors
+      if (responseStatus === 400) {
+        errorDetails = 'Invalid trace data format';
+        console.warn(`⚠️ Trace proxy: Bad request (400) - ${errorDetails}`);
+      } else if (responseStatus === 429) {
+        errorDetails = 'Rate limit exceeded';
+        console.warn(`⚠️ Trace proxy: Rate limited (429) - ${errorDetails}`);
+      } else if (responseStatus >= 500) {
+        errorDetails = 'Collector internal error';
+        console.error(`❌ Trace proxy: Collector error (${responseStatus}) - ${errorDetails}`);
+      } else {
+        errorDetails = `Unexpected collector response: ${responseStatus}`;
+        console.warn(`⚠️ Trace proxy: Unexpected status (${responseStatus}) - ${errorDetails}`);
+      }
+      
+      // Return the actual collector response
+      res.status(responseStatus).json({
+        error: 'Collector Error',
+        details: errorDetails,
+        code: 'COLLECTOR_ERROR',
+        originalStatus: responseStatus
+      });
       
     } catch (fetchError) {
-      console.log('Proxy - Fetch error:', fetchError.message);
-      // Silently handle fetch errors (collector connection issues)
-      res.status(503).end();
+      const responseTime = Date.now() - startTime;
+      
+      if (fetchError.name === 'AbortError') {
+        errorDetails = 'Request timeout (>10s)';
+        console.error(`❌ Trace proxy: Timeout after ${responseTime}ms`);
+        return res.status(504).json({
+          error: 'Gateway Timeout',
+          details: errorDetails,
+          code: 'TIMEOUT'
+        });
+      }
+      
+      // Connection errors (collector down, port closed, etc.)
+      if (fetchError.code === 'ECONNREFUSED' || fetchError.message.includes('fetch failed')) {
+        errorDetails = 'Cannot connect to OTEL collector on port 4318';
+        console.error(`❌ Trace proxy: Connection failed - ${errorDetails}`);
+        return res.status(502).json({
+          error: 'Bad Gateway', 
+          details: errorDetails,
+          code: 'CONNECTION_FAILED'
+        });
+      }
+      
+      // Other network errors
+      errorDetails = `Network error: ${fetchError.message}`;
+      console.error(`❌ Trace proxy: Network error after ${responseTime}ms - ${errorDetails}`);
+      return res.status(502).json({
+        error: 'Bad Gateway',
+        details: errorDetails,
+        code: 'NETWORK_ERROR'
+      });
     }
     
   } catch (error) {
-    // Silently handle any other errors
-    res.status(503).end();
+    const responseTime = Date.now() - startTime;
+    errorDetails = `Proxy error: ${error.message}`;
+    console.error(`❌ Trace proxy: Unexpected error after ${responseTime}ms - ${errorDetails}`);
+    
+    res.status(500).json({
+      error: 'Internal Server Error',
+      details: errorDetails,
+      code: 'PROXY_ERROR'
+    });
   }
 });
 
@@ -1947,7 +2107,7 @@ const generateOTELConfig = ({
   return config;
 };
 
-app.get('/api/otel/status', (req, res) => {
+app.get('/api/otel/status', async (req, res) => {
   try {
     // Check if collector is running
     const pidFile = '/tmp/codeuser/otel-collector.pid';
@@ -1957,6 +2117,9 @@ app.get('/api/otel/status', (req, res) => {
     let pid = null;
     let hasConfig = false;
     let enabledPipelines = { logs: false, metrics: false, traces: false };
+    let metricsData = null;
+    let healthChecks = { collector: false, pipelines: {} };
+    let errors = [];
     
     if (fs.existsSync(configFile)) {
       hasConfig = true;
@@ -1974,7 +2137,10 @@ app.get('/api/otel/status', (req, res) => {
         }
       } catch (error) {
         console.warn('Could not parse OTEL config:', error);
+        errors.push(`Config parsing error: ${error.message}`);
       }
+    } else {
+      errors.push('No configuration file found');
     }
     
     if (fs.existsSync(pidFile)) {
@@ -1983,24 +2149,139 @@ app.get('/api/otel/status', (req, res) => {
         // Check if PID is still running
         process.kill(pid, 0); // This throws if process doesn't exist
         status = 'connected';
+        
+        // Perform health check using enhanced health checking
+        try {
+          const healthCheck = await checkOtelCollectorHealth(pid, 1500);
+          healthChecks.collector = healthCheck.healthy === true;
+          
+          // Update status based on health
+          if (healthCheck.healthy === false) {
+            status = 'error';
+            errors.push(`Health check failed: ${healthCheck.reason}`);
+          } else if (healthCheck.healthy === null) {
+            status = 'connecting'; // Status unclear
+            errors.push(`Health check timeout: ${healthCheck.reason}`);
+          }
+        } catch (healthError) {
+          console.warn('OTEL health check failed:', healthError);
+          errors.push(`Health check error: ${healthError.message}`);
+        }
+        
+        // Enhanced status monitoring - collect real-time metrics
+        try {
+          const metricsResponse = await fetch('http://localhost:8888/metrics');
+          if (metricsResponse.ok) {
+            healthChecks.collector = true;
+            const metricsText = await metricsResponse.text();
+            
+            // Parse key metrics
+            const stats = {
+              logsSent: 0,
+              metricsCollected: 0,
+              tracesReceived: 0,
+              errors: 0,
+              uptime: 0
+            };
+            
+            // Extract metrics using regex
+            const logsSentMatch = metricsText.match(/otelcol_exporter_sent_log_records_total\{[^}]*exporter="otlphttp\/logs"[^}]*\}\s+(\d+)/);
+            const metricsCollectedMatch = metricsText.match(/otelcol_exporter_sent_metric_points_total\{[^}]*exporter="otlphttp\/metrics"[^}]*\}\s+(\d+)/);
+            const tracesReceivedMatch = metricsText.match(/otelcol_exporter_sent_spans_total\{[^}]*exporter="otlphttp\/traces"[^}]*\}\s+(\d+)/);
+            const errorsMatch = metricsText.match(/otelcol_exporter_send_failed_log_records_total\{[^}]*\}\s+(\d+)/);
+            const uptimeMatch = metricsText.match(/otelcol_process_uptime\{\}\s+([\d.]+)/);
+            
+            if (logsSentMatch) stats.logsSent = parseInt(logsSentMatch[1]);
+            if (metricsCollectedMatch) stats.metricsCollected = parseInt(metricsCollectedMatch[1]);
+            if (tracesReceivedMatch) stats.tracesReceived = parseInt(tracesReceivedMatch[1]);
+            if (errorsMatch) stats.errors = parseInt(errorsMatch[1]);
+            if (uptimeMatch) stats.uptime = parseFloat(uptimeMatch[1]);
+            
+            metricsData = stats;
+            
+            // Health checks for pipeline connectivity
+            if (enabledPipelines.logs) {
+              healthChecks.pipelines.logs = stats.logsSent > 0 || stats.errors === 0;
+            }
+            if (enabledPipelines.metrics) {
+              healthChecks.pipelines.metrics = stats.metricsCollected > 0 || stats.errors === 0;
+            }
+            if (enabledPipelines.traces) {
+              healthChecks.pipelines.traces = stats.tracesReceived > 0 || stats.errors === 0;
+            }
+            
+            // Error detection and reporting
+            if (stats.errors > 0) {
+              errors.push(`Pipeline errors detected: ${stats.errors} failed operations`);
+            }
+            
+          } else {
+            healthChecks.collector = false;
+            errors.push('Collector metrics endpoint not responding');
+          }
+        } catch (metricsError) {
+          healthChecks.collector = false;
+          errors.push(`Metrics collection failed: ${metricsError.message}`);
+        }
+        
+        // Check log file for recent errors
+        try {
+          const logFile = '/tmp/codeuser/otel-collector.log';
+          if (fs.existsSync(logFile)) {
+            const logs = fs.readFileSync(logFile, 'utf8');
+            const recentLogs = logs.split('\n').slice(-20).join('\n');
+            
+            // Look for error patterns
+            if (recentLogs.includes('ERROR') || recentLogs.includes('FATAL')) {
+              const errorLines = recentLogs.split('\n').filter(line => 
+                line.includes('ERROR') || line.includes('FATAL')
+              ).slice(-3); // Last 3 error lines
+              
+              errorLines.forEach(errorLine => {
+                errors.push(`Log error: ${errorLine.trim()}`);
+              });
+            }
+          }
+        } catch (logError) {
+          errors.push(`Could not check logs: ${logError.message}`);
+        }
+        
       } catch (error) {
         // Process not running, clean up stale PID file
         fs.unlinkSync(pidFile);
         status = 'disconnected';
         pid = null;
+        errors.push('Process not running (cleaned up stale PID file)');
       }
+    } else {
+      errors.push('Collector not started');
     }
+    
+    // Determine overall health status
+    const isHealthy = status === 'connected' && 
+                     healthChecks.collector && 
+                     errors.length === 0 &&
+                     Object.values(enabledPipelines).some(enabled => enabled);
     
     res.json({
       status,
       pid,
       hasConfig,
       enabledPipelines,
+      healthChecks,
+      metricsData,
+      errors: errors.length > 0 ? errors : null,
+      isHealthy,
+      lastChecked: new Date().toISOString(),
       timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('Error checking OTEL status:', error);
-    res.status(500).json({ error: 'Failed to check OTEL Collector status' });
+    res.status(500).json({ 
+      error: 'Failed to check OTEL Collector status',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
   }
 });
 
@@ -2062,147 +2343,717 @@ app.get('/api/otel/metrics', async (req, res) => {
   }
 });
 
-app.post('/api/otel/configure', (req, res) => {
+app.post('/api/otel/configure', async (req, res) => {
   try {
     console.log(`🔧 OTEL Configure Request: ${JSON.stringify({
       timestamp: new Date().toISOString(),
-      bodyKeys: Object.keys(req.body),
-      hasBody: !!req.body,
-      bodySize: JSON.stringify(req.body).length
+      source: 'ConfigManager'
     })}`);
     
-    const { 
-      serviceName, 
-      tags,
-      debugLevel,
-      // Multi-pipeline parameters
-      logsEnabled, logsIngestionKey, logsPipelineId, logsHost,
-      metricsEnabled, metricsIngestionKey, metricsPipelineId, metricsHost,
-      tracesEnabled, tracesIngestionKey, tracesPipelineId, tracesHost
-    } = req.body;
+    // Enhanced configuration validation with detailed error messages
+    const validateConfiguration = async () => {
+      try {
+        const otelConfig = configManager.getConfig('otel');
+        
+        if (!otelConfig.enabled) {
+          return {
+            valid: false,
+            error: 'OTEL is not enabled in configuration',
+            suggestion: 'Please enable OTEL in the Agents configuration page'
+          };
+        }
+        
+        const { serviceName, tags, pipelines } = otelConfig;
+        const debugLevel = req.body.debugLevel || 'info';
+        
+        // Extract pipeline configurations
+        const logsEnabled = pipelines?.logs?.enabled || false;
+        const logsIngestionKey = pipelines?.logs?.ingestionKey || '';
+        const logsPipelineId = pipelines?.logs?.pipelineId || '';
+        const logsHost = pipelines?.logs?.host || '';
+        
+        const metricsEnabled = pipelines?.metrics?.enabled || false;
+        const metricsIngestionKey = pipelines?.metrics?.ingestionKey || '';
+        const metricsPipelineId = pipelines?.metrics?.pipelineId || '';
+        const metricsHost = pipelines?.metrics?.host || '';
+        
+        const tracesEnabled = pipelines?.traces?.enabled || false;
+        const tracesIngestionKey = pipelines?.traces?.ingestionKey || '';
+        const tracesPipelineId = pipelines?.traces?.pipelineId || '';
+        const tracesHost = pipelines?.traces?.host || '';
+        
+        // Enhanced validation with specific error messages
+        const issues = [];
+        
+        // Check for at least one enabled pipeline
+        if (!logsEnabled && !metricsEnabled && !tracesEnabled) {
+          issues.push({
+            pipeline: 'general',
+            error: 'No pipelines are enabled',
+            suggestion: 'Enable at least one pipeline (logs, metrics, or traces) in the configuration'
+          });
+        }
+        
+        // Validate individual pipelines
+        if (logsEnabled) {
+          if (!logsIngestionKey) {
+            issues.push({
+              pipeline: 'logs',
+              error: 'Logs pipeline enabled but no ingestion key provided',
+              suggestion: 'Please provide a valid Mezmo logs ingestion key'
+            });
+          } else if (!/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[A-Za-z0-9+/]+=*)$/.test(logsIngestionKey)) {
+            issues.push({
+              pipeline: 'logs',
+              error: 'Invalid logs ingestion key format',
+              suggestion: 'Ingestion key must be a valid UUID format (e.g., 12345678-1234-1234-1234-123456789abc) or base64 encoded string'
+            });
+          }
+          if (!logsHost) {
+            issues.push({
+              pipeline: 'logs',
+              error: 'Logs pipeline enabled but no host provided',
+              suggestion: 'Please specify the Mezmo logs host URL (e.g., logs.mezmo.com)'
+            });
+          }
+        }
+        
+        if (metricsEnabled) {
+          if (!metricsIngestionKey) {
+            issues.push({
+              pipeline: 'metrics',
+              error: 'Metrics pipeline enabled but no ingestion key provided',
+              suggestion: 'Please provide a valid Mezmo metrics ingestion key'
+            });
+          } else if (!/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[A-Za-z0-9+/]+=*)$/.test(metricsIngestionKey)) {
+            issues.push({
+              pipeline: 'metrics',
+              error: 'Invalid metrics ingestion key format',
+              suggestion: 'Ingestion key must be a valid UUID format (e.g., 12345678-1234-1234-1234-123456789abc) or base64 encoded string'
+            });
+          }
+          if (!metricsHost) {
+            issues.push({
+              pipeline: 'metrics',
+              error: 'Metrics pipeline enabled but no host provided',
+              suggestion: 'Please specify the Mezmo metrics host URL (e.g., metrics.mezmo.com)'
+            });
+          }
+        }
+        
+        if (tracesEnabled) {
+          if (!tracesIngestionKey) {
+            issues.push({
+              pipeline: 'traces',
+              error: 'Traces pipeline enabled but no ingestion key provided',
+              suggestion: 'Please provide a valid Mezmo traces ingestion key'
+            });
+          } else if (!/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[A-Za-z0-9+/]+=*)$/.test(tracesIngestionKey)) {
+            issues.push({
+              pipeline: 'traces',
+              error: 'Invalid traces ingestion key format',
+              suggestion: 'Ingestion key must be a valid UUID format (e.g., 12345678-1234-1234-1234-123456789abc) or base64 encoded string'
+            });
+          }
+          if (!tracesHost) {
+            issues.push({
+              pipeline: 'traces',
+              error: 'Traces pipeline enabled but no host provided',
+              suggestion: 'Please specify the Mezmo traces host URL (e.g., traces.mezmo.com)'
+            });
+          }
+        }
+        
+        if (issues.length > 0) {
+          return {
+            valid: false,
+            error: 'Configuration validation failed',
+            issues,
+            suggestion: 'Please fix the configuration issues listed above'
+          };
+        }
+        
+        return {
+          valid: true,
+          config: {
+            serviceName, tags, debugLevel,
+            logsEnabled, logsIngestionKey, logsPipelineId, logsHost,
+            metricsEnabled, metricsIngestionKey, metricsPipelineId, metricsHost,
+            tracesEnabled, tracesIngestionKey, tracesPipelineId, tracesHost
+          }
+        };
+        
+      } catch (configError) {
+        return {
+          valid: false,
+          error: 'Failed to load OTEL configuration from ConfigManager',
+          details: configError.message,
+          suggestion: 'Check that ConfigManager is properly initialized and OTEL configuration exists'
+        };
+      }
+    };
     
-    console.log(`🔧 Extracted Parameters: ${JSON.stringify({
-      serviceName, tags, debugLevel,
-      logsEnabled, hasLogsKey: !!logsIngestionKey,
-      metricsEnabled, hasMetricsKey: !!metricsIngestionKey, 
-      tracesEnabled, hasTracesKey: !!tracesIngestionKey
-    })}`);
+    // Use retry utility for configuration validation with enhanced error handling
+    const validationResult = await retryOperation(
+      validateConfiguration,
+      2, // Max 2 retries for config validation
+      500, // 500ms delay
+      'OTEL configuration validation'
+    );
     
-    // Validate that at least one pipeline is enabled with a key
-    const hasValidLogs = logsEnabled && logsIngestionKey;
-    const hasValidMetrics = metricsEnabled && metricsIngestionKey;
-    const hasValidTraces = tracesEnabled && tracesIngestionKey;
-    
-    if (!hasValidLogs && !hasValidMetrics && !hasValidTraces) {
-      return res.status(400).json({ 
-        error: 'At least one pipeline must be enabled with a valid ingestion key' 
+    if (!validationResult.valid) {
+      console.error('❌ OTEL configuration validation failed:', validationResult);
+      return res.status(400).json({
+        error: validationResult.error,
+        details: validationResult.details,
+        issues: validationResult.issues,
+        suggestion: validationResult.suggestion,
+        timestamp: new Date().toISOString()
       });
     }
     
-    const configDir = '/etc/otelcol';
-    const configFile = `${configDir}/config.yaml`;
+    const config = validationResult.config;
+    console.log(`🔧 ConfigManager Parameters: ${JSON.stringify({
+      serviceName: config.serviceName, 
+      tags: config.tags, 
+      debugLevel: config.debugLevel,
+      logsEnabled: config.logsEnabled, 
+      hasLogsKey: !!config.logsIngestionKey,
+      metricsEnabled: config.metricsEnabled, 
+      hasMetricsKey: !!config.metricsIngestionKey,
+      tracesEnabled: config.tracesEnabled, 
+      hasTracesKey: !!config.tracesIngestionKey
+    })}`);
     
-    // Ensure config directory exists
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
+    
+    // Enhanced configuration file generation with retry logic
+    const generateConfigFile = async () => {
+      try {
+        const configDir = '/tmp/codeuser/otelcol';
+        const configFile = `${configDir}/config.yaml`;
+        
+        // Ensure config directory exists with proper permissions
+        try {
+          if (!fs.existsSync(configDir)) {
+            fs.mkdirSync(configDir, { recursive: true, mode: 0o755 });
+            console.log('📁 Created OTEL config directory:', configDir);
+          }
+        } catch (dirError) {
+          throw new Error(`Failed to create config directory: ${dirError.message}`);
+        }
+        
+        // Generate dynamic multi-pipeline configuration with enhanced validation
+        let otelConfig;
+        try {
+          otelConfig = generateOTELConfig({
+            serviceName: config.serviceName || 'restaurant-app',
+            tags: config.tags || 'restaurant-app,otel',
+            debugLevel: config.debugLevel || 'info',
+            // Logs pipeline
+            logsEnabled: config.logsEnabled,
+            logsIngestionKey: config.logsIngestionKey,
+            logsPipelineId: config.logsPipelineId,
+            logsHost: config.logsHost,
+            // Metrics pipeline
+            metricsEnabled: config.metricsEnabled,
+            metricsIngestionKey: config.metricsIngestionKey,
+            metricsPipelineId: config.metricsPipelineId,
+            metricsHost: config.metricsHost,
+            // Traces pipeline
+            tracesEnabled: config.tracesEnabled,
+            tracesIngestionKey: config.tracesIngestionKey,
+            tracesPipelineId: config.tracesPipelineId,
+            tracesHost: config.tracesHost
+          });
+        } catch (genError) {
+          throw new Error(`Failed to generate OTEL configuration: ${genError.message}`);
+        }
+        
+        // Validate generated configuration structure
+        if (!otelConfig || typeof otelConfig !== 'object') {
+          throw new Error('Generated OTEL configuration is invalid or empty');
+        }
+        
+        if (!otelConfig.receivers || !otelConfig.processors || !otelConfig.exporters || !otelConfig.service) {
+          throw new Error('Generated OTEL configuration is missing required sections (receivers, processors, exporters, service)');
+        }
+        
+        // Convert to YAML with error handling
+        let yamlContent;
+        try {
+          yamlContent = yaml.dump(otelConfig, { indent: 2, lineWidth: 120 });
+        } catch (yamlError) {
+          throw new Error(`Failed to convert configuration to YAML: ${yamlError.message}`);
+        }
+        
+        // Write configuration file with atomic operation
+        const tempFile = `${configFile}.tmp`;
+        try {
+          fs.writeFileSync(tempFile, yamlContent, { mode: 0o644 });
+          
+          // Validate written file can be read
+          const writtenContent = fs.readFileSync(tempFile, 'utf8');
+          if (!writtenContent || writtenContent.length === 0) {
+            throw new Error('Written configuration file is empty');
+          }
+          
+          // Atomic move to final location
+          fs.renameSync(tempFile, configFile);
+          console.log('📝 OTEL configuration file written successfully:', configFile);
+        } catch (writeError) {
+          // Clean up temp file if exists
+          try {
+            if (fs.existsSync(tempFile)) {
+              fs.unlinkSync(tempFile);
+            }
+          } catch (cleanupError) {
+            // Ignore cleanup errors
+          }
+          throw new Error(`Failed to write configuration file: ${writeError.message}`);
+        }
+        
+        return {
+          success: true,
+          configFile,
+          pipelines: {
+            logs: config.logsEnabled,
+            metrics: config.metricsEnabled,
+            traces: config.tracesEnabled
+          }
+        };
+        
+      } catch (configError) {
+        return {
+          success: false,
+          error: 'Configuration file generation failed',
+          details: configError.message,
+          suggestion: 'Check file system permissions and disk space'
+        };
+      }
+    };
+    
+    // Generate configuration with retry logic
+    const configResult = await retryOperation(
+      generateConfigFile,
+      3, // Max 3 retries for file operations
+      1000, // 1 second delay
+      'OTEL configuration file generation'
+    );
+    
+    if (!configResult.success) {
+      console.error('❌ Failed to generate OTEL configuration:', configResult);
+      return res.status(500).json({
+        error: configResult.error,
+        details: configResult.details,
+        suggestion: configResult.suggestion,
+        timestamp: new Date().toISOString()
+      });
     }
     
-    // Generate dynamic multi-pipeline configuration
-    const config = generateOTELConfig({
-      serviceName: serviceName || 'restaurant-app',
-      tags: tags || 'restaurant-app,otel',
-      debugLevel: debugLevel || 'info',
-      // Logs pipeline
-      logsEnabled: hasValidLogs,
-      logsIngestionKey,
-      logsPipelineId,
-      logsHost,
-      // Metrics pipeline
-      metricsEnabled: hasValidMetrics,
-      metricsIngestionKey,
-      metricsPipelineId,
-      metricsHost,
-      // Traces pipeline
-      tracesEnabled: hasValidTraces,
-      tracesIngestionKey,
-      tracesPipelineId,
-      tracesHost
-    });
-    
-    // Write configuration file
-    const yamlContent = yaml.dump(config, { indent: 2 });
-    fs.writeFileSync(configFile, yamlContent);
+    const configFile = configResult.configFile;
     
     console.log('📊 Multi-Pipeline OpenTelemetry Collector configuration updated');
-    console.log('   Logs Pipeline:', hasValidLogs ? `✅ ${logsPipelineId || 'Legacy'}` : '❌ Disabled');
-    console.log('   Metrics Pipeline:', hasValidMetrics ? `✅ ${metricsPipelineId || 'Legacy'}` : '❌ Disabled');
-    console.log('   Traces Pipeline:', hasValidTraces ? `✅ ${tracesPipelineId || 'Legacy'}` : '❌ Disabled');
+    console.log('   Logs Pipeline:', configResult.pipelines.logs ? `✅ ${config.logsPipelineId || 'Legacy'}` : '❌ Disabled');
+    console.log('   Metrics Pipeline:', configResult.pipelines.metrics ? `✅ ${config.metricsPipelineId || 'Legacy'}` : '❌ Disabled');
+    console.log('   Traces Pipeline:', configResult.pipelines.traces ? `✅ ${config.tracesPipelineId || 'Legacy'}` : '❌ Disabled');
     
-    res.json({
+    // Enhanced collector restart with retry logic and recovery procedures
+    const manageCollectorRestart = async () => {
+      const pidFile = '/tmp/codeuser/otel-collector.pid';
+      const logFile = '/tmp/codeuser/otel-collector.log';
+      let wasRunning = false;
+      
+      // Check if collector is currently running
+      if (fs.existsSync(pidFile)) {
+        try {
+          const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+          if (isNaN(pid)) {
+            throw new Error('Invalid PID in file');
+          }
+          
+          process.kill(pid, 0); // Check if process exists
+          wasRunning = true;
+          console.log(`🔍 OTEL Collector is running with PID ${pid}, preparing restart...`);
+          
+        } catch (processError) {
+          console.log('🧹 Cleaning up stale PID file (process not running)');
+          try {
+            fs.unlinkSync(pidFile);
+          } catch (unlinkError) {
+            // PID file already gone
+          }
+        }
+      }
+      
+      // Stop existing collector if running
+      if (wasRunning) {
+        try {
+          const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+          console.log(`🛑 Stopping OTEL Collector (PID ${pid}) for configuration update...`);
+          
+          process.kill(pid, 'SIGTERM');
+          
+          // Wait for graceful shutdown with timeout
+          let shutdownComplete = false;
+          for (let i = 0; i < 5; i++) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            try {
+              process.kill(pid, 0);
+              console.log(`   Waiting for graceful shutdown... (${i + 1}/5)`);
+            } catch (error) {
+              shutdownComplete = true;
+              break;
+            }
+          }
+          
+          // Force kill if still running
+          if (!shutdownComplete) {
+            console.log('   Forcing shutdown with SIGKILL...');
+            try {
+              process.kill(pid, 'SIGKILL');
+            } catch (forceError) {
+              // Process already dead
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+          
+          // Clean up PID file
+          if (fs.existsSync(pidFile)) {
+            fs.unlinkSync(pidFile);
+          }
+          
+          console.log('✅ OTEL Collector stopped successfully');
+          
+        } catch (stopError) {
+          console.warn(`⚠️  Warning during collector stop: ${stopError.message}`);
+          // Ensure PID file cleanup
+          if (fs.existsSync(pidFile)) {
+            try {
+              fs.unlinkSync(pidFile);
+            } catch (cleanupError) {
+              // Ignore cleanup errors
+            }
+          }
+        }
+      }
+      
+      // Start/restart the collector if it was running or has valid configuration
+      const shouldStart = wasRunning || (configResult.pipelines.logs || configResult.pipelines.metrics || configResult.pipelines.traces);
+      
+      if (shouldStart) {
+        // Ensure log directory exists
+        const logDir = '/tmp/codeuser';
+        if (!fs.existsSync(logDir)) {
+          fs.mkdirSync(logDir, { recursive: true });
+        }
+        
+        // Clear previous log file to avoid confusion
+        if (fs.existsSync(logFile)) {
+          try {
+            fs.unlinkSync(logFile);
+          } catch (logCleanError) {
+            // Ignore log cleanup errors
+          }
+        }
+        
+        console.log(`🚀 ${wasRunning ? 'Restarting' : 'Starting'} OTEL Collector with new configuration...`);
+        
+        const startCommand = `nohup /usr/local/bin/otelcol-contrib --config="${configFile}" > ${logFile} 2>&1 & echo $! > ${pidFile}`;
+        
+        try {
+          execSync(startCommand, { shell: '/bin/bash' });
+          console.log('   Start command executed successfully');
+          
+          // Wait and verify startup with enhanced checking
+          let startupSuccessful = false;
+          let newPid = null;
+          
+          for (let attempt = 0; attempt < 5; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            if (fs.existsSync(pidFile)) {
+              try {
+                newPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+                if (!isNaN(newPid)) {
+                  process.kill(newPid, 0); // Verify process is running
+                  startupSuccessful = true;
+                  break;
+                }
+              } catch (verifyError) {
+                console.log(`   Startup verification attempt ${attempt + 1}/5 - process not ready yet`);
+              }
+            }
+          }
+          
+          if (startupSuccessful && newPid) {
+            // Perform health check after startup
+            try {
+              const healthCheck = await checkOtelCollectorHealth(newPid, 3000);
+              
+              if (healthCheck.healthy === true) {
+                console.log(`✅ OTEL Collector ${wasRunning ? 'restarted' : 'started'} successfully with PID ${newPid} and is healthy`);
+                return {
+                  success: true,
+                  pid: newPid,
+                  action: wasRunning ? 'restarted' : 'started',
+                  health: healthCheck.reason
+                };
+              } else {
+                console.warn(`⚠️  OTEL Collector started but health check failed: ${healthCheck.reason}`);
+                return {
+                  success: true,
+                  pid: newPid,
+                  action: wasRunning ? 'restarted' : 'started',
+                  warning: healthCheck.reason
+                };
+              }
+            } catch (healthError) {
+              console.warn(`⚠️  OTEL Collector started but health check error: ${healthError.message}`);
+              return {
+                success: true,
+                pid: newPid,
+                action: wasRunning ? 'restarted' : 'started',
+                warning: 'Health check failed'
+              };
+            }
+          } else {
+            throw new Error('Process did not start successfully within timeout period');
+          }
+          
+        } catch (startError) {
+          console.error(`❌ Failed to ${wasRunning ? 'restart' : 'start'} OTEL Collector:`, startError.message);
+          
+          // Check logs for detailed error information
+          let errorLogs = 'No logs available';
+          if (fs.existsSync(logFile)) {
+            try {
+              const logs = fs.readFileSync(logFile, 'utf8');
+              errorLogs = logs.split('\n').slice(-10).join('\n');
+            } catch (logReadError) {
+              errorLogs = 'Could not read error logs';
+            }
+          }
+          
+          return {
+            success: false,
+            error: `Failed to ${wasRunning ? 'restart' : 'start'} OTEL Collector`,
+            details: startError.message,
+            logs: errorLogs,
+            suggestion: 'Check OTEL Collector binary exists at /usr/local/bin/otelcol-contrib and configuration is valid'
+          };
+        }
+      } else {
+        console.log('ℹ️  No pipelines enabled, OTEL Collector will not be started');
+        return {
+          success: true,
+          action: 'configuration_only',
+          message: 'Configuration saved but collector not started (no pipelines enabled)'
+        };
+      }
+    };
+    
+    // Execute collector management with retry logic
+    const collectorResult = await retryOperation(
+      manageCollectorRestart,
+      2, // Max 2 retries for process management
+      2000, // 2 second delay between retries
+      'OTEL collector restart'
+    );
+    
+    if (!collectorResult.success) {
+      console.error('❌ Collector management failed:', collectorResult);
+      return res.status(500).json({
+        success: false,
+        error: collectorResult.error,
+        details: collectorResult.details,
+        logs: collectorResult.logs,
+        suggestion: collectorResult.suggestion,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Enhanced success response with detailed information
+    const responseData = {
       success: true,
-      message: 'Multi-pipeline OTEL Collector configuration saved',
-      enabledPipelines: { 
-        logs: hasValidLogs, 
-        metrics: hasValidMetrics, 
-        traces: hasValidTraces 
-      },
+      message: 'Multi-pipeline OTEL Collector configuration saved and applied successfully',
+      configFile: configFile,
+      enabledPipelines: configResult.pipelines,
       pipelineDetails: {
-        logs: hasValidLogs ? { pipelineId: logsPipelineId, host: logsHost } : null,
-        metrics: hasValidMetrics ? { pipelineId: metricsPipelineId, host: metricsHost } : null,
-        traces: hasValidTraces ? { pipelineId: tracesPipelineId, host: tracesHost } : null
+        logs: configResult.pipelines.logs ? { 
+          pipelineId: config.logsPipelineId || 'Legacy', 
+          host: config.logsHost,
+          enabled: true
+        } : { enabled: false },
+        metrics: configResult.pipelines.metrics ? { 
+          pipelineId: config.metricsPipelineId || 'Legacy', 
+          host: config.metricsHost,
+          enabled: true
+        } : { enabled: false },
+        traces: configResult.pipelines.traces ? { 
+          pipelineId: config.tracesPipelineId || 'Legacy', 
+          host: config.tracesHost,
+          enabled: true
+        } : { enabled: false }
+      },
+      collector: {
+        action: collectorResult.action,
+        pid: collectorResult.pid || null,
+        health: collectorResult.health || null,
+        warning: collectorResult.warning || null,
+        message: collectorResult.message || null
       },
       timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error('Error configuring OTEL Collector:', error);
+    };
     
-    // Provide detailed error information for debugging
-    const errorDetails = {
-      error: 'Failed to configure OTEL Collector',
+    console.log('✅ OTEL configuration completed successfully:', {
+      action: collectorResult.action,
+      pipelines: Object.keys(configResult.pipelines).filter(key => configResult.pipelines[key]).length,
+      pid: collectorResult.pid
+    });
+    
+    res.json(responseData);
+    
+  } catch (error) {
+    console.error('❌ Critical error during OTEL configuration:', error);
+    
+    // Enhanced error response with comprehensive debugging information
+    const errorResponse = {
+      success: false,
+      error: 'Critical failure during OTEL configuration',
       details: error.message,
-      stack: error.stack,
+      suggestion: 'Check server logs for detailed error information and verify system requirements',
       timestamp: new Date().toISOString(),
-      requestBody: req.body,
-      systemInfo: {
-        configDir: '/etc/otelcol',
-        configDirExists: fs.existsSync('/etc/otelcol'),
-        yamlDumpAvailable: typeof yaml.dump === 'function',
+      debugInfo: {
+        errorType: error.constructor.name,
+        hasStack: !!error.stack,
+        configManager: {
+          available: !!configManager,
+          otelConfigExists: false
+        },
+        systemChecks: {
+          configDir: '/etc/otelcol',
+          configDirExists: false,
+          yamlAvailable: typeof yaml?.dump === 'function',
+          fsAvailable: typeof fs?.existsSync === 'function'
+        },
         permissions: null
       }
     };
     
-    // Check directory permissions
+    // Safe system checks with error handling
     try {
-      const stats = fs.statSync('/etc');
-      errorDetails.systemInfo.permissions = {
-        etcDir: stats.mode.toString(8),
-        canWrite: fs.constants.W_OK
-      };
-    } catch (permError) {
-      errorDetails.systemInfo.permissionsError = permError.message;
+      if (configManager) {
+        errorResponse.debugInfo.configManager.otelConfigExists = !!configManager.getConfig('otel');
+      }
+    } catch (configError) {
+      errorResponse.debugInfo.configManager.error = configError.message;
     }
     
-    console.error('OTEL Configuration Error Details:', errorDetails);
-    res.status(500).json(errorDetails);
+    try {
+      errorResponse.debugInfo.systemChecks.configDirExists = fs.existsSync('/etc/otelcol');
+    } catch (fsError) {
+      errorResponse.debugInfo.systemChecks.fsError = fsError.message;
+    }
+    
+    try {
+      const etcStats = fs.statSync('/etc');
+      errorResponse.debugInfo.permissions = {
+        etcDirectory: {
+          exists: true,
+          mode: etcStats.mode.toString(8),
+          readable: true,
+          writable: !!(etcStats.mode & fs.constants.S_IWUSR)
+        }
+      };
+    } catch (permError) {
+      errorResponse.debugInfo.permissions = {
+        etcDirectory: {
+          exists: false,
+          error: permError.message
+        }
+      };
+    }
+    
+    // Include stack trace only in development/debug mode
+    if (process.env.NODE_ENV !== 'production') {
+      errorResponse.stack = error.stack;
+    }
+    
+    console.error('OTEL Configuration Error Response:', JSON.stringify(errorResponse, null, 2));
+    res.status(500).json(errorResponse);
   }
 });
 
-app.post('/api/otel/start', (req, res) => {
+app.post('/api/otel/start', async (req, res) => {
   try {
-    // Check if already running
+    // Check if already running with health checking (like Mezmo pattern)
     const pidFile = '/tmp/codeuser/otel-collector.pid';
     if (fs.existsSync(pidFile)) {
       const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
       try {
         process.kill(pid, 0);
-        return res.json({ message: 'OTEL Collector is already running', pid });
+        console.log(`⚠️  OTEL Collector already running (PID: ${pid}), checking health...`);
+        
+        // Check if the running collector is healthy
+        const healthCheck = await checkOtelCollectorHealth(pid, 3000);
+        if (healthCheck.healthy === true) {
+          console.log('✅ Running OTEL Collector is healthy, no restart needed');
+          return res.json({ 
+            message: 'OTEL Collector is already running and healthy', 
+            pid,
+            health: healthCheck.reason,
+            alreadyRunning: true,
+            timestamp: new Date().toISOString()
+          });
+        } else if (healthCheck.healthy === false) {
+          console.log(`❌ Running OTEL Collector is unhealthy: ${healthCheck.reason}`);
+          console.log('🔄 Attempting to restart collector...');
+          
+          // Kill unhealthy collector and restart
+          try {
+            process.kill(pid, 'SIGTERM');
+            setTimeout(() => {
+              try { process.kill(pid, 'SIGKILL'); } catch(e) {}
+            }, 2000);
+          } catch (killError) {
+            console.log('OTEL Collector process already dead');
+          }
+          
+          // Clean up and continue to restart logic below
+          try {
+            fs.unlinkSync(pidFile);
+          } catch (unlinkError) {
+            console.log('PID file already removed');
+          }
+          console.log('🔄 Proceeding with fresh start...');
+        } else {
+          console.log(`⚠️  OTEL Collector health unclear: ${healthCheck.reason}`);
+          console.log('🔄 Restarting to ensure healthy state...');
+          
+          // Restart for unclear health status
+          try {
+            process.kill(pid, 'SIGTERM');
+            setTimeout(() => {
+              try { process.kill(pid, 'SIGKILL'); } catch(e) {}
+            }, 2000);
+            fs.unlinkSync(pidFile);
+          } catch (error) {
+            console.log('Error during restart preparation:', error.message);
+          }
+        }
+        
       } catch (error) {
-        // Process not running, clean up
-        fs.unlinkSync(pidFile);
+        // Process not running, clean up stale PID file
+        console.log('🧹 Cleaning up stale PID file');
+        try {
+          fs.unlinkSync(pidFile);
+        } catch (unlinkError) {
+          // PID file already gone
+        }
       }
     }
     
-    // Start the collector
+    // Check configuration
     const logFile = '/tmp/codeuser/otel-collector.log';
     const configFile = '/etc/otelcol/config.yaml';
     
@@ -2210,34 +3061,138 @@ app.post('/api/otel/start', (req, res) => {
       return res.status(400).json({ error: 'OTEL Collector not configured. Please configure first.' });
     }
     
-    // Start collector
+    // Ensure log directory exists
+    const logDir = '/tmp/codeuser';
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    
+    // Start collector with better error handling
     const startCommand = `nohup /usr/local/bin/otelcol-contrib --config="${configFile}" > ${logFile} 2>&1 & echo $! > ${pidFile}`;
     
-    execSync(startCommand, { shell: '/bin/bash' });
+    try {
+      execSync(startCommand, { shell: '/bin/bash' });
+      console.log('🚀 Started OTEL Collector process');
+    } catch (execError) {
+      console.error('❌ Failed to execute start command:', execError.message);
+      return res.status(500).json({ 
+        error: 'Failed to execute OTEL Collector start command',
+        details: execError.message 
+      });
+    }
     
-    // Give it a moment to start
-    setTimeout(() => {
+    // Wait and verify startup with multiple checks
+    let pid = null;
+    let startupSuccessful = false;
+    
+    for (let i = 0; i < 5; i++) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
       if (fs.existsSync(pidFile)) {
-        const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
-        console.log('✅ OTEL Collector started with PID:', pid);
-        res.json({ 
+        pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+        try {
+          process.kill(pid, 0); // Verify process is running
+          startupSuccessful = true;
+          break;
+        } catch (error) {
+          // Process died, continue waiting
+          console.warn(`⚠️ OTEL Collector startup check ${i + 1} failed`);
+        }
+      }
+    }
+    
+    if (startupSuccessful && pid) {
+      // Perform health check after successful startup (like Mezmo pattern)
+      try {
+        console.log('🔍 Verifying OTEL Collector health after startup...');
+        const healthCheck = await checkOtelCollectorHealth(pid, 2000);
+        
+        if (healthCheck.healthy === true) {
+          console.log('✅ OTEL Collector started successfully and is healthy');
+          return res.json({ 
+            success: true,
+            message: 'OTEL Collector started successfully and is healthy', 
+            pid,
+            health: healthCheck.reason,
+            timestamp: new Date().toISOString()
+          });
+        } else if (healthCheck.healthy === false) {
+          console.log(`❌ OTEL Collector started but is unhealthy: ${healthCheck.reason}`);
+          
+          // Get recent logs for debugging
+          let recentLogs = 'No logs available';
+          if (fs.existsSync(logFile)) {
+            try {
+              const logs = fs.readFileSync(logFile, 'utf8');
+              recentLogs = logs.split('\n').slice(-10).join('\n');
+            } catch (logError) {
+              recentLogs = 'Could not read logs';
+            }
+          }
+          
+          return res.status(500).json({ 
+            error: 'OTEL Collector started but is not healthy',
+            details: healthCheck.reason,
+            logs: recentLogs,
+            pid,
+            timestamp: new Date().toISOString()
+          });
+        } else {
+          console.log(`⚠️  OTEL Collector health unclear: ${healthCheck.reason}`);
+          return res.json({ 
+            success: true,
+            message: 'OTEL Collector started - health status unclear', 
+            pid,
+            health: healthCheck.reason,
+            warning: 'Health check timeout - monitor collector manually',
+            timestamp: new Date().toISOString()
+          });
+        }
+      } catch (healthError) {
+        console.warn('Health check failed after startup:', healthError);
+        return res.json({ 
           success: true,
-          message: 'OTEL Collector started', 
+          message: 'OTEL Collector started - health check failed', 
           pid,
+          warning: `Health check error: ${healthError.message}`,
           timestamp: new Date().toISOString()
         });
-      } else {
-        res.status(500).json({ error: 'Failed to start OTEL Collector' });
       }
-    }, 1000);
+    } else {
+      // Cleanup failed start
+      if (fs.existsSync(pidFile)) {
+        fs.unlinkSync(pidFile);
+      }
+      
+      // Try to read logs for error details
+      let errorDetails = 'Unknown startup failure';
+      if (fs.existsSync(logFile)) {
+        try {
+          const logs = fs.readFileSync(logFile, 'utf8');
+          const recentLogs = logs.split('\n').slice(-10).join('\n');
+          errorDetails = recentLogs || 'No error details in logs';
+        } catch (logError) {
+          errorDetails = 'Could not read error logs';
+        }
+      }
+      
+      console.error('❌ OTEL Collector failed to start:', errorDetails);
+      res.status(500).json({ 
+        error: 'OTEL Collector failed to start',
+        details: errorDetails
+      });
+    }
     
   } catch (error) {
     console.error('Error starting OTEL Collector:', error);
-    res.status(500).json({ error: 'Failed to start OTEL Collector' });
+    res.status(500).json({ 
+      error: 'Failed to start OTEL Collector',
+      details: error.message 
+    });
   }
 });
 
-app.post('/api/otel/stop', (req, res) => {
+app.post('/api/otel/stop', async (req, res) => {
   try {
     const pidFile = '/tmp/codeuser/otel-collector.pid';
     
@@ -2248,18 +3203,58 @@ app.post('/api/otel/stop', (req, res) => {
     const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
     
     try {
+      // Check if process exists first
+      process.kill(pid, 0);
+      
+      // Send SIGTERM for graceful shutdown
       process.kill(pid, 'SIGTERM');
-      fs.unlinkSync(pidFile);
-      console.log('🛑 OTEL Collector stopped');
+      console.log('🛑 Sent SIGTERM to OTEL Collector PID:', pid);
+      
+      // Wait for graceful shutdown (improved process cleanup)
+      let shutdownComplete = false;
+      for (let i = 0; i < 10; i++) { // Wait up to 10 seconds
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        try {
+          process.kill(pid, 0); // Check if still running
+        } catch (error) {
+          // Process has stopped
+          shutdownComplete = true;
+          break;
+        }
+      }
+      
+      // If still running, force kill
+      if (!shutdownComplete) {
+        try {
+          process.kill(pid, 'SIGKILL');
+          console.log('⚠️ Forced OTEL Collector shutdown with SIGKILL');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (killError) {
+          // Process already gone
+        }
+      }
+      
+      // Clean up PID file
+      if (fs.existsSync(pidFile)) {
+        fs.unlinkSync(pidFile);
+      }
+      
+      console.log('🛑 OTEL Collector stopped successfully');
       res.json({ 
         success: true,
         message: 'OTEL Collector stopped',
+        gracefulShutdown: shutdownComplete,
         timestamp: new Date().toISOString()
       });
     } catch (error) {
-      // Process might already be dead
-      fs.unlinkSync(pidFile);
-      res.json({ message: 'OTEL Collector was not running' });
+      // Process might already be dead, clean up PID file
+      if (fs.existsSync(pidFile)) {
+        fs.unlinkSync(pidFile);
+      }
+      res.json({ 
+        message: 'OTEL Collector was not running',
+        cleaned: true 
+      });
     }
   } catch (error) {
     console.error('Error stopping OTEL Collector:', error);
@@ -2416,6 +3411,142 @@ app.get('/api/otel/debug', (req, res) => {
   } catch (error) {
     console.error('Error getting OTEL debug info:', error);
     res.status(500).json({ error: 'Failed to get debug information' });
+  }
+});
+
+// OTEL connectivity testing endpoint (similar to Mezmo test pattern)
+app.post('/api/otel/test', async (req, res) => {
+  try {
+    const { pipelineType, ingestionKey, host, pipelineId } = req.body;
+    
+    if (!pipelineType || !['logs', 'metrics', 'traces'].includes(pipelineType)) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Valid pipeline type (logs, metrics, traces) is required' 
+      });
+    }
+    
+    if (!ingestionKey) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Ingestion key is required for connectivity testing' 
+      });
+    }
+    
+    if (!host) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Host URL is required for connectivity testing' 
+      });
+    }
+    
+    console.log(`🔍 Testing OTEL ${pipelineType} pipeline connectivity to ${host}`);
+    
+    // Test different endpoints based on pipeline type
+    let testEndpoint;
+    let testHeaders = {
+      'Authorization': `Bearer ${ingestionKey}`,
+      'Content-Type': 'application/json'
+    };
+    
+    if (pipelineId) {
+      testHeaders['X-Pipeline-Id'] = pipelineId;
+    }
+    
+    // Determine test endpoint and payload based on pipeline type
+    switch (pipelineType) {
+      case 'logs':
+        testEndpoint = host.includes('mezmo.com') || host.includes('logdna.com') 
+          ? `${host.startsWith('http') ? host : `https://${host}`}/logs/ingest`
+          : `${host.startsWith('http') ? host : `https://${host}`}/v1/logs`;
+        break;
+      case 'metrics':
+        testEndpoint = host.includes('mezmo.com') || host.includes('logdna.com')
+          ? `${host.startsWith('http') ? host : `https://${host}`}/metrics/ingest`
+          : `${host.startsWith('http') ? host : `https://${host}`}/v1/metrics`;
+        break;
+      case 'traces':
+        testEndpoint = host.includes('mezmo.com') || host.includes('logdna.com')
+          ? `${host.startsWith('http') ? host : `https://${host}`}/traces/ingest`
+          : `${host.startsWith('http') ? host : `https://${host}`}/v1/traces`;
+        break;
+    }
+    
+    // Create a minimal test payload
+    const testPayload = {
+      timestamp: new Date().toISOString(),
+      message: `OTEL ${pipelineType} connectivity test`,
+      level: 'info',
+      source: 'otel-connectivity-test',
+      app: 'restaurant-app',
+      env: 'test'
+    };
+    
+    // Perform the connectivity test
+    const testStartTime = Date.now();
+    let testResult;
+    
+    try {
+      const testResponse = await fetch(testEndpoint, {
+        method: 'POST',
+        headers: testHeaders,
+        body: JSON.stringify(testPayload),
+        timeout: 10000 // 10 second timeout
+      });
+      
+      const responseTime = Date.now() - testStartTime;
+      const responseText = await testResponse.text().catch(() => '');
+      
+      testResult = {
+        success: testResponse.ok,
+        status: testResponse.status,
+        statusText: testResponse.statusText,
+        responseTime: responseTime,
+        endpoint: testEndpoint,
+        headers: Object.fromEntries(testResponse.headers.entries()),
+        response: responseText.length > 500 ? responseText.substring(0, 500) + '...' : responseText
+      };
+      
+      if (testResponse.ok) {
+        console.log(`✅ OTEL ${pipelineType} connectivity test successful (${responseTime}ms)`);
+      } else {
+        console.log(`❌ OTEL ${pipelineType} connectivity test failed: ${testResponse.status} ${testResponse.statusText}`);
+      }
+      
+    } catch (error) {
+      const responseTime = Date.now() - testStartTime;
+      testResult = {
+        success: false,
+        error: error.message,
+        errorType: error.constructor.name,
+        responseTime: responseTime,
+        endpoint: testEndpoint
+      };
+      
+      console.log(`❌ OTEL ${pipelineType} connectivity test error:`, error.message);
+    }
+    
+    // Return comprehensive test results
+    res.json({
+      success: testResult.success,
+      pipelineType,
+      testResult,
+      configuration: {
+        host,
+        ingestionKey: ingestionKey ? `${ingestionKey.substring(0, 8)}...` : 'Not provided',
+        pipelineId: pipelineId || 'Not specified',
+        endpoint: testEndpoint
+      },
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('Error in OTEL connectivity test:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error during connectivity test',
+      details: error.message 
+    });
   }
 });
 

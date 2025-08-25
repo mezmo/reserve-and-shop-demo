@@ -66,6 +66,11 @@ class ConfigManager {
     this.maxBufferSize = 1000; // Maximum number of log entries per buffer
     
     console.log('🔧 ConfigManager initialized with in-memory storage');
+    
+    // Initialize from config file if available (async)
+    this.initializeFromFile().catch(error => {
+      console.error('🔧 Failed to initialize from file:', error);
+    });
   }
   
   static getInstance() {
@@ -73,6 +78,146 @@ class ConfigManager {
       ConfigManager.instance = new ConfigManager();
     }
     return ConfigManager.instance;
+  }
+  
+  // File Configuration Loading Methods
+  async loadFileDefaults() {
+    try {
+      // ES module compatible fs access using dynamic import
+      const fs = await import('fs');
+      const configPath = '/app/agents-config.json';
+      
+      if (fs.existsSync(configPath)) {
+        const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        
+        // Extract default configuration
+        const defaultConfigName = configData.defaultConfig || 'dev';
+        const defaultConfig = configData.configurations?.[defaultConfigName];
+        
+        if (defaultConfig) {
+          console.log(`🔧 Loading file defaults from configuration: ${defaultConfigName}`);
+          return {
+            defaultConfigName,
+            mezmo: defaultConfig.mezmo || null,
+            otel: defaultConfig.otel || null
+          };
+        }
+      }
+      
+      console.log('🔧 No config file found or no default configuration available');
+      return null;
+    } catch (error) {
+      console.error('🔧 Error loading file defaults:', error);
+      return null;
+    }
+  }
+  
+  async initializeFromFile() {
+    const fileDefaults = await this.loadFileDefaults();
+    
+    if (fileDefaults) {
+      // Initialize OTEL configuration from file defaults
+      if (fileDefaults.otel) {
+        this.configs.otel = this.mergeConfigurations(
+          fileDefaults.otel,
+          this.configs.otel,
+          this.getHardcodedDefaults('otel')
+        );
+        console.log('🔧 OTEL configuration initialized from file defaults');
+      }
+      
+      // Initialize Mezmo configuration from file defaults  
+      if (fileDefaults.mezmo) {
+        this.configs.mezmo = this.mergeConfigurations(
+          fileDefaults.mezmo,
+          this.configs.mezmo,
+          this.getHardcodedDefaults('mezmo')
+        );
+        console.log('🔧 Mezmo configuration initialized from file defaults');
+      }
+      
+      // Store the active config name
+      this.configs.activeConfig = fileDefaults.defaultConfigName;
+    }
+  }
+  
+  mergeConfigurations(fileConfig, storageConfig, hardcodedDefaults) {
+    // Priority order: file > storage > hardcoded defaults
+    const result = { ...hardcodedDefaults };
+    
+    // Apply storage config (overrides hardcoded)
+    if (storageConfig) {
+      Object.keys(storageConfig).forEach(key => {
+        if (storageConfig[key] !== null && storageConfig[key] !== undefined) {
+          if (typeof storageConfig[key] === 'object' && !Array.isArray(storageConfig[key])) {
+            result[key] = { ...result[key], ...storageConfig[key] };
+          } else {
+            result[key] = storageConfig[key];
+          }
+        }
+      });
+    }
+    
+    // Apply file config (overrides storage)
+    if (fileConfig) {
+      Object.keys(fileConfig).forEach(key => {
+        if (fileConfig[key] !== null && fileConfig[key] !== undefined) {
+          if (typeof fileConfig[key] === 'object' && !Array.isArray(fileConfig[key])) {
+            result[key] = { ...result[key], ...fileConfig[key] };
+          } else {
+            result[key] = fileConfig[key];
+          }
+        }
+      });
+    }
+    
+    return result;
+  }
+  
+  getHardcodedDefaults(type) {
+    const defaults = {
+      otel: {
+        enabled: false,
+        serviceName: 'restaurant-app-frontend',
+        pipelines: {
+          traces: {
+            enabled: false,
+            ingestionKey: '',
+            host: '',
+            pipelineId: ''
+          },
+          logs: {
+            enabled: false,
+            ingestionKey: '',
+            host: '',
+            pipelineId: ''
+          },
+          metrics: {
+            enabled: false,
+            ingestionKey: '',
+            host: '',
+            pipelineId: ''
+          }
+        },
+        tags: ''
+      },
+      mezmo: {
+        enabled: false,
+        ingestionKey: '',
+        host: 'logs.mezmo.com',
+        tags: ''
+      },
+      performance: {
+        enabled: true,
+        logLevel: 'info',
+        sampleRate: 1.0,
+        maxLogSize: 1000,
+        enableTracing: false,
+        enableMetrics: true
+      }
+    };
+    
+    return defaults[type] || {};
   }
   
   // Configuration Methods

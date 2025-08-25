@@ -1,0 +1,21 @@
+{
+  "id": "approval_1755785997528_c21ixpq0h",
+  "title": "Requirements Phase: otel-mezmo-integration-fix - Ready for Review",
+  "filePath": ".spec-workflow/specs/otel-mezmo-integration-fix/requirements.md",
+  "type": "document",
+  "status": "needs-revision",
+  "createdAt": "2025-08-21T14:19:57.528Z",
+  "category": "spec",
+  "categoryName": "otel-mezmo-integration-fix",
+  "response": "Feedback Summary (1 comments):\n\nGeneral Comments:\n1. When it comes to configuring the OTEL agent it needs to leverage the config file as the default for populating the server side config, just like the mezmo agent.  This is important, because it helps keep the config in sync with the backend.\n\n",
+  "annotations": "{\n  \"decision\": \"needs-revision\",\n  \"comments\": [\n    {\n      \"type\": \"general\",\n      \"comment\": \"When it comes to configuring the OTEL agent it needs to leverage the config file as the default for populating the server side config, just like the mezmo agent.  This is important, because it helps keep the config in sync with the backend.\",\n      \"timestamp\": \"2025-08-21T14:56:10.916Z\",\n      \"id\": \"comment_1755788170916_5tret13r4\"\n    }\n  ],\n  \"summary\": \"Feedback Summary (1 comments):\\n\\nGeneral Comments:\\n1. When it comes to configuring the OTEL agent it needs to leverage the config file as the default for populating the server side config, just like the mezmo agent.  This is important, because it helps keep the config in sync with the backend.\\n\\n\",\n  \"timestamp\": \"2025-08-21T14:56:14.437Z\"\n}",
+  "respondedAt": "2025-08-21T14:56:14.449Z",
+  "comments": [
+    {
+      "type": "general",
+      "comment": "When it comes to configuring the OTEL agent it needs to leverage the config file as the default for populating the server side config, just like the mezmo agent.  This is important, because it helps keep the config in sync with the backend.",
+      "timestamp": "2025-08-21T14:56:10.916Z",
+      "id": "comment_1755788170916_5tret13r4"
+    }
+  ]
+}
