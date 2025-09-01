@@ -28,7 +28,7 @@
           },
           "traces": {
             "enabled": true,
-            "ingestionKey": "Vr4at+j5Y8G1jRiRGb/35yXbV+vUtOIoDtCXUXp3Da8=",
+            "ingestionKey": "PCptnL3ukYQec5SEDGoC+zaU643ugfQHIGM6/YhGNfs=",
             "pipelineId": "5c7e0854-7705-11f0-b8ef-0260f52d7685",
             "host": "pipeline.use.dev.logdna.net"
           }

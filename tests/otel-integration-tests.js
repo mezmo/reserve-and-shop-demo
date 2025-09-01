@@ -338,6 +338,118 @@ class OTELIntegrationTestSuite {
     }
   }
 
+  // Test 7: Trace Pipeline End-to-End Flow
+  async testTraceFlowEndToEnd() {
+    const startTime = Date.now();
+    
+    try {
+      // Test 7a: Verify trace configuration is loaded
+      const configResponse = await this.makeRequest('GET', '/api/config/otel');
+      const tracesEnabled = configResponse.ok && 
+                           configResponse.data.config?.pipelines?.traces?.enabled;
+      
+      this.logTest('7a. Traces Enabled in Config', tracesEnabled,
+                   tracesEnabled ? '' : 'Traces not enabled in configuration', Date.now() - startTime);
+      
+      if (!tracesEnabled) {
+        console.log('⚠️  Skipping trace tests - traces not enabled');
+        return;
+      }
+      
+      // Test 7b: Verify trace ingestion key and pipeline ID
+      const traceConfig = configResponse.data.config.pipelines.traces;
+      const hasValidCredentials = traceConfig.ingestionKey && 
+                                 traceConfig.pipelineId && 
+                                 traceConfig.host;
+      
+      this.logTest('7b. Valid Trace Credentials', hasValidCredentials,
+                   hasValidCredentials ? '' : 'Missing trace credentials', Date.now() - startTime);
+      
+      // Test 7c: Test trace proxy endpoint availability
+      const traceData = Buffer.from('test-trace-data');
+      const proxyResponse = await this.makeRequest('POST', '/api/traces/v1/traces', 
+        traceData, { 'Content-Type': 'application/x-protobuf' });
+      
+      // Should respond with 503 if collector is down (expected) or 200 if running
+      const proxyWorking = proxyResponse.status === 503 || proxyResponse.status === 200;
+      
+      this.logTest('7c. Trace Proxy Endpoint Working', proxyWorking,
+                   proxyWorking ? `Status: ${proxyResponse.status}` : 'Unexpected proxy response', 
+                   Date.now() - startTime);
+      
+      // Test 7d: Check trace-specific health monitoring
+      const statusResponse = await this.makeRequest('GET', '/api/otel/status');
+      const hasTraceHealth = statusResponse.ok && 
+                            statusResponse.data.enabledPipelines?.traces !== undefined;
+      
+      this.logTest('7d. Trace Health Monitoring', hasTraceHealth,
+                   hasTraceHealth ? '' : 'No trace health information in status', Date.now() - startTime);
+      
+      // Test 7e: Verify trace debug file configuration
+      if (statusResponse.ok && statusResponse.data.healthChecks?.pipelines?.traceDebugFile !== undefined) {
+        const hasDebugFile = statusResponse.data.healthChecks.pipelines.traceDebugFile;
+        this.logTest('7e. Trace Debug File Configured', true,
+                     hasDebugFile ? 'Debug file exists' : 'Debug file not yet created', 
+                     Date.now() - startTime);
+      } else {
+        this.logTest('7e. Trace Debug File Status', false, 
+                     'Debug file status not available', Date.now() - startTime);
+      }
+      
+    } catch (error) {
+      this.logTest('7. Trace Flow Test', false, error.message, Date.now() - startTime);
+    }
+  }
+
+  // Test 8: Trace Error Scenarios
+  async testTraceErrorScenarios() {
+    const startTime = Date.now();
+    
+    try {
+      // Test 8a: Collector down error handling
+      const collectorDownResponse = await this.makeRequest('POST', '/api/traces/v1/traces',
+        Buffer.from('test'), { 'Content-Type': 'application/x-protobuf' });
+      
+      const handlesCollectorDown = collectorDownResponse.status === 503 && 
+                                  collectorDownResponse.data.error &&
+                                  collectorDownResponse.data.code;
+      
+      this.logTest('8a. Handles Collector Down', handlesCollectorDown,
+                   handlesCollectorDown ? 'Proper error response' : 'Poor error handling', 
+                   Date.now() - startTime);
+      
+      // Test 8b: Invalid trace data handling
+      const invalidResponse = await this.makeRequest('POST', '/api/traces/v1/traces',
+        { invalid: 'not-protobuf' }, { 'Content-Type': 'application/json' });
+      
+      // Should still handle gracefully even with wrong content type
+      const handlesInvalidData = invalidResponse.status >= 400 && invalidResponse.status < 600;
+      
+      this.logTest('8b. Handles Invalid Trace Data', handlesInvalidData,
+                   handlesInvalidData ? `Status: ${invalidResponse.status}` : 'Accepted invalid data', 
+                   Date.now() - startTime);
+      
+      // Test 8c: Missing authentication handling
+      // This tests the configuration validation for traces
+      const invalidConfigTest = {
+        pipelines: {
+          traces: { enabled: true, ingestionKey: '', pipelineId: '', host: '' }
+        }
+      };
+      
+      const configResponse = await this.makeRequest('POST', '/api/otel/configure', invalidConfigTest);
+      const rejectsInvalidTraceConfig = !configResponse.ok || 
+                                       (configResponse.data.success === false);
+      
+      this.logTest('8c. Rejects Invalid Trace Config', rejectsInvalidTraceConfig,
+                   rejectsInvalidTraceConfig ? 'Invalid config rejected' : 'Accepted invalid trace config', 
+                   Date.now() - startTime);
+      
+    } catch (error) {
+      this.logTest('8. Trace Error Scenarios Test', false, error.message, Date.now() - startTime);
+    }
+  }
+
   // Main test runner
   async runAllTests() {
     console.log('\n🧪 Starting OTEL Integration Test Suite...\n');
@@ -359,6 +471,8 @@ class OTELIntegrationTestSuite {
     await this.testErrorScenariosAndRecovery();
     await this.testPerformanceAndLoad();
     await this.testConfigManagerIntegration();
+    await this.testTraceFlowEndToEnd();
+    await this.testTraceErrorScenarios();
     
     // Generate test report
     this.generateTestReport();

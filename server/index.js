@@ -8,6 +8,7 @@ import { loggingMiddleware, errorLoggingMiddleware, logBusinessEvent, logPerform
 import { updateLogFormat, getLogFormats } from './logging/winston-config.js';
 import { appLogger, serverLogger, updateLogLevel, getLogLevels } from './logging/winston-config.js';
 import { startFailure, stopFailure, getFailureStatus, isFailureActive } from './services/failureSimulator.js';
+import { initializeOTEL } from './telemetry-simple.js';
 // Import TrafficManager using dynamic import since it uses CommonJS
 let TrafficManager = null;
 
@@ -1706,6 +1707,9 @@ app.post('/api/traces/v1/traces', async (req, res) => {
   const startTime = Date.now();
   let errorDetails = null;
   
+  // Log incoming trace request for flow tracking
+  console.log(`📨 Trace proxy: Received ${req.body?.length || 0} bytes from ${req.ip || 'unknown'} at ${new Date().toISOString()}`);
+  
   try {
     // Enhanced collector availability check
     const pidFile = '/tmp/codeuser/otel-collector.pid';
@@ -1713,7 +1717,8 @@ app.post('/api/traces/v1/traces', async (req, res) => {
     
     // Check configuration first
     if (!fs.existsSync(configFile)) {
-      errorDetails = 'OTEL collector not configured';
+      errorDetails = 'OTEL collector configuration file not found';
+      console.warn(`⚠️ Trace proxy: Configuration check failed - ${errorDetails}`);
       return res.status(503).json({ 
         error: 'Service Unavailable', 
         details: errorDetails,
@@ -1723,11 +1728,12 @@ app.post('/api/traces/v1/traces', async (req, res) => {
     
     // Check if collector process is running
     if (!fs.existsSync(pidFile)) {
-      errorDetails = 'OTEL collector not started';
+      errorDetails = 'OTEL collector PID file not found - service not started';
+      console.warn(`⚠️ Trace proxy: Collector availability check failed - ${errorDetails}`);
       return res.status(503).json({ 
         error: 'Service Unavailable', 
         details: errorDetails,
-        code: 'NOT_RUNNING'
+        code: 'COLLECTOR_DOWN'
       });
     }
     
@@ -1735,7 +1741,7 @@ app.post('/api/traces/v1/traces', async (req, res) => {
     try {
       pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
       if (isNaN(pid)) {
-        throw new Error('Invalid PID format');
+        throw new Error('Invalid PID format in collector PID file');
       }
       
       // Verify process is actually running
@@ -1746,10 +1752,11 @@ app.post('/api/traces/v1/traces', async (req, res) => {
         fs.unlinkSync(pidFile);
       }
       errorDetails = `OTEL collector process not running: ${pidError.message}`;
+      console.warn(`⚠️ Trace proxy: Process validation failed - ${errorDetails}`);
       return res.status(503).json({ 
         error: 'Service Unavailable', 
         details: errorDetails,
-        code: 'PROCESS_DOWN'
+        code: 'COLLECTOR_DOWN'
       });
     }
     
@@ -1793,11 +1800,11 @@ app.post('/api/traces/v1/traces', async (req, res) => {
       const responseStatus = response.status;
       const responseTime = Date.now() - startTime;
       
-      console.log(`✅ Trace proxy: Collector response ${responseStatus} in ${responseTime}ms`);
-      
       // Handle different response scenarios
       if (response.ok) {
-        // Success case - forward response
+        // Success case - log detailed success information
+        console.log(`✅ Trace proxy: Successfully forwarded traces to collector in ${responseTime}ms (status: ${responseStatus}, size: ${req.body?.length || 0} bytes)`);
+        
         const responseBody = await response.text();
         res.status(responseStatus);
         if (responseBody) {
@@ -1807,6 +1814,9 @@ app.post('/api/traces/v1/traces', async (req, res) => {
         }
         return;
       }
+      
+      // Log non-success collector responses
+      console.warn(`⚠️ Trace proxy: Collector responded with ${responseStatus} in ${responseTime}ms`);
       
       // Handle collector errors
       if (responseStatus === 400) {
@@ -1846,22 +1856,22 @@ app.post('/api/traces/v1/traces', async (req, res) => {
       
       // Connection errors (collector down, port closed, etc.)
       if (fetchError.code === 'ECONNREFUSED' || fetchError.message.includes('fetch failed')) {
-        errorDetails = 'Cannot connect to OTEL collector on port 4318';
-        console.error(`❌ Trace proxy: Connection failed - ${errorDetails}`);
+        errorDetails = 'Failed to forward traces to OTEL collector on port 4318';
+        console.error(`❌ Trace proxy: Forwarding failed after ${responseTime}ms - ${errorDetails}`);
         return res.status(502).json({
           error: 'Bad Gateway', 
           details: errorDetails,
-          code: 'CONNECTION_FAILED'
+          code: 'FORWARD_FAILED'
         });
       }
       
-      // Other network errors
-      errorDetails = `Network error: ${fetchError.message}`;
-      console.error(`❌ Trace proxy: Network error after ${responseTime}ms - ${errorDetails}`);
+      // Other network errors - also treat as forwarding failures
+      errorDetails = `Failed to forward traces due to network error: ${fetchError.message}`;
+      console.error(`❌ Trace proxy: Forwarding failed after ${responseTime}ms - ${errorDetails}`);
       return res.status(502).json({
         error: 'Bad Gateway',
         details: errorDetails,
-        code: 'NETWORK_ERROR'
+        code: 'FORWARD_FAILED'
       });
     }
     
@@ -1874,6 +1884,85 @@ app.post('/api/traces/v1/traces', async (req, res) => {
       error: 'Internal Server Error',
       details: errorDetails,
       code: 'PROXY_ERROR'
+    });
+  }
+});
+
+// Test endpoint for generating a test trace
+app.get('/api/test-trace', async (req, res) => {
+  try {
+    const { trace, context, SpanStatusCode } = await import('@opentelemetry/api');
+    const tracer = trace.getTracer('test-tracer', '1.0.0');
+    
+    // Check if tracing is actually enabled
+    const tracerProvider = trace.getTracerProvider();
+    const isNoop = tracerProvider.constructor.name === 'NoopTracerProvider';
+    
+    if (isNoop) {
+      return res.json({
+        success: false,
+        message: 'OpenTelemetry is not initialized - traces will not be generated',
+        provider: 'NoopTracerProvider'
+      });
+    }
+    
+    // Create a test span
+    const span = tracer.startSpan('test-trace-endpoint', {
+      attributes: {
+        'test.timestamp': new Date().toISOString(),
+        'test.source': 'manual-test',
+        'http.method': 'GET',
+        'http.url': '/api/test-trace'
+      }
+    });
+    
+    // Add some events to the span
+    span.addEvent('test-trace-started');
+    
+    // Simulate some work
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    span.addEvent('test-work-completed', {
+      'work.duration': 100,
+      'work.status': 'success'
+    });
+    
+    // Create a child span
+    const childSpan = tracer.startSpan('test-child-operation', {
+      attributes: {
+        'operation.type': 'database-query',
+        'operation.table': 'test-table'
+      }
+    }, trace.setSpan(context.active(), span));
+    
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
+    childSpan.setStatus({ code: SpanStatusCode.OK });
+    childSpan.end();
+    
+    span.setStatus({ code: SpanStatusCode.OK });
+    span.end();
+    
+    const spanContext = span.spanContext();
+    
+    res.json({
+      success: true,
+      message: 'Test trace generated successfully',
+      trace: {
+        traceId: spanContext.traceId,
+        spanId: spanContext.spanId,
+        traceFlags: spanContext.traceFlags
+      },
+      provider: tracerProvider.constructor.name,
+      timestamp: new Date().toISOString()
+    });
+    
+    console.log(`✅ Test trace generated: ${spanContext.traceId}`);
+  } catch (error) {
+    console.error('❌ Failed to generate test trace:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });
@@ -2068,7 +2157,7 @@ const generateOTELConfig = ({
         http: {
           endpoint: '0.0.0.0:4318',
           cors: {
-            allowed_origins: ['http://localhost:8080', 'http://localhost:3000'],
+            allowed_origins: ['http://localhost:8080', 'http://localhost:3000', 'http://localhost:3001'],
             allowed_headers: ['*'],
             max_age: 7200
           }
@@ -2076,10 +2165,16 @@ const generateOTELConfig = ({
       }
     };
 
+    // Debug file exporter for traces
+    config.exporters['file/traces'] = {
+      path: '/tmp/codeuser/otel-traces-debug.json',
+      format: 'json'
+    };
+
     if (tracesHasPipelineId) {
       // Mezmo Pipeline for traces
       config.exporters['otlphttp/traces'] = {
-        endpoint: `${tracesEndpoint}/v1/traces`,
+        endpoint: tracesEndpoint,
         headers: {
           authorization: tracesIngestionKey,
           'content-type': 'application/x-protobuf'
@@ -2099,7 +2194,7 @@ const generateOTELConfig = ({
     config.service.pipelines.traces = {
       receivers: ['otlp'],
       processors: ['resource', 'batch'],
-      exporters: ['otlphttp/traces']
+      exporters: ['file/traces', 'otlphttp/traces']
     };
   }
 
@@ -2134,6 +2229,36 @@ app.get('/api/otel/status', async (req, res) => {
             metrics: !!config.service.pipelines.metrics,
             traces: !!config.service.pipelines.traces
           };
+          
+          // Validate trace pipeline configuration
+          if (enabledPipelines.traces) {
+            const tracePipeline = config.service.pipelines.traces;
+            healthChecks.pipelines.traceConfig = {
+              hasReceivers: !!(tracePipeline.receivers && tracePipeline.receivers.length > 0),
+              hasProcessors: !!(tracePipeline.processors && tracePipeline.processors.length > 0),
+              hasExporters: !!(tracePipeline.exporters && tracePipeline.exporters.length > 0)
+            };
+            
+            // Check for required trace exporters
+            if (tracePipeline.exporters) {
+              const hasOtlpExporter = tracePipeline.exporters.includes('otlphttp/traces');
+              const hasDebugExporter = tracePipeline.exporters.includes('file/traces');
+              healthChecks.pipelines.traceConfig.hasOtlpExporter = hasOtlpExporter;
+              healthChecks.pipelines.traceConfig.hasDebugExporter = hasDebugExporter;
+              
+              if (!hasOtlpExporter && !hasDebugExporter) {
+                errors.push('Trace pipeline missing required exporters (otlphttp/traces or file/traces)');
+              }
+            } else {
+              errors.push('Trace pipeline enabled but no exporters configured');
+              healthChecks.pipelines.traceConfig.hasExporters = false;
+            }
+            
+            // Validate trace receivers
+            if (!tracePipeline.receivers || tracePipeline.receivers.length === 0) {
+              errors.push('Trace pipeline enabled but no receivers configured');
+            }
+          }
         }
       } catch (error) {
         console.warn('Could not parse OTEL config:', error);
@@ -2189,6 +2314,12 @@ app.get('/api/otel/status', async (req, res) => {
             const metricsCollectedMatch = metricsText.match(/otelcol_exporter_sent_metric_points_total\{[^}]*exporter="otlphttp\/metrics"[^}]*\}\s+(\d+)/);
             const tracesReceivedMatch = metricsText.match(/otelcol_exporter_sent_spans_total\{[^}]*exporter="otlphttp\/traces"[^}]*\}\s+(\d+)/);
             const errorsMatch = metricsText.match(/otelcol_exporter_send_failed_log_records_total\{[^}]*\}\s+(\d+)/);
+            
+            // Trace-specific error metrics
+            const traceFailedMatch = metricsText.match(/otelcol_exporter_send_failed_spans_total\{[^}]*exporter="otlphttp\/traces"[^}]*\}\s+(\d+)/);
+            const traceProcessorDroppedMatch = metricsText.match(/otelcol_processor_dropped_spans_total\{[^}]*\}\s+(\d+)/);
+            const traceReceiverAcceptedMatch = metricsText.match(/otelcol_receiver_accepted_spans_total\{[^}]*\}\s+(\d+)/);
+            
             const uptimeMatch = metricsText.match(/otelcol_process_uptime\{\}\s+([\d.]+)/);
             
             if (logsSentMatch) stats.logsSent = parseInt(logsSentMatch[1]);
@@ -2196,6 +2327,11 @@ app.get('/api/otel/status', async (req, res) => {
             if (tracesReceivedMatch) stats.tracesReceived = parseInt(tracesReceivedMatch[1]);
             if (errorsMatch) stats.errors = parseInt(errorsMatch[1]);
             if (uptimeMatch) stats.uptime = parseFloat(uptimeMatch[1]);
+            
+            // Add trace-specific metrics to stats
+            stats.tracesFailed = traceFailedMatch ? parseInt(traceFailedMatch[1]) : 0;
+            stats.tracesDropped = traceProcessorDroppedMatch ? parseInt(traceProcessorDroppedMatch[1]) : 0;
+            stats.tracesAccepted = traceReceiverAcceptedMatch ? parseInt(traceReceiverAcceptedMatch[1]) : 0;
             
             metricsData = stats;
             
@@ -2207,7 +2343,32 @@ app.get('/api/otel/status', async (req, res) => {
               healthChecks.pipelines.metrics = stats.metricsCollected > 0 || stats.errors === 0;
             }
             if (enabledPipelines.traces) {
-              healthChecks.pipelines.traces = stats.tracesReceived > 0 || stats.errors === 0;
+              // Enhanced trace health check with specific trace metrics
+              const tracePipelineHealthy = (
+                stats.tracesReceived > 0 || 
+                (stats.tracesAccepted > 0 && stats.tracesFailed === 0 && stats.tracesDropped === 0)
+              ) && stats.tracesFailed === 0;
+              
+              healthChecks.pipelines.traces = tracePipelineHealthy;
+              
+              // Add trace-specific error reporting
+              if (stats.tracesFailed > 0) {
+                errors.push(`Trace export failures: ${stats.tracesFailed} failed span exports`);
+              }
+              if (stats.tracesDropped > 0) {
+                errors.push(`Trace processing drops: ${stats.tracesDropped} spans dropped during processing`);
+              }
+              
+              // Report trace pipeline metrics summary
+              if (stats.tracesAccepted > 0 || stats.tracesReceived > 0 || stats.tracesFailed > 0) {
+                const traceHealthSummary = {
+                  accepted: stats.tracesAccepted,
+                  exported: stats.tracesReceived,
+                  failed: stats.tracesFailed,
+                  dropped: stats.tracesDropped
+                };
+                healthChecks.pipelines.traceMetrics = traceHealthSummary;
+              }
             }
             
             // Error detection and reporting
@@ -2244,6 +2405,56 @@ app.get('/api/otel/status', async (req, res) => {
           }
         } catch (logError) {
           errors.push(`Could not check logs: ${logError.message}`);
+        }
+        
+        // Check trace debug file for trace-specific health indicators
+        if (enabledPipelines.traces) {
+          try {
+            const traceDebugFile = '/tmp/codeuser/otel-traces-debug.json';
+            if (fs.existsSync(traceDebugFile)) {
+              healthChecks.pipelines.traceDebugFile = true;
+              
+              // Read recent trace debug entries for error analysis
+              const traceDebugContent = fs.readFileSync(traceDebugFile, 'utf8');
+              const traceLines = traceDebugContent.trim().split('\n').slice(-10); // Last 10 entries
+              
+              let traceExportErrors = 0;
+              let recentTraceActivity = false;
+              
+              traceLines.forEach(line => {
+                try {
+                  if (line.trim()) {
+                    const traceEntry = JSON.parse(line);
+                    if (traceEntry.resourceSpans && traceEntry.resourceSpans.length > 0) {
+                      recentTraceActivity = true;
+                    }
+                  }
+                } catch (parseError) {
+                  // Could be export error or malformed entry
+                  if (line.includes('error') || line.includes('failed')) {
+                    traceExportErrors++;
+                  }
+                }
+              });
+              
+              // Update trace pipeline health based on debug file analysis
+              if (traceExportErrors > 0) {
+                errors.push(`Trace export errors detected in debug file: ${traceExportErrors} errors in recent entries`);
+                healthChecks.pipelines.traces = false;
+              } else if (recentTraceActivity) {
+                healthChecks.pipelines.traces = true;
+              }
+              
+            } else {
+              healthChecks.pipelines.traceDebugFile = false;
+              if (enabledPipelines.traces) {
+                errors.push('Trace debug file not found - traces may not be configured properly');
+              }
+            }
+          } catch (traceDebugError) {
+            healthChecks.pipelines.traceDebugFile = false;
+            errors.push(`Could not check trace debug file: ${traceDebugError.message}`);
+          }
         }
         
       } catch (error) {
@@ -2296,6 +2507,9 @@ app.get('/api/otel/metrics', async (req, res) => {
         metricsCollected: 0,
         tracesReceived: 0,
         errors: 0,
+        tracesFailed: 0,
+        tracesDropped: 0,
+        tracesAccepted: 0,
         lastError: 'Collector not running'
       });
     }
@@ -2315,6 +2529,9 @@ app.get('/api/otel/metrics', async (req, res) => {
       metricsCollected: 0,
       tracesReceived: 0,
       errors: 0,
+      tracesFailed: 0,
+      tracesDropped: 0,
+      tracesAccepted: 0,
       lastError: null
     };
     
@@ -2324,10 +2541,20 @@ app.get('/api/otel/metrics', async (req, res) => {
     const tracesReceivedMatch = metricsText.match(/otelcol_exporter_sent_spans_total\{[^}]*exporter="otlphttp\/traces"[^}]*\}\s+(\d+)/);
     const errorsMatch = metricsText.match(/otelcol_exporter_send_failed_log_records_total\{[^}]*\}\s+(\d+)/);
     
+    // Trace-specific error metrics  
+    const traceFailedMatch = metricsText.match(/otelcol_exporter_send_failed_spans_total\{[^}]*exporter="otlphttp\/traces"[^}]*\}\s+(\d+)/);
+    const traceProcessorDroppedMatch = metricsText.match(/otelcol_processor_dropped_spans_total\{[^}]*\}\s+(\d+)/);
+    const traceReceiverAcceptedMatch = metricsText.match(/otelcol_receiver_accepted_spans_total\{[^}]*\}\s+(\d+)/);
+    
     if (logsSentMatch) stats.logsSent = parseInt(logsSentMatch[1]);
     if (metricsCollectedMatch) stats.metricsCollected = parseInt(metricsCollectedMatch[1]);
     if (tracesReceivedMatch) stats.tracesReceived = parseInt(tracesReceivedMatch[1]);
     if (errorsMatch) stats.errors = parseInt(errorsMatch[1]);
+    
+    // Add trace-specific metrics
+    stats.tracesFailed = traceFailedMatch ? parseInt(traceFailedMatch[1]) : 0;
+    stats.tracesDropped = traceProcessorDroppedMatch ? parseInt(traceProcessorDroppedMatch[1]) : 0;
+    stats.tracesAccepted = traceReceiverAcceptedMatch ? parseInt(traceReceiverAcceptedMatch[1]) : 0;
     
     res.json(stats);
     
@@ -2338,6 +2565,9 @@ app.get('/api/otel/metrics', async (req, res) => {
       metricsCollected: 0,
       tracesReceived: 0,
       errors: 0,
+      tracesFailed: 0,
+      tracesDropped: 0,
+      tracesAccepted: 0,
       lastError: error.message
     });
   }
@@ -5181,12 +5411,21 @@ app.listen(PORT, async () => {
   // Initialize order counter based on existing orders
   initializeOrderCounter();
   
+  // Initialize OpenTelemetry SDK BEFORE starting virtual traffic
+  const tracerProvider = await initializeOTEL();
+  if (tracerProvider) {
+    console.log('🔍 OpenTelemetry tracing enabled for backend and virtual users');
+  } else {
+    console.log('⚠️ OpenTelemetry tracing disabled - traces will not be generated');
+  }
+  
   appLogger.info('Server started successfully', {
     port: PORT,
     environment: process.env.NODE_ENV || 'development',
     pid: process.pid,
     logLevels: getLogLevels(),
-    nextOrderNumber: orderCounter.toString().padStart(7, '0')
+    nextOrderNumber: orderCounter.toString().padStart(7, '0'),
+    otelEnabled: !!tracerProvider
   });
   
   console.log(`🚀 Server running on port ${PORT}`);
