@@ -12,6 +12,9 @@ import { initializeOTEL } from './telemetry-simple.js';
 // Import TrafficManager using dynamic import since it uses CommonJS
 let TrafficManager = null;
 
+// Global tracer provider for OTEL re-initialization
+let globalTracerProvider = null;
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -3228,11 +3231,24 @@ app.post('/api/otel/start', async (req, res) => {
         const healthCheck = await checkOtelCollectorHealth(pid, 3000);
         if (healthCheck.healthy === true) {
           console.log('✅ Running OTEL Collector is healthy, no restart needed');
+          
+          // Check if telemetry needs initialization
+          if (!globalTracerProvider) {
+            console.log('🔄 Initializing telemetry (collector already running)...');
+            globalTracerProvider = await initializeOTEL();
+            if (globalTracerProvider) {
+              console.log('✅ Telemetry initialized successfully - traces will now be sent');
+            } else {
+              console.log('⚠️ Telemetry initialization failed - check configuration');
+            }
+          }
+          
           return res.json({ 
             message: 'OTEL Collector is already running and healthy', 
             pid,
             health: healthCheck.reason,
             alreadyRunning: true,
+            telemetryEnabled: !!globalTracerProvider,
             timestamp: new Date().toISOString()
           });
         } else if (healthCheck.healthy === false) {
@@ -3339,11 +3355,26 @@ app.post('/api/otel/start', async (req, res) => {
         
         if (healthCheck.healthy === true) {
           console.log('✅ OTEL Collector started successfully and is healthy');
+          
+          // Re-initialize telemetry if it wasn't initialized before
+          if (!globalTracerProvider) {
+            console.log('🔄 Initializing telemetry after OTEL collector start...');
+            globalTracerProvider = await initializeOTEL();
+            if (globalTracerProvider) {
+              console.log('✅ Telemetry initialized successfully - traces will now be sent');
+            } else {
+              console.log('⚠️ Telemetry initialization failed - check configuration');
+            }
+          } else {
+            console.log('ℹ️ Telemetry already initialized');
+          }
+          
           return res.json({ 
             success: true,
             message: 'OTEL Collector started successfully and is healthy', 
             pid,
             health: healthCheck.reason,
+            telemetryEnabled: !!globalTracerProvider,
             timestamp: new Date().toISOString()
           });
         } else if (healthCheck.healthy === false) {
@@ -5412,8 +5443,8 @@ app.listen(PORT, async () => {
   initializeOrderCounter();
   
   // Initialize OpenTelemetry SDK BEFORE starting virtual traffic
-  const tracerProvider = await initializeOTEL();
-  if (tracerProvider) {
+  globalTracerProvider = await initializeOTEL();
+  if (globalTracerProvider) {
     console.log('🔍 OpenTelemetry tracing enabled for backend and virtual users');
   } else {
     console.log('⚠️ OpenTelemetry tracing disabled - traces will not be generated');
@@ -5425,7 +5456,7 @@ app.listen(PORT, async () => {
     pid: process.pid,
     logLevels: getLogLevels(),
     nextOrderNumber: orderCounter.toString().padStart(7, '0'),
-    otelEnabled: !!tracerProvider
+    otelEnabled: !!globalTracerProvider
   });
   
   console.log(`🚀 Server running on port ${PORT}`);

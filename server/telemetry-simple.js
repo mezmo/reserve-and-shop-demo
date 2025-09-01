@@ -13,13 +13,6 @@ export async function initializeOTEL() {
   try {
     console.log('🔧 Initializing OpenTelemetry SDK (simplified) for backend server...');
     
-    // Check if OTEL collector is running
-    const pidFile = '/tmp/codeuser/otel-collector.pid';
-    if (!fs.existsSync(pidFile)) {
-      console.warn('⚠️ OTEL collector PID file not found - tracing will be disabled');
-      return null;
-    }
-    
     // Read configuration from ConfigManager (loaded from agents-config.json)
     const ConfigManager = (await import('./services/configManager.js')).default;
     const configManager = ConfigManager.getInstance();
@@ -54,6 +47,7 @@ export async function initializeOTEL() {
     });
     
     // Configure OTLP HTTP exporter - simplified configuration
+    // Note: If collector is not running, traces will fail gracefully
     const otlpExporter = new OTLPTraceExporter({
       url: 'http://localhost:4318/v1/traces',
       headers: {},
