@@ -123,6 +123,19 @@ class ConfigManager {
           this.configs.otel,
           this.getHardcodedDefaults('otel')
         );
+        
+        // Validate trace configuration if enabled
+        if (this.configs.otel.pipelines?.traces?.enabled) {
+          try {
+            this.validateTraceConfig(this.configs.otel.pipelines.traces);
+          } catch (error) {
+            console.warn(`⚠️  Trace configuration validation failed during file initialization: ${error.message}`);
+            // Disable traces if validation fails during initialization
+            this.configs.otel.pipelines.traces.enabled = false;
+            console.log('🔧 Disabled traces due to invalid configuration');
+          }
+        }
+        
         console.log('🔧 OTEL configuration initialized from file defaults');
       }
       
@@ -219,6 +232,25 @@ class ConfigManager {
     
     return defaults[type] || {};
   }
+
+  // Validation Methods
+  validateTraceConfig(traceConfig) {
+    if (!traceConfig || typeof traceConfig !== 'object') {
+      throw new Error('Trace configuration must be an object');
+    }
+
+    const requiredFields = ['ingestionKey', 'host', 'pipelineId'];
+    const missingFields = requiredFields.filter(field => 
+      !traceConfig[field] || traceConfig[field].trim() === ''
+    );
+
+    if (missingFields.length > 0) {
+      throw new Error(`Trace configuration missing required fields: ${missingFields.join(', ')}`);
+    }
+
+    console.log('✅ Trace configuration validation passed');
+    return true;
+  }
   
   // Configuration Methods
   getConfig(type) {
@@ -233,8 +265,19 @@ class ConfigManager {
       throw new Error(`Unknown configuration type: ${type}`);
     }
     
+    // Validate trace configuration if it's OTEL config with traces enabled
+    if (type === 'otel' && config.pipelines?.traces?.enabled) {
+      this.validateTraceConfig(config.pipelines.traces);
+    }
+    
     // Merge with existing config
     this.configs[type] = { ...this.configs[type], ...config };
+    
+    // Validate the final merged configuration for traces if enabled
+    if (type === 'otel' && this.configs[type].pipelines?.traces?.enabled) {
+      this.validateTraceConfig(this.configs[type].pipelines.traces);
+    }
+    
     console.log(`🔧 Updated ${type} configuration: ${JSON.stringify(this.configs[type])}`);
     return this.configs[type];
   }
